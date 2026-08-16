@@ -1,1 +1,13 @@
+# Virtual Environment
+venv/
+.venv/
+
+# Secrets & Configuration
+.env
 .streamlit/secrets.toml
+
+# Python Cache & Temp files
+__pycache__/
+*.pyc
+*.dem
+*.dem.bz2
