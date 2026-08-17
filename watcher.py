@@ -12,7 +12,7 @@ def init_supabase():
 supabase = init_supabase()
 
 def download_valve_replay_with_retry(url: str, max_retries=4, delay=120) -> bytes:
-    """Streams a demo replay, waiting for Valve's CDN to stabilize (~5-10 min total window)."""
+    """Streams a demo replay with exponential backoff for 502 Bad Gateway errors."""
     for attempt in range(1, max_retries + 1):
         try:
             print(f"Streaming match replay from official Valve CDN (Attempt {attempt}/{max_retries})...")
@@ -31,7 +31,7 @@ def download_valve_replay_with_retry(url: str, max_retries=4, delay=120) -> byte
     raise Exception("Failed to download demo after maximum retry attempts.")
 
 def check_for_new_valve_matches():
-    """Loops through registered users and queries Valve's API for new matches."""
+    """Loops through registered users and queries Valve's API for new matches without spamming raw payloads."""
     try:
         users_res = supabase.table("users").select("steam_id64, game_auth_code, last_known_code").execute()
         if users_res.data:
@@ -54,7 +54,7 @@ def check_for_new_valve_matches():
         print(f"⚠️ Error auto-checking Valve API: {e}")
 
 def process_pending_downloads():
-    """Downloads and parses matches ready in the queue."""
+    """Downloads and parses matches ready in the queue using the retry mechanism."""
     try:
         response = supabase.table('matches') \
             .select('match_id', 'steam_id64', 'match_data') \
@@ -70,11 +70,14 @@ def process_pending_downloads():
             telemetry = row['match_data']['telemetry']
             match_url = telemetry.get('download_url') or telemetry.get('match_url')
             
-            print(f"Found ready match: {match_id}. Starting download and parse sequence...")
+            print(f"Found ready match: {match_id}. Starting download with retry protection...")
             
-            # If your pipeline downloads inside process_and_parse_real_demo, 
-            # ensure it utilizes the retry mechanism above.
-            process_and_parse_real_demo(supabase, match_id, match_url, steam_id)
+            # Download with backoff retry before passing to pipeline
+            demo_bytes = download_valve_replay_with_retry(match_url)
+            
+            # Pass downloaded demo bytes/content to your pipeline
+            process_and_parse_real_demo(supabase, match_id, demo_bytes, steam_id)
+            print(f"✅ Successfully processed match: {match_id}")
             
     except Exception as e:
         print(f"⚠️ Queue worker error: {e}")
@@ -87,14 +90,11 @@ def watch_queue():
     while True:
         current_time = time.time()
 
-        # 1. Automatically check Valve API for newly completed matches every 60s
         if current_time - last_api_check >= API_CHECK_INTERVAL:
             check_for_new_valve_matches()
             last_api_check = current_time
 
-        # 2. Check download queue every 5s for ready demos
         process_pending_downloads()
-
         time.sleep(5)
 
 if __name__ == "__main__":
