@@ -5,14 +5,12 @@ def get_dynamic_redirect_uri() -> str:
     """
     Dynamically determines the correct redirect URI for local development or Streamlit Cloud.
     """
-    # 1. Check if an explicit APP_URL is defined in Streamlit secrets
     try:
         if "APP_URL" in st.secrets:
             return st.secrets["APP_URL"]
     except Exception:
         pass
 
-    # 2. Try to infer automatically from Streamlit context headers
     try:
         headers = st.context.headers
         host = headers.get("host")
@@ -22,7 +20,6 @@ def get_dynamic_redirect_uri() -> str:
     except Exception:
         pass
 
-    # 3. Fallback for local testing
     return "http://localhost:8501/"
 
 def get_steam_signin_url(redirect_uri: str = None) -> str:
