@@ -1,13 +1,35 @@
 # Virtual Environment
 venv/
 .venv/
+env/
 
 # Secrets & Configuration
 .env
 .streamlit/secrets.toml
+*.pem
+*.key
 
 # Python Cache & Temp files
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# CS2 Replay Files & Archives
 *.dem
 *.dem.bz2
+*.bz2
+*.tmp
+
+# Node.js Worker
+node_modules/
+npm-debug.log*
+
+# Git Diff Dumps & Temporary Logs
+my_changes.txt
+patch_changes.txt
+*.log
+
+# System & Editor Files
+.DS_Store
+Thumbs.db

@@ -1,168 +1,243 @@
 import bz2
-import json
 import os
 import tempfile
 import time
-from demoparser2 import DemoParser
 import requests
 import streamlit as st
-from supabase import create_client
+import pandas as pd
+from demoparser2 import DemoParser
+from urllib3.exceptions import IncompleteRead
 
 
-def get_match_demo_url(
-    steam_id64: str, auth_code: str, match_code: str
-) -> str:
-  """Queries Valve API to resolve the .dem.bz2 download URL, automatically following nextcode chains."""
-  api_key = st.secrets["STEAM_API_KEY"]
-  url = "https://api.steampowered.com/ICSGOPlayers_730/GetNextMatchSharingCode/v1/"
-
-  current_code = match_code
-  max_chain_depth = 5
-
-  for attempt in range(max_chain_depth):
+def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
+    """Queries Valve API to validate a match code and fetch the next sequential code."""
+    api_key = st.secrets["STEAM_API_KEY"]
+    url = "https://api.steampowered.com/ICSGOPlayers_730/GetNextMatchSharingCode/v1/"
+    
     params = {
         "key": api_key,
         "steamid": steam_id64,
         "steamidkey": auth_code,
-        "knowncode": current_code,
+        "knowncode": match_code,
     }
 
-    response = requests.get(url, params=params)
-    print(f"DEBUG [Attempt {attempt + 1}] Status Code: {response.status_code}")
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, params=params, timeout=8)
+            print(f"Valve API Status Code: {response.status_code}")
+            print(f"Valve API Response Text: {response.text}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                result = data.get("result", {})
+                return {
+                    "is_valid": True,
+                    "next_code": result.get("nextcode", "n/a")
+                }
+            elif response.status_code == 202:
+                return {
+                    "is_valid": True,
+                    "next_code": "n/a"
+                }
+            elif response.status_code == 412:
+                print("Valve API returned 412: Precondition Failed (Invalid code or expired key).")
+                return {"is_valid": False, "next_code": "n/a"}
+            else:
+                time.sleep(1)
+        except requests.RequestException as e:
+            print(f"Request exception encountered: {e}")
+            time.sleep(1)
 
-    if response.status_code != 200:
-      raise Exception(
-          f"Valve API request failed (HTTP {response.status_code}): {response.text}"
-      )
-
-    data = response.json()
-    print(f"DEBUG [Attempt {attempt + 1}] Payload: {data}")
-
-    result = data.get("result", {})
-    match_url = result.get("matchurl")
-
-    if match_url:
-      return match_url
-
-    next_code = result.get("nextcode")
-    if next_code and next_code != "n/a" and next_code != current_code:
-      print(f"Auto-following match chain: {current_code} -> {next_code}")
-      current_code = next_code
-    else:
-      break
-
-  raise Exception(
-      f"Could not retrieve demo URL from Valve API for `{match_code}`. "
-      "Replays usually take 5–15 minutes post-match to generate on Valve's CDN."
-  )
+    return {"is_valid": False, "next_code": "n/a"}
 
 
-def process_and_sync_matches(
-    supabase_client,
-    steam_id64: str,
-    auth_code: str,
-    match_code: str,
-    progress_callback=None,
-):
-  """Fetches match download URL, streams download with real-time stats callback, parses, and pushes to Supabase."""
-  # 1. Resolve demo download URL
-  if match_code.startswith("http://") or match_code.startswith("https://"):
-    print("Direct CDN URL detected. Skipping Valve API lookup...")
-    demo_url = match_code
-    match_id = (
-        match_code.split("/")[-1].replace(".dem.bz2", "").replace(".dem", "")
-    )
-  else:
-    print(f"Resolving demo URL for match {match_code} via Valve API...")
-    demo_url = get_match_demo_url(steam_id64, auth_code, match_code)
-    match_id = match_code
+def get_match_download_url(steam_id64: str, auth_code: str, match_code: str) -> str:
+    """Note: Valve's web API does not support direct HTTP demo downloads via share codes. 
+    Demos require Steam Game Coordinator client connection."""
+    return None
 
-  temp_dir = tempfile.gettempdir()
-  bz2_path = os.path.join(temp_dir, f"{match_id}.dem.bz2")
-  dem_path = os.path.join(temp_dir, f"{match_id}.dem")
 
-  try:
-    # 2. Ephemeral Streamed Download with Metrics
-    print("Downloading compressed replay from Valve CDN...")
-    dl_response = requests.get(demo_url, stream=True)
-    if dl_response.status_code != 200:
-      raise Exception(
-          f"Failed to download demo from CDN. Status: {dl_response.status_code}"
-      )
-
-    total_length = dl_response.headers.get("content-length")
-    total_bytes = int(total_length) if total_length else None
-
-    downloaded_bytes = 0
-    start_time = time.time()
-    chunk_size = 65536  # 64KB chunks for smooth UI updates
-
-    with open(bz2_path, "wb") as f:
-      for chunk in dl_response.iter_content(chunk_size=chunk_size):
-        if chunk:
-          f.write(chunk)
-          downloaded_bytes += len(chunk)
-          elapsed_time = time.time() - start_time
-
-          if progress_callback:
-            progress_callback(
-                downloaded_bytes, total_bytes, elapsed_time, "downloading"
-            )
-
-    # 3. Decompress .bz2 -> .dem
-    if progress_callback:
-      progress_callback(downloaded_bytes, total_bytes, 0, "decompressing")
-
-    print("Decompressing .dem.bz2 replay file...")
-    with bz2.open(bz2_path, "rb") as source, open(dem_path, "wb") as target:
-      while chunk := source.read(1024 * 1024):
-        target.write(chunk)
-
-    # 4. Tick-Level Parsing using demoparser2
-    if progress_callback:
-      progress_callback(downloaded_bytes, total_bytes, 0, "parsing")
-
-    print(f"Parsing match {match_id} ticks...")
-    parser = DemoParser(dem_path)
-
-    deaths_df = parser.parse_event("player_death")
-    shots_df = parser.parse_event("weapon_fire")
-
-    # Clean NaN values into standard JSON-compliant nulls
-    sample_deaths = []
-    if deaths_df is not None and not deaths_df.empty:
-      sample_deaths = json.loads(deaths_df.head(25).to_json(orient="records"))
-
-    match_payload = {
-        "match_id": match_id,
-        "total_deaths": len(deaths_df) if deaths_df is not None else 0,
-        "total_shots": len(shots_df) if shots_df is not None else 0,
-        "sample_deaths": sample_deaths,
+def process_single_demo(supabase_client, steam_id64: str, auth_code: str, match_code: str):
+    """Registers a new match code so the Node.js worker can fetch its URL."""
+    print(f"Registering match code for background URL resolution: {match_code}")
+    
+    # We set status to 'pending_url' so the Node.js worker knows to pick it up
+    initial_payload = {
+        "match_id": match_code,
+        "telemetry": {
+            "match_id": match_code,
+            "match_url": None,
+            "status": "pending_url"
+        }
     }
 
-    # 5. Upsert to Supabase
-    if progress_callback:
-      progress_callback(downloaded_bytes, total_bytes, 0, "saving")
-
-    print(f"Caching telemetry for {match_id} into Supabase...")
     supabase_client.table("matches").upsert({
-        "match_id": match_id,
+        "match_id": match_code,
         "steam_id64": steam_id64,
-        "match_data": match_payload,
-    }).execute()
-
-    print(f"Match {match_id} successfully processed!")
-
-  finally:
-    # 6. Instant Cleanup
-    for p in [bz2_path, dem_path]:
-      if os.path.exists(p):
-        os.remove(p)
-        print(f"Cleaned up temporary file: {p}")
+        "match_data": initial_payload
+    }, on_conflict="match_id").execute()
+    
+    print(f"Match {match_code} staged as pending_url successfully!")
 
 
-if __name__ == "__main__":
-  SUPABASE_URL = os.getenv("SUPABASE_URL")
-  SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-  if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, target_steam_id64: str):
+    """Downloads the real demo from Valve's CDN, parses it with demoparser2, and updates Supabase."""
+    temp_dir = tempfile.gettempdir()
+    bz2_path = os.path.join(temp_dir, f"{match_code}.dem.bz2")
+    dem_path = os.path.join(temp_dir, f"{match_code}.dem")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    try:
+        # Download stream with retries to prevent connection drops from Valve's CDN
+        download_success = False
+        max_retries = 3
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"Streaming match replay from official Valve CDN (Attempt {attempt}/{max_retries})...")
+                response = requests.get(cdn_url, headers=headers, stream=True, timeout=30)
+                response.raise_for_status()
+
+                with open(bz2_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
+                        if chunk:
+                            f.write(chunk)
+                
+                download_success = True
+                print("Replay file downloaded successfully!")
+                break
+
+            except (requests.exceptions.RequestException, IncompleteRead, Exception) as download_err:
+                print(f"⚠️ Download attempt {attempt} failed: {download_err}")
+                if attempt < max_retries:
+                    time.sleep(3)
+
+        if not download_success:
+            raise RuntimeError(f"Failed to download demo after {max_retries} attempts.")
+
+        print(f"Decompressing BZ2 archive...")
+        with bz2.BZ2File(bz2_path, "rb") as source, open(dem_path, "wb") as dest:
+            for data in iter(lambda: source.read(512 * 1024), b""):
+                dest.write(data)
+
+        print(f"Parsing raw demo telemetry using demoparser2...")
+        parser = DemoParser(dem_path)
+
+        # 1. Parse player_death event for Kills, Deaths & Headshots
+        total_kills = 0
+        total_deaths = 0
+        headshots = 0
+
+        try:
+            deaths_df = parser.parse_event("player_death")
+            if not deaths_df.empty:
+                # Kills
+                if "attacker_steamid" in deaths_df.columns:
+                    user_kills = deaths_df[deaths_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
+                    total_kills = len(user_kills)
+                    if "headshot" in user_kills.columns:
+                        headshots = int(user_kills["headshot"].sum())
+
+                # Deaths
+                if "user_steamid" in deaths_df.columns:
+                    user_deaths = deaths_df[deaths_df["user_steamid"].astype(str) == str(target_steam_id64)]
+                    total_deaths = len(user_deaths)
+        except Exception as event_err:
+            print(f"⚠️ Warning parsing deaths: {event_err}")
+
+        # 2. Parse player_hurt event for Total Damage
+        total_damage = 0.0
+        try:
+            hurt_df = parser.parse_event("player_hurt")
+            if not hurt_df.empty and "attacker_steamid" in hurt_df.columns and "dmg_health" in hurt_df.columns:
+                user_damage = hurt_df[hurt_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
+                total_damage = float(user_damage["dmg_health"].sum())
+        except Exception as hurt_err:
+            print(f"⚠️ Warning parsing damage: {hurt_err}")
+
+        # Metrics calculation
+        calculated_kd = round(total_kills / max(1, total_deaths), 2)
+        headshot_pct = round((headshots / max(1, total_kills)) * 100, 1) if total_kills > 0 else 0.0
+        calculated_adr = round(total_damage / 24, 1)  # Estimated round baseline
+
+        real_payload = {
+            "match_id": match_code,
+            "telemetry": {
+                "match_id": match_code,
+                "match_url": cdn_url,
+                "status": "fully_parsed",
+                "kd_ratio": calculated_kd,
+                "adr": calculated_adr,
+                "kills": total_kills,
+                "deaths": total_deaths,
+                "headshot_pct": headshot_pct,
+                "flashes_thrown": 0,
+                "smokes_thrown": 0
+            }
+        }
+
+        supabase_client.table("matches").update({
+            "match_data": real_payload
+        }).eq("match_id", match_code).execute()
+        
+        print(f"Successfully saved real parsed telemetry for match {match_code}!")
+
+    except Exception as e:
+        print(f"Error processing real demo: {e}")
+        # Update match status to parse_failed so watcher doesn't loop infinitely
+        try:
+            error_payload = {
+                "match_id": match_code,
+                "telemetry": {
+                    "match_id": match_code,
+                    "match_url": cdn_url,
+                    "status": "parse_failed",
+                    "error": str(e)
+                }
+            }
+            supabase_client.table("matches").update({
+                "match_data": error_payload
+            }).eq("match_id", match_code).execute()
+            print(f"Marked match {match_code} as 'parse_failed' in Supabase.")
+        except Exception as db_err:
+            print(f"Failed to update error status in Supabase: {db_err}")
+
+    finally:
+        if os.path.exists(bz2_path):
+            os.remove(bz2_path)
+        if os.path.exists(dem_path):
+            os.remove(dem_path)
+
+
+def sync_user_matches(steam_id64: str, auth_code: str, start_code: str, supabase) -> int:
+    """Loops forward through Valve's API chain starting from start_code."""
+    active_code = start_code
+    synced_count = 0
+
+    while active_code and active_code != "n/a":
+        match_info = get_single_match_info(steam_id64, auth_code, active_code)
+        is_valid = match_info.get("is_valid")
+        next_code = match_info.get("next_code")
+
+        if not is_valid:
+            break
+
+        existing = supabase.table("matches").select("match_id").eq("match_id", active_code).execute()
+        if not existing.data:
+            process_single_demo(supabase, steam_id64, auth_code, active_code)
+            synced_count += 1
+
+        supabase.table("users").update({
+            "last_known_code": active_code
+        }).eq("steam_id64", steam_id64).execute()
+
+        if next_code and next_code != "n/a" and next_code != active_code:
+            active_code = next_code
+            time.sleep(1)
+        else:
+            break
+
+    return synced_count

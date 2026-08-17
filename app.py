@@ -1,39 +1,33 @@
 import re
+import time
 import streamlit as st
+import pandas as pd
 from supabase import create_client
 from steam_auth import get_steam_signin_url, validate_steam_callback
-from sync_pipeline import process_and_sync_matches
 from ai_coach import generate_coaching_response
+from sync_pipeline import process_single_demo, sync_user_matches, get_single_match_info
 
 # Page Config
 st.set_page_config(page_title="RoundSync - CS2 AI Coach", page_icon="🎮", layout="wide")
 
 # Initialize Supabase Client
-@st.cache_resource
 def init_supabase():
     url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    key = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY") or st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
 supabase = init_supabase()
 
-# Initialize Session State for Steam Authentication
+# Initialize Session State
 if "steam_id64" not in st.session_state:
     st.session_state.steam_id64 = None
 
-# App Layout Shell
-st.title("RoundSync 🎯 Automated CS2 AI Coach")
-st.sidebar.title("Navigation")
-app_mode = st.sidebar.selectbox("Choose a view", ["Home / Auth", "Stats Dashboard", "AI Coach Chat"])
-
-# Handle Steam OpenID Callback Parameters in URL
+# Handle Steam OpenID Callback Parameters
 query_params = st.query_params
 if "openid.claimed_id" in query_params and not st.session_state.steam_id64:
     steam_id = validate_steam_callback(query_params)
     if steam_id:
         st.session_state.steam_id64 = str(steam_id)
-        
-        # Upsert user record directly into Supabase
         try:
             supabase.table("users").upsert({
                 "steam_id64": str(steam_id)
@@ -44,123 +38,122 @@ if "openid.claimed_id" in query_params and not st.session_state.steam_id64:
         st.success(f"Successfully authenticated with Steam! SteamID: {steam_id}")
         st.query_params.clear()
         st.rerun()
-    else:
-        st.error("Steam authentication validation failed.")
 
+# Sidebar Navigation
+st.sidebar.markdown("### 🎯 **RoundSync**")
+nav_selection = st.sidebar.radio(
+    "Navigation",
+    ["🏠 Home / Auth", "📊 Stats Dashboard", "🤖 AI Coach Chat"],
+    label_visibility="collapsed"
+)
+
+if "Home" in nav_selection:
+    app_mode = "Home / Auth"
+elif "Stats" in nav_selection:
+    app_mode = "Stats Dashboard"
+else:
+    app_mode = "AI Coach Chat"
+
+st.title("RoundSync 🎯 Automated CS2 AI Coach")
+
+# TAB 1: HOME / AUTH
 if app_mode == "Home / Auth":
     st.subheader("Welcome to RoundSync")
     
     if st.session_state.steam_id64:
         st.success(f"Signed in as SteamID: `{st.session_state.steam_id64}`")
         
-        # --- 1. GAME AUTH CODE SECTION ---
-        st.markdown("### 🔑 CS2 Game Authentication")
-        st.write("To automatically fetch your match history, provide your CS2 Game Authentication Code. You can generate this in Steam: **Inventory > Trade Offers > Who can send me Trade Offers? > Third-Party Sites** (or via the Steam Personal Data page).")
-        
-        # Fetch existing code to pre-fill the input
-        user_data = supabase.table("users").select("game_auth_code").eq("steam_id64", st.session_state.steam_id64).execute()
-        existing_code = user_data.data[0].get("game_auth_code") if user_data.data else None
-        
-        with st.form("auth_code_form"):
-            auth_input = st.text_input("Game Auth Code", value=existing_code if existing_code else "", type="password")
-            submitted = st.form_submit_button("Save Auth Code")
+        # Fetch user profile
+        user_query = supabase.table("users").select("*").eq("steam_id64", st.session_state.steam_id64).execute()
+        user_data = user_query.data[0] if user_query.data else None
+
+        # 1. ONE-TIME ONBOARDING
+        if not user_data or not user_data.get("last_known_code") or not user_data.get("game_auth_code"):
+            st.markdown("### 🔑 One-Time Setup")
+            st.info("Provide your CS2 Game Auth Code and 1 recent Match Share Code to enable automatic tracking.")
             
-            if submitted:
-                try:
-                    supabase.table("users").update({"game_auth_code": auth_input}).eq("steam_id64", st.session_state.steam_id64).execute()
-                    st.success("Game Auth Code securely saved to Supabase!")
-                    existing_code = auth_input
-                except Exception as e:
-                    st.error(f"Failed to save Auth Code: {e}")
-
-        # --- 2. MATCH SYNC SECTION ---
-        st.markdown("### 🔄 Sync Match History")
-        raw_match_input = st.text_input("Latest Match Share Code or Steam Link", placeholder="Paste CSGO-XXXXX... or http://replay...")
-        
-        cleaned_match_code = None
-        if raw_match_input:
-            if raw_match_input.strip().startswith(("http://", "https://")):
-                cleaned_match_code = raw_match_input.strip()
-                st.caption("Detected Direct Replay Link")
-            else:
-                match = re.search(r"(CSGO-[A-Za-z0-9]{5}-[A-Za-z0-9]{5}-[A-Za-z0-9]{5}-[A-Za-z0-9]{5}-[A-Za-z0-9]{5})", raw_match_input)
-                if match:
-                    cleaned_match_code = match.group(1)
-                    st.caption(f"Detected Match Code: `{cleaned_match_code}`")
+            auth_code_input = st.text_input("Game Authentication Code", type="password")
+            share_code_input = st.text_input("1 Recent Match Share Code (e.g. CSGO-XXXXX-...)")
+            
+            if st.button("Verify & Activate Auto-Sync", type="primary"):
+                if auth_code_input and share_code_input:
+                    with st.spinner("Verifying credentials with Valve API..."):
+                        match_info = get_single_match_info(
+                            st.session_state.steam_id64, 
+                            auth_code_input, 
+                            share_code_input
+                        )
+                        
+                        if not match_info.get("is_valid"):
+                            st.error("❌ Verification Failed: Invalid Game Auth Code or Match Share Code. Please check your inputs.")
+                        else:
+                            st.info("Credentials verified! Syncing match history...")
+                            sync_user_matches(
+                                steam_id64=st.session_state.steam_id64,
+                                auth_code=auth_code_input,
+                                start_code=share_code_input,
+                                supabase=supabase
+                            )
+                            supabase.table("users").upsert({
+                                "steam_id64": st.session_state.steam_id64,
+                                "game_auth_code": auth_code_input,
+                                "last_known_code": share_code_input
+                            }, on_conflict="steam_id64").execute()
+                            
+                            st.success("Setup complete and matches synced successfully!")
+                            st.rerun()
                 else:
-                    st.warning("Could not detect a valid CS2 Match Code or Replay Link.")
+                    st.error("Please fill in both fields.")
 
-        if st.button("Sync Latest Matches", disabled=not (existing_code and cleaned_match_code)):
-            progress_bar = st.progress(0.0)
-            status_text = st.empty()
-
-            def update_ui_progress(downloaded, total, elapsed, stage):
-                if stage == "downloading":
-                    speed_mbps = (downloaded / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-                    downloaded_mb = downloaded / (1024 * 1024)
-
-                    if total and total > 0:
-                        total_mb = total / (1024 * 1024)
-                        percent = min(downloaded / total, 0.70)  # Reserve 70-100% for decompress/parse
-                        progress_bar.progress(percent)
-                        status_text.markdown(
-                            f"⬇️ **Downloading:** `{downloaded_mb:.1f} MB` / `{total_mb:.1f} MB` ({downloaded/total*100:.0f}%) "
-                            f"| **Speed:** `{speed_mbps:.2f} MB/s` | **Time:** `{elapsed:.1f}s`"
+        # 2. AUTO-SYNC FOR RETURNING USERS
+        else:
+            existing_code = user_data.get("game_auth_code")
+            last_code = user_data.get("last_known_code")
+            
+            st.markdown("### 🔄 Sync Match History")
+            st.caption(f"Last synced match code: `{last_code}`")
+            
+            if st.button("Check & Auto-Sync New Matches"):
+                with st.spinner("Checking Valve servers for new matches..."):
+                    try:
+                        new_count = sync_user_matches(
+                            steam_id64=st.session_state.steam_id64,
+                            auth_code=existing_code,
+                            start_code=last_code,
+                            supabase=supabase
                         )
-                    else:
-                        progress_bar.progress(0.35)
-                        status_text.markdown(
-                            f"⬇️ **Downloading:** `{downloaded_mb:.1f} MB` "
-                            f"| **Speed:** `{speed_mbps:.2f} MB/s` | **Time:** `{elapsed:.1f}s`"
-                        )
+                        if new_count > 0:
+                            st.toast(f"Successfully synced {new_count} new match(es)!")
+                            st.rerun()
+                        else:
+                            st.info("You are already up to date!")
+                    except Exception as e:
+                        st.error(f"Sync failed: {e}")
 
-                elif stage == "decompressing":
-                    progress_bar.progress(0.75)
-                    status_text.markdown("📦 **Decompressing `.dem.bz2` replay file...**")
-
-                elif stage == "parsing":
-                    progress_bar.progress(0.88)
-                    status_text.markdown("⚡ **Parsing tick telemetry with `demoparser2`...**")
-
-                elif stage == "saving":
-                    progress_bar.progress(0.96)
-                    status_text.markdown("💾 **Caching telemetry into Supabase...**")
-
-            try:
-                process_and_sync_matches(
-                    supabase_client=supabase,
-                    steam_id64=st.session_state.steam_id64,
-                    auth_code=existing_code,
-                    match_code=cleaned_match_code,
-                    progress_callback=update_ui_progress
-                )
-                progress_bar.progress(1.0)
-                status_text.empty()
-                st.success("Match successfully parsed and cached in Supabase!")
+            st.divider()
+            if st.button("🚨 Reset Account & Clear Data"):
+                supabase.table("matches").delete().eq("steam_id64", st.session_state.steam_id64).execute()
+                supabase.table("users").delete().eq("steam_id64", st.session_state.steam_id64).execute()
+                st.session_state.clear()
                 st.rerun()
-            except Exception as e:
-                status_text.empty()
-                st.error(f"Sync failed: {e}")
-                    
-        if st.button("Sign Out"):
-            st.session_state.steam_id64 = None
-            st.rerun()
+
     else:
-        st.write("Sign in with your Steam account to link your match history and unlock personalized AI coaching.")
-        redirect_uri = "http://localhost:8501"
-        steam_login_url = get_steam_signin_url(redirect_uri)
+        st.info("Please sign in with your Steam account to analyze your CS2 matches.")
+        redirect_uri = "http://localhost:8501/"
+        login_url = get_steam_signin_url(redirect_uri=redirect_uri)
         
         st.markdown(
             f"""
-            <a href="{steam_login_url}" target="_self">
-                <button style="background-color: #171a21; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer;">
-                    🚀 Sign in with Steam
-                </button>
-            </a>
+            <div style="margin-top: 10px;">
+                <a href="{login_url}" target="_self" style="display: inline-block; background-color: #ff4b4b; color: white; padding: 0.5rem 1rem; border-radius: 0.25rem; text-decoration: none; font-weight: 600;">
+                    🎮 Sign in through Steam
+                </a>
+            </div>
             """,
             unsafe_allow_html=True
         )
 
+# TAB 2: STATS DASHBOARD
 elif app_mode == "Stats Dashboard":
     st.subheader("Your Performance Trends")
     if not st.session_state.steam_id64:
@@ -171,24 +164,68 @@ elif app_mode == "Stats Dashboard":
         if not matches_response.data:
             st.info("No matches found in the database. Head to the 'Home / Auth' tab to sync your latest matches.")
         else:
-            st.success(f"Loaded {len(matches_response.data)} cached matches!")
+            raw_matches = matches_response.data
+            telemetry_list = []
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric(label="Matches Analyzed", value=len(matches_response.data))
-            col2.metric(label="Avg K/D Ratio", value="1.15", delta="0.05")
-            col3.metric(label="Win Rate", value="55%", delta="-2%")
-            
-            with st.expander("View Raw Match Data (JSONB)"):
-                st.json(matches_response.data)
+            for row in raw_matches:
+                data = row.get("match_data", {})
+                if "telemetry" in data:
+                    t = data["telemetry"]
+                    # Filter only fully parsed matches to prevent crashes on pending matches
+                    if t.get("status") == "fully_parsed":
+                        t["match_id"] = row.get("match_id", "Unknown")
+                        telemetry_list.append(t)
 
+            if not telemetry_list:
+                st.warning("Matches found, but no parsed telemetry is available yet. Ensure your background watcher is running!")
+            else:
+                df_stats = pd.DataFrame(telemetry_list)
+
+                # Ensure required columns exist with default fallbacks
+                for col in ["kd_ratio", "adr", "headshot_pct", "kills", "deaths", "flashes_thrown", "smokes_thrown"]:
+                    if col not in df_stats.columns:
+                        df_stats[col] = 0
+
+                avg_kd = round(df_stats["kd_ratio"].mean(), 2)
+                avg_adr = round(df_stats["adr"].mean(), 1)
+                avg_hs_pct = round(df_stats["headshot_pct"].mean(), 1)
+                total_flashes = int(df_stats["flashes_thrown"].sum())
+                total_smokes = int(df_stats["smokes_thrown"].sum())
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric(label="Matches Analyzed", value=len(df_stats))
+                m2.metric(label="Avg K/D Ratio", value=f"{avg_kd}")
+                m3.metric(label="Avg ADR", value=f"{avg_adr}")
+                m4.metric(label="Avg Headshot %", value=f"{avg_hs_pct}%")
+
+                st.divider()
+
+                col_left, col_right = st.columns(2)
+                with col_left:
+                    st.write("### 📈 K/D Ratio per Match")
+                    st.line_chart(df_stats.set_index("match_id")["kd_ratio"])
+
+                with col_right:
+                    st.write("### 🎯 ADR per Match")
+                    st.bar_chart(df_stats.set_index("match_id")["adr"])
+
+                st.write("### 💣 Utility Usage Breakdown")
+                u_col1, u_col2 = st.columns(2)
+                u_col1.metric(label="Total Flashbangs Thrown", value=total_flashes)
+                u_col2.metric(label="Total Smokes Thrown", value=total_smokes)
+
+                with st.expander("View Breakdown Table"):
+                    st.dataframe(
+                        df_stats[["match_id", "kills", "deaths", "kd_ratio", "adr", "headshot_pct", "flashes_thrown", "smokes_thrown"]],
+                        use_container_width=True
+                    )
+
+# TAB 3: AI COACH CHAT
 elif app_mode == "AI Coach Chat":
     st.subheader("Conversational AI Coach")
-    
     if not st.session_state.steam_id64:
         st.warning("Please sign in with Steam first to give your AI coach access to your match telemetry.")
     else:
-        st.write("Ask your AI coach questions about your positioning, aim consistency, or recent matches.")
-        
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
@@ -202,7 +239,7 @@ elif app_mode == "AI Coach Chat":
                 st.markdown(user_prompt)
 
             with st.chat_message("assistant"):
-                with st.spinner("Analyzing your match telemetry with Gemini Flash..."):
+                with st.spinner("Analyzing your match telemetry with Gemini..."):
                     try:
                         ai_reply = generate_coaching_response(
                             supabase, 
