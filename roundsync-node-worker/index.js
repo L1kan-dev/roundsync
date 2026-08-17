@@ -88,9 +88,8 @@ async function processPendingMatches() {
 
       try {
         const gcData = await requestMatchUrl(matchIdCode, outcomeId, token, shareCode);
-        
-        // Log raw object safely handling BigInts
-        console.log('📦 GC Raw Response Payload:\n', JSON.stringify(gcData, (k, v) => typeof v === 'bigint' ? v.toString() : v, 2));
+
+        console.log(`📦 Successfully retrieved GC match details for ${dbMatchId}`);
 
         // Extract demo download URL across all known CS2 Protobuf fields
         const directUrl = 
