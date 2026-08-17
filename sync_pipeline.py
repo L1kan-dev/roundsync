@@ -24,8 +24,6 @@ def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retr
     for attempt in range(retries):
         try:
             response = requests.get(url, params=params, timeout=8)
-            print(f"Valve API Status Code: {response.status_code}")
-            print(f"Valve API Response Text: {response.text}")
             
             if response.status_code == 200:
                 data = response.json()
@@ -61,7 +59,6 @@ def process_single_demo(supabase_client, steam_id64: str, auth_code: str, match_
     """Registers a new match code so the Node.js worker can fetch its URL."""
     print(f"Registering match code for background URL resolution: {match_code}")
     
-    # We set status to 'pending_url' so the Node.js worker knows to pick it up
     initial_payload = {
         "match_id": match_code,
         "telemetry": {
@@ -91,7 +88,6 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
     }
 
     try:
-        # Download stream with retries to prevent connection drops from Valve's CDN
         download_success = False
         max_retries = 3
 
@@ -102,7 +98,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 response.raise_for_status()
 
                 with open(bz2_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
+                    for chunk in response.iter_content(chunk_size=1024 * 1024): 
                         if chunk:
                             f.write(chunk)
                 
@@ -126,7 +122,6 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         print(f"Parsing raw demo telemetry using demoparser2...")
         parser = DemoParser(dem_path)
 
-        # 1. Parse player_death event for Kills, Deaths & Headshots
         total_kills = 0
         total_deaths = 0
         headshots = 0
@@ -134,21 +129,18 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         try:
             deaths_df = parser.parse_event("player_death")
             if not deaths_df.empty:
-                # Kills
                 if "attacker_steamid" in deaths_df.columns:
                     user_kills = deaths_df[deaths_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
                     total_kills = len(user_kills)
                     if "headshot" in user_kills.columns:
                         headshots = int(user_kills["headshot"].sum())
 
-                # Deaths
                 if "user_steamid" in deaths_df.columns:
                     user_deaths = deaths_df[deaths_df["user_steamid"].astype(str) == str(target_steam_id64)]
                     total_deaths = len(user_deaths)
         except Exception as event_err:
             print(f"⚠️ Warning parsing deaths: {event_err}")
 
-        # 2. Parse player_hurt event for Total Damage
         total_damage = 0.0
         try:
             hurt_df = parser.parse_event("player_hurt")
@@ -158,10 +150,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         except Exception as hurt_err:
             print(f"⚠️ Warning parsing damage: {hurt_err}")
 
-        # Metrics calculation
         calculated_kd = round(total_kills / max(1, total_deaths), 2)
         headshot_pct = round((headshots / max(1, total_kills)) * 100, 1) if total_kills > 0 else 0.0
-        calculated_adr = round(total_damage / 24, 1)  # Estimated round baseline
+        calculated_adr = round(total_damage / 24, 1)
 
         real_payload = {
             "match_id": match_code,
@@ -187,7 +178,6 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
 
     except Exception as e:
         print(f"Error processing real demo: {e}")
-        # Update match status to parse_failed so watcher doesn't loop infinitely
         try:
             error_payload = {
                 "match_id": match_code,
