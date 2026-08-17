@@ -1,9 +1,37 @@
 import urllib.parse
+import streamlit as st
 
-def get_steam_signin_url(redirect_uri: str) -> str:
+def get_dynamic_redirect_uri() -> str:
+    """
+    Dynamically determines the correct redirect URI for local development or Streamlit Cloud.
+    """
+    # 1. Check if an explicit APP_URL is defined in Streamlit secrets
+    try:
+        if "APP_URL" in st.secrets:
+            return st.secrets["APP_URL"]
+    except Exception:
+        pass
+
+    # 2. Try to infer automatically from Streamlit context headers
+    try:
+        headers = st.context.headers
+        host = headers.get("host")
+        if host:
+            proto = "https" if "localhost" not in host else "http"
+            return f"{proto}://{host}/"
+    except Exception:
+        pass
+
+    # 3. Fallback for local testing
+    return "http://localhost:8501/"
+
+def get_steam_signin_url(redirect_uri: str = None) -> str:
     """
     Constructs the official Steam OpenID 2.0 login redirect URL manually.
     """
+    if not redirect_uri:
+        redirect_uri = get_dynamic_redirect_uri()
+
     steam_login_url = "https://steamcommunity.com/openid/login"
     params = {
         "openid.ns": "http://specs.openid.net/auth/2.0",
@@ -19,17 +47,13 @@ def validate_steam_callback(query_params: dict) -> str:
     """
     Extracts and validates the SteamID64 from the OpenID callback query parameters.
     """
-    # Streamlit query_params can sometimes return lists or strings
     cleaned_params = {
         key: (val[0] if isinstance(val, list) else val) 
         for key, val in query_params.items()
     }
     
-    # Check if mode is valid and identity claimed is present
     claimed_id = cleaned_params.get("openid.claimed_id", "")
     if "openid.mode" in cleaned_params and cleaned_params["openid.mode"] == "id_res":
-        # The SteamID64 is the trailing digits of the claimed_id URL
-        # e.g., https://steamcommunity.com/openid/id/76561198xxxxxxxxx
         parts = claimed_id.split("/")
         steam_id = parts[-1]
         if steam_id.isdigit() and len(steam_id) == 17:

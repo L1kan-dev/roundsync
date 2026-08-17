@@ -139,8 +139,7 @@ if app_mode == "Home / Auth":
 
     else:
         st.info("Please sign in with your Steam account to analyze your CS2 matches.")
-        redirect_uri = "http://localhost:8501/"
-        login_url = get_steam_signin_url(redirect_uri=redirect_uri)
+        login_url = get_steam_signin_url()
         
         st.markdown(
             f"""
