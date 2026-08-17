@@ -12,16 +12,21 @@ def init_supabase():
 supabase = init_supabase()
 
 def download_valve_replay_with_retry(url: str, max_retries=4, delay=120) -> bytes:
-    """Streams a demo replay with exponential backoff for 502 Bad Gateway errors."""
+    """Streams a demo replay with exponential backoff for unready or failing CDN links."""
     for attempt in range(1, max_retries + 1):
         try:
             print(f"Streaming match replay from official Valve CDN (Attempt {attempt}/{max_retries})...")
-            response = requests.get(url, timeout=30)
+            response = requests.get(url, stream=True, timeout=30)
+            
             if response.status_code == 200:
+                content_type = response.headers.get("content-type", "")
+                if "text/html" in content_type:
+                    raise Exception("Valve CDN returned an HTML error page (Demo not ready).")
                 return response.content
-            print(f"⚠️ Download attempt {attempt} failed: {response.status_code} Server Error: Bad Gateway")
+                
+            print(f"⚠️ Download attempt {attempt} failed with status code: {response.status_code}")
         except Exception as e:
-            print(f"⚠️ Download attempt {attempt} failed with exception: {e}")
+            print(f"⚠️ Download attempt {attempt} failed: {type(e).__name__}")
         
         if attempt < max_retries:
             print(f"Waiting {delay} seconds for Valve CDN to stabilize...")
@@ -31,7 +36,7 @@ def download_valve_replay_with_retry(url: str, max_retries=4, delay=120) -> byte
     raise Exception("Failed to download demo after maximum retry attempts.")
 
 def check_for_new_valve_matches():
-    """Loops through registered users and queries Valve's API for new matches without spamming raw payloads."""
+    """Loops through registered users and queries Valve's API for new matches."""
     try:
         users_res = supabase.table("users").select("steam_id64, game_auth_code, last_known_code").execute()
         if users_res.data:
@@ -41,7 +46,6 @@ def check_for_new_valve_matches():
                 last_code = user.get("last_known_code")
 
                 if steam_id and auth_code and last_code:
-                    print(f"🔄 Auto-checking Valve API for new matches (User: {steam_id})...")
                     new_matches = sync_user_matches(
                         steam_id64=steam_id,
                         auth_code=auth_code,
@@ -54,7 +58,7 @@ def check_for_new_valve_matches():
         print(f"⚠️ Error auto-checking Valve API: {e}")
 
 def process_pending_downloads():
-    """Downloads and parses matches ready in the queue using the retry mechanism."""
+    """Downloads and parses matches ready in the queue, respecting CDN availability delays."""
     try:
         response = supabase.table('matches') \
             .select('match_id', 'steam_id64', 'match_data') \
@@ -70,14 +74,26 @@ def process_pending_downloads():
             telemetry = row['match_data']['telemetry']
             match_url = telemetry.get('download_url') or telemetry.get('match_url')
             
-            print(f"Found ready match: {match_id}. Starting download with retry protection...")
+            if not match_url:
+                print(f"⚠️ Match {match_id} is missing a download URL. Skipping for now.")
+                return
+
+            print(f"Found ready match: {match_id}. Starting download with stabilization delay...")
             
-            # Download with backoff retry before passing to pipeline
-            demo_bytes = download_valve_replay_with_retry(match_url)
-            
-            # Pass downloaded demo bytes/content to your pipeline
-            process_and_parse_real_demo(supabase, match_id, demo_bytes, steam_id)
-            print(f"✅ Successfully processed match: {match_id}")
+            # Start with a proper 2-minute initial wait time for freshly completed matches
+            try:
+                demo_bytes = download_valve_replay_with_retry(match_url, max_retries=4, delay=120)
+                process_and_parse_real_demo(supabase, match_id, demo_bytes, steam_id)
+                print(f"✅ Successfully processed match: {match_id}")
+            except Exception as download_err:
+                print(f"⚠️ Match {match_id} CDN download failed after retries. Marking as parse_failed to prevent loops.")
+                error_payload = row['match_data']
+                error_payload['telemetry']['status'] = 'parse_failed'
+                error_payload['telemetry']['error'] = str(download_err)
+                
+                supabase.table('matches').update({
+                    'match_data': error_payload
+                }).eq('match_id', match_id).execute()
             
     except Exception as e:
         print(f"⚠️ Queue worker error: {e}")
