@@ -25,15 +25,25 @@ const user = new SteamUser();
 const csgo = new GlobalOffensive(user);
 
 let isGcReady = false;
+let pollingInterval = null;
+let isConnecting = false;
+
+// Robust Connection & Reconnection Handler
+function connectToSteam() {
+  if (isConnecting) return;
+  isConnecting = true;
+
+  console.log('🔄 Logging into Steam...');
+  user.logOn({
+    accountName: STEAM_USERNAME,
+    password: STEAM_PASSWORD
+  });
+}
 
 // Steam & GC Authentication Lifecycle
-user.logOn({
-  accountName: STEAM_USERNAME,
-  password: STEAM_PASSWORD
-});
-
 user.on('loggedOn', () => {
   console.log('✅ Logged into Steam successfully. Requesting CS2 license...');
+  isConnecting = false;
   user.requestFreeLicense([730], (err) => {
     if (err) {
       console.warn('⚠️ License check note:', err.message);
@@ -44,6 +54,13 @@ user.on('loggedOn', () => {
   });
 });
 
+user.on('disconnected', (eresult, msg) => {
+  console.warn(`⚠️ Disconnected from Steam (Code: ${eresult}, Msg: ${msg}). Reconnecting in 15 seconds...`);
+  isGcReady = false;
+  stopPolling();
+  setTimeout(connectToSteam, 15000);
+});
+
 csgo.on('connectedToGC', () => {
   console.log('🎮 Connected to CS2 Game Coordinator.');
   isGcReady = true;
@@ -51,8 +68,17 @@ csgo.on('connectedToGC', () => {
 });
 
 csgo.on('disconnectedFromGC', (reason) => {
-  console.warn('⚠️ Disconnected from Game Coordinator:', reason);
+  console.warn(`⚠️ Disconnected from Game Coordinator: ${reason}. Re-launching CS2 session in 10 seconds...`);
   isGcReady = false;
+  stopPolling();
+  
+  // Re-request games played to poke GC back awake
+  setTimeout(() => {
+    if (user.steamID) {
+      console.log('🔄 Poking Steam to re-open CS2 app state...');
+      user.gamesPlayed([730]);
+    }
+  }, 10000);
 });
 
 // Match Resolution Logic
@@ -78,7 +104,6 @@ async function processPendingMatches() {
       const currentMatchData = match.match_data || {};
       const telemetry = currentMatchData.telemetry || {};
       
-      // FIXED: Use dbMatchId as the shareCode fallback since match_id contains the share code string
       const shareCode = telemetry.share_code || currentMatchData.shareCode || dbMatchId;
       const matchIdCode = telemetry.match_id;
       const outcomeId = telemetry.outcome_id;
@@ -91,7 +116,6 @@ async function processPendingMatches() {
 
         console.log(`📦 Successfully retrieved GC match details for ${dbMatchId}`);
 
-        // Extract demo download URL across all known CS2 Protobuf fields
         const directUrl = 
           gcData.matchurl || 
           gcData.match_url || 
@@ -134,7 +158,6 @@ async function processPendingMatches() {
 
 function requestMatchUrl(matchId, outcomeId, token, shareCode) {
   return new Promise((resolve, reject) => {
-    // 1. Listen for Valve GC response event
     const handleMatchList = (matches) => {
       clearTimeout(timeout);
       csgo.removeListener('matchList', handleMatchList);
@@ -145,16 +168,13 @@ function requestMatchUrl(matchId, outcomeId, token, shareCode) {
       }
     };
 
-    // 2. Safety timeout
     const timeout = setTimeout(() => {
       csgo.removeListener('matchList', handleMatchList);
       reject(new Error('GC Timeout after 10s - code may be expired or GC offline.'));
     }, 10000);
 
-    // 3. Attach event listener BEFORE sending request
     csgo.once('matchList', handleMatchList);
 
-    // 4. Send request (node-cs2 accepts raw shareCode string OR parameters object)
     try {
       if (shareCode) {
         csgo.requestGame(shareCode);
@@ -178,5 +198,17 @@ function requestMatchUrl(matchId, outcomeId, token, shareCode) {
 }
 
 function startPolling() {
-  setInterval(processPendingMatches, 5000);
+  if (!pollingInterval) {
+    pollingInterval = setInterval(processPendingMatches, 5000);
+  }
 }
+
+function stopPolling() {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
+// Initial Connection Kickoff
+connectToSteam();
