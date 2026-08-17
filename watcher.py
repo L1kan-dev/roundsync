@@ -1,4 +1,5 @@
 import time
+import requests
 import streamlit as st
 from supabase import create_client
 from sync_pipeline import process_and_parse_real_demo, sync_user_matches
@@ -9,6 +10,25 @@ def init_supabase():
     return create_client(url, key)
 
 supabase = init_supabase()
+
+def download_valve_replay_with_retry(url: str, max_retries=4, delay=120) -> bytes:
+    """Streams a demo replay, waiting for Valve's CDN to stabilize (~5-10 min total window)."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"Streaming match replay from official Valve CDN (Attempt {attempt}/{max_retries})...")
+            response = requests.get(url, timeout=30)
+            if response.status_code == 200:
+                return response.content
+            print(f"⚠️ Download attempt {attempt} failed: {response.status_code} Server Error: Bad Gateway")
+        except Exception as e:
+            print(f"⚠️ Download attempt {attempt} failed with exception: {e}")
+        
+        if attempt < max_retries:
+            print(f"Waiting {delay} seconds for Valve CDN to stabilize...")
+            time.sleep(delay)
+            delay *= 2  # Scales: 2 mins -> 4 mins -> 8 mins
+            
+    raise Exception("Failed to download demo after maximum retry attempts.")
 
 def check_for_new_valve_matches():
     """Loops through registered users and queries Valve's API for new matches."""
@@ -51,7 +71,11 @@ def process_pending_downloads():
             match_url = telemetry.get('download_url') or telemetry.get('match_url')
             
             print(f"Found ready match: {match_id}. Starting download and parse sequence...")
+            
+            # If your pipeline downloads inside process_and_parse_real_demo, 
+            # ensure it utilizes the retry mechanism above.
             process_and_parse_real_demo(supabase, match_id, match_url, steam_id)
+            
     except Exception as e:
         print(f"⚠️ Queue worker error: {e}")
 
