@@ -142,15 +142,15 @@ if app_mode == "Home / Auth":
         login_url = get_steam_signin_url()
         
         st.markdown(
-            f"""
-            <div style="margin-top: 10px;">
-                <a href="{login_url}" target="_self" style="display: inline-block; background-color: #ff4b4b; color: white; padding: 0.5rem 1rem; border-radius: 0.25rem; text-decoration: none; font-weight: 600;">
-                    🎮 Sign in through Steam
-                </a>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        f"""
+        <div style="margin-top: 10px;">
+            <a href="{login_url}" target="_top" style="display: inline-block; background-color: #ff4b4b; color: white; padding: 0.5rem 1rem; border-radius: 0.25rem; text-decoration: none; font-weight: 600;">
+                🎮 Sign in through Steam
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True
+)
 
 # TAB 2: STATS DASHBOARD
 elif app_mode == "Stats Dashboard":
