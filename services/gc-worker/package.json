@@ -1,0 +1,17 @@
+{
+  "name": "roundsync-gc-worker",
+  "version": "1.0.0",
+  "description": "RoundSync CS2 Game Coordinator Worker",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "csgo-sharecode": "^5.0.0",
+    "dotenv": "^17.4.2",
+    "node-cs2": "^2.3.1",
+    "steam-user": "^5.3.0"
+  }
+}

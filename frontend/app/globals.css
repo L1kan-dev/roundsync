@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #0f172a; /* Slate 900 */
+  --foreground: #f8fafc; /* Slate 50 */
+}
+
+body {
+  color: var(--foreground);
+  background-color: var(--background);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
