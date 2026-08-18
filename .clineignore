@@ -1,0 +1,15 @@
+# Block all environment secret configuration vaults
+.env
+.env.local
+.env.production
+.env.development
+.sectrets.toml
+.roundsync-node-worker/.env
+
+# Block cryptographic keys and certificates
+*.pem
+*.key
+*.pub
+
+# Block local database storage folders if present
+supabase/data/
