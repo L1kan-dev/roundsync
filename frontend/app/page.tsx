@@ -52,10 +52,12 @@ export default function Home() {
     }
   }, []);
 
-  // Fetch match history when token changes
+    // Fetch match history when token changes & auto-poll every 10 seconds
   useEffect(() => {
     if (jwtToken) {
       fetchMatches();
+      const interval = setInterval(fetchMatches, 10000); // Poll every 10s
+      return () => clearInterval(interval);
     }
   }, [jwtToken]);
 
@@ -131,14 +133,30 @@ export default function Home() {
     }
   };
 
-  const handleOnboarding = (e: React.FormEvent) => {
+    const handleOnboarding = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!jwtToken) return;
     setIsOnboarding(true);
-    // Simulate API registration wait
-    setTimeout(() => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/user/onboard`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${jwtToken}`
+        },
+        body: JSON.stringify({ gameAuthCode, recentShareCode })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setOnboardSuccess(true);
+      } else {
+        alert(`Onboarding error: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      alert('Failed to connect to API Gateway for onboarding.');
+    } finally {
       setIsOnboarding(false);
-      setOnboardSuccess(true);
-    }, 2000);
+    }
   };
 
   const askCoach = async (e: React.FormEvent) => {
@@ -373,6 +391,19 @@ export default function Home() {
                     <p className="text-3xl font-extrabold text-indigo-400">{avgHs}%</p>
                   </div>
                 </div>
+
+                <div>
+            <div className="flex items-center justify-between mb-8">
+              <h1 className="text-3xl font-extrabold">Performance Dashboard</h1>
+              <button
+                onClick={fetchMatches}
+                disabled={isLoadingMatches}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl transition-all flex items-center gap-2"
+              >
+                {isLoadingMatches ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                Refresh Stats
+              </button>
+            </div>
 
                 {/* Graphical charts */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

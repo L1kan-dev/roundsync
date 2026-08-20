@@ -51,25 +51,23 @@ def process_pending_downloads():
     try:
         response = supabase.table('matches') \
             .select('match_id', 'steam_id64', 'match_data') \
-            .eq('match_data->telemetry->>status', 'pending_download') \
-            .limit(1) \
+            .limit(10) \
             .execute()
         
         if response.data:
-            row = response.data[0]
-            match_id = row['match_id']
-            steam_id = row['steam_id64']
-            telemetry = row['match_data']['telemetry']
-            match_url = telemetry.get('download_url') or telemetry.get('match_url')
-            
-            if not match_url:
-                print(f"⚠️ Match {match_id} missing download URL.")
-                return
+            for row in response.data:
+                match_id = row['match_id']
+                steam_id = row['steam_id64']
+                match_data = row.get('match_data') or {}
+                telemetry = match_data.get('telemetry') or {}
+                status = telemetry.get('status')
+                match_url = telemetry.get('download_url') or telemetry.get('match_url')
 
-            print(f"Found ready match: {match_id}. Starting download pipeline...")
-            process_and_parse_real_demo(supabase, match_id, match_url, steam_id)
-            print(f"✅ Successfully processed match: {match_id}")
-            
+                if status == 'pending_download' and match_url:
+                    print(f"Found ready match: {match_id}. Starting download pipeline...")
+                    process_and_parse_real_demo(supabase, match_id, match_url, steam_id)
+                    print(f"✅ Successfully processed match: {match_id}")
+                    break
     except Exception as e:
         print(f"⚠️ Queue worker error: {e}")
 

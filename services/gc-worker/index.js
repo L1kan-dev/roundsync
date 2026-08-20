@@ -6,6 +6,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const csgoSharecode = require('csgo-sharecode');
+const decodeMatch = csgoSharecode.decodeMatchShareCode || csgoSharecode.decode || csgoSharecode;
 
 dotenv.config();
 
@@ -27,23 +28,7 @@ let isGcReady = false;
 let pollingInterval = null;
 let isConnecting = false;
 
-function updateHeartbeat() {
-  supabase
-    .from('service_health')
-    .upsert({
-      service_name: 'gc-worker',
-      status: isGcReady ? 'healthy' : 'degraded',
-      last_activity: new Date().toISOString()
-    }, { onConflict: 'service_name' })
-    .then(({ error }) => {
-      if (error) {
-        // Table might not exist yet during migration phase
-      }
-    });
-}
-
-setInterval(updateHeartbeat, 300000); // Send heartbeat every 5 minutes
-
+// Robust Connection & Reconnection Handler
 function connectToSteam() {
   if (isConnecting) return;
   isConnecting = true;
@@ -55,6 +40,7 @@ function connectToSteam() {
   });
 }
 
+// Steam & GC Authentication Lifecycle
 user.on('loggedOn', () => {
   console.log('✅ Logged into Steam successfully. Requesting CS2 license...');
   isConnecting = false;
@@ -86,6 +72,7 @@ csgo.on('disconnectedFromGC', (reason) => {
   isGcReady = false;
   stopPolling();
   
+  // Re-request games played to poke GC back awake
   setTimeout(() => {
     if (user.steamID) {
       console.log('🔄 Poking Steam to re-open CS2 app state...');
@@ -94,6 +81,7 @@ csgo.on('disconnectedFromGC', (reason) => {
   }, 10000);
 });
 
+// Match Resolution Logic
 async function processPendingMatches() {
   if (!isGcReady) return;
 
@@ -121,10 +109,11 @@ async function processPendingMatches() {
       const outcomeId = telemetry.outcome_id;
       const token = telemetry.token;
 
-      console.log(`🔍 Resolving match: ${dbMatchId}`);
+      console.log(`🔍 Resolving match: ${dbMatchId} (Code: ${shareCode || matchIdCode})`);
 
       try {
         const gcData = await requestMatchUrl(matchIdCode, outcomeId, token, shareCode);
+
         console.log(`📦 Successfully retrieved GC match details for ${dbMatchId}`);
 
         const directUrl = 
@@ -132,6 +121,7 @@ async function processPendingMatches() {
           gcData.match_url || 
           gcData.url || 
           (gcData.watchablematchinfo && (gcData.watchablematchinfo.matchurl || gcData.watchablematchinfo.match_url)) ||
+          (gcData.roundstatsall && gcData.roundstatsall.length > 0 && gcData.roundstatsall[gcData.roundstatsall.length - 1].map) ||
           (gcData.match && (gcData.match.matchurl || gcData.match.match_url));
 
         if (directUrl) {
@@ -220,4 +210,5 @@ function stopPolling() {
   }
 }
 
+// Initial Connection Kickoff
 connectToSteam();

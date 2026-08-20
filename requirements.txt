@@ -1,5 +1,0 @@
-streamlit
-pandas
-supabase
-demoparser2
-google-genai

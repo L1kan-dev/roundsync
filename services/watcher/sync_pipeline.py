@@ -8,10 +8,10 @@ from demoparser2 import DemoParser
 from crypto_utils import decrypt_value
 
 def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
-    """Queries Valve API using STEAM_API_KEY from env to validate a match code and fetch next code."""
-    api_key = os.getenv("STEAM_API_KEY")
+    """Queries Valve API using VALVE_API_KEY or STEAM_API_KEY from env to validate a match code."""
+    api_key = os.getenv("VALVE_API_KEY") or os.getenv("STEAM_API_KEY")
     if not api_key:
-        print("⚠️ STEAM_API_KEY environment variable missing!")
+        print("⚠️ VALVE_API_KEY / STEAM_API_KEY environment variable missing!")
         return {"is_valid": False, "next_code": "n/a"}
 
     # Decrypt auth code if it's encrypted

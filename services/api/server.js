@@ -178,6 +178,43 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
   }
 });
 
+// 5. User Onboarding Setup Endpoint
+app.post('/api/user/onboard', authenticateToken, async (req, res) => {
+  const steamId = req.user.steamId;
+  const { gameAuthCode, recentShareCode } = req.body;
+
+  if (!gameAuthCode || !recentShareCode) {
+    return res.status(400).json({ error: 'Game Auth Code and Recent Share Code are required.' });
+  }
+
+  try {
+    await supabase.from('users').upsert({
+      steam_id64: String(steamId),
+      game_auth_code: String(gameAuthCode),
+      last_known_code: String(recentShareCode)
+    }, { onConflict: 'steam_id64' });
+
+    // Also seed the first match into the queue
+    await supabase.from('matches').upsert({
+      match_id: String(recentShareCode),
+      steam_id64: String(steamId),
+      match_data: {
+        match_id: String(recentShareCode),
+        telemetry: {
+          match_id: String(recentShareCode),
+          share_code: String(recentShareCode),
+          status: 'pending_url'
+        }
+      }
+    }, { onConflict: 'match_id' });
+
+    res.json({ success: true, message: 'Onboarding completed and first match queued!' });
+  } catch (err) {
+    console.error('Onboarding Error:', err);
+    res.status(500).json({ error: 'Failed to save onboarding configuration.' });
+  }
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`🚀 RoundSync Express API Gateway running on port ${PORT}`);

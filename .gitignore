@@ -5,7 +5,6 @@ env/
 
 # Secrets & Configuration
 .env
-.streamlit/secrets.toml
 *.pem
 *.key
 
@@ -24,6 +23,7 @@ __pycache__/
 # Node.js Worker
 node_modules/
 npm-debug.log*
+.next/
 
 # Git Diff Dumps & Temporary Logs
 my_changes.txt

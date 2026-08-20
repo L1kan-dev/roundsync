@@ -3,8 +3,6 @@
 .env.local
 .env.production
 .env.development
-.sectrets.toml
-.roundsync-node-worker/.env
 
 # Block cryptographic keys and certificates
 *.pem
