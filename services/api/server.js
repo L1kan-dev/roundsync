@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -76,24 +77,46 @@ app.get('/health', async (req, res) => {
 
 // 2. Steam Auth Session Token Generator Endpoint
 app.post('/api/auth/token', async (req, res) => {
-  const { steamId } = req.body;
+  const { proof } = req.body;
 
-  if (!steamId || String(steamId).length !== 17) {
-    return res.status(400).json({ error: 'Valid 17-digit SteamID64 required.' });
+  if (!proof || typeof proof !== 'string') {
+    return res.status(400).json({ error: 'Login proof required.' });
+  }
+
+  const parts = proof.split(':');
+  if (parts.length !== 3) {
+    return res.status(400).json({ error: 'Malformed login proof.' });
+  }
+  const [steamId, expiresStr, signature] = parts;
+  const expires = Number(expiresStr);
+
+  if (!steamId.match(/^\d{17}$/) || !expires || Date.now() > expires) {
+    return res.status(401).json({ error: 'Login proof expired or invalid.' });
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update(`${steamId}:${expires}`)
+    .digest('hex');
+
+  const validSignature =
+    signature.length === expectedSignature.length &&
+    crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+
+  if (!validSignature) {
+    return res.status(401).json({ error: 'Login proof could not be verified.' });
   }
 
   try {
-    // Ensure user exists in database
     await supabase.from('users').upsert({
-      steam_id64: String(steamId)
+      steam_id64: steamId
     }, { onConflict: 'steam_id64' });
 
-    // Issue JWT session token
-    const token = jwt.sign({ steamId: String(steamId) }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ steamId }, JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
       token,
-      steamId: String(steamId)
+      steamId
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to authenticate user.' });

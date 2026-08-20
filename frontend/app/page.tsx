@@ -69,20 +69,18 @@ export default function Home() {
   // Handle cross-window Steam callback listener
   useEffect(() => {
     const handleSteamMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'STEAM_LOGIN' && event.data?.steamId) {
-        const loggedSteamId = event.data.steamId;
+      if (event.data?.type === 'STEAM_LOGIN' && event.data?.proof) {
         try {
-          // Request Session JWT from Express API Gateway
           const response = await fetch(`${API_BASE_URL}/api/auth/token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ steamId: loggedSteamId })
+            body: JSON.stringify({ proof: event.data.proof })
           });
           const data = await response.json();
-          if (data.token) {
-            setSteamId(loggedSteamId);
+          if (data.token && data.steamId) {
+            setSteamId(data.steamId);
             setJwtToken(data.token);
-            localStorage.setItem('steamId', loggedSteamId);
+            localStorage.setItem('steamId', data.steamId);
             localStorage.setItem('jwtToken', data.token);
           }
         } catch (err) {
@@ -391,20 +389,16 @@ export default function Home() {
                     <p className="text-3xl font-extrabold text-indigo-400">{avgHs}%</p>
                   </div>
                 </div>
-
-                <div>
-            <div className="flex items-center justify-between mb-8">
-              <h1 className="text-3xl font-extrabold">Performance Dashboard</h1>
-              <button
-                onClick={fetchMatches}
-                disabled={isLoadingMatches}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl transition-all flex items-center gap-2"
-              >
-                {isLoadingMatches ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                Refresh Stats
-              </button>
-            </div>
-
+                <div className="flex items-center justify-between mb-8">
+                  <button
+                    onClick={fetchMatches}
+                    disabled={isLoadingMatches}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl transition-all flex items-center gap-2"
+                  >
+                    {isLoadingMatches ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    Refresh Stats
+                  </button>
+                </div>
                 {/* Graphical charts */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                   <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800">

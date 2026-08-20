@@ -5,6 +5,9 @@ env/
 
 # Secrets & Configuration
 .env
+.env.local
+.env.production
+.env.development
 *.pem
 *.key
 
@@ -24,6 +27,7 @@ __pycache__/
 node_modules/
 npm-debug.log*
 .next/
+*.tsbuildinfo
 
 # Git Diff Dumps & Temporary Logs
 my_changes.txt

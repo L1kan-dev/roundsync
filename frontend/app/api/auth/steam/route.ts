@@ -1,21 +1,43 @@
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const openidMode = searchParams.get('openid.mode');
 
-  // Steam OpenID return callback handler
   if (openidMode === 'id_res') {
     const claimedId = searchParams.get('openid.claimed_id') || '';
     const steamId = claimedId.split('/').pop() || '';
 
-    if (steamId && steamId.match(/^\d{17}$/)) {
-      // Return HTML script to pass the SteamID back to our main client app window safely
+    // Build the "please double check this" request using the exact same
+    // parameters Steam sent us, just switching the mode.
+    const verifyParams = new URLSearchParams(searchParams);
+    verifyParams.set('openid.mode', 'check_authentication');
+
+    const verifyResponse = await fetch('https://steamcommunity.com/openid/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: verifyParams.toString(),
+    });
+    const verifyText = await verifyResponse.text();
+    const isValid = verifyText.includes('is_valid:true');
+
+    if (isValid && steamId && steamId.match(/^\d{17}$/)) {
+      // Build a short-lived, signed "proof" that only OUR server could have
+      // made, since it's stamped with a secret key the browser never sees.
+      const expires = Date.now() + 60_000; // valid for 60 seconds
+      const payload = `${steamId}:${expires}`;
+      const signature = crypto
+        .createHmac('sha256', process.env.JWT_SECRET || '')
+        .update(payload)
+        .digest('hex');
+      const proof = `${payload}:${signature}`;
+
       return new Response(
         `<html>
           <body>
             <script>
-              window.opener.postMessage({ type: 'STEAM_LOGIN', steamId: '${steamId}' }, '*');
+              window.opener.postMessage({ type: 'STEAM_LOGIN', proof: '${proof}' }, '*');
               window.close();
             </script>
             <p>Authentication complete! You can close this window now.</p>
@@ -24,9 +46,11 @@ export async function GET(request: Request) {
         { headers: { 'Content-Type': 'text/html' } }
       );
     }
+
+    // Steam said no, or the data was malformed — don't hand out anything.
+    return new Response('Steam login could not be verified.', { status: 401 });
   }
 
-  // Redirect to Steam Community OpenID login page manually
   const realm = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
   const returnTo = `${realm}/api/auth/steam`;
 
