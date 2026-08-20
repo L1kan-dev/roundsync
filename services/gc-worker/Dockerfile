@@ -1,5 +1,5 @@
 # Use official Node.js 20 slim image
-FROM node:20-slim
+FROM node:22-slim
 
 WORKDIR /app
 
@@ -12,3 +12,4 @@ COPY . .
 
 # Start GC Worker process
 CMD ["node", "index.js"]
+    

@@ -1,5 +1,5 @@
-# Use official Node.js 20 slim image
-FROM node:20-slim
+# Use official Node.js 22 slim image
+FROM node:22-slim
 
 WORKDIR /app
 
@@ -15,3 +15,4 @@ EXPOSE 3001
 
 # Start Express server
 CMD ["node", "server.js"]
+    
