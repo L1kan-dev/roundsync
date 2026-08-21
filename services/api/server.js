@@ -3,9 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
+import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
-import crypto from 'crypto';
+import { encryptValue } from './cryptoUtils.js';
 
 dotenv.config();
 
@@ -213,7 +214,7 @@ app.post('/api/user/onboard', authenticateToken, async (req, res) => {
   try {
     await supabase.from('users').upsert({
       steam_id64: String(steamId),
-      game_auth_code: String(gameAuthCode),
+      game_auth_code: encryptValue(String(gameAuthCode)),
       last_known_code: String(recentShareCode)
     }, { onConflict: 'steam_id64' });
 
