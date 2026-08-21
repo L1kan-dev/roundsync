@@ -120,6 +120,10 @@ export default function Home() {
       const response = await fetch(`${API_BASE_URL}/api/matches`, {
         headers: { 'Authorization': `Bearer ${jwtToken}` }
       });
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
       const data = await response.json();
       if (data.matches) {
         setMatches(data.matches);
