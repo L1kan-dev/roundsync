@@ -12,6 +12,10 @@
     "csgo-sharecode": "^5.0.0",
     "dotenv": "^17.4.2",
     "node-cs2": "^2.3.1",
-    "steam-user": "^5.3.0"
+    "steam-user": "^5.3.0",
+    "steam-totp": "^2.1.2"
+  },
+  "allowScripts": {
+    "protobufjs@6.11.6": true
   }
 }

@@ -3,6 +3,7 @@ import GlobalOffensive from 'node-cs2';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { createRequire } from 'module';
+import SteamTotp from 'steam-totp';
 
 const require = createRequire(import.meta.url);
 const csgoSharecode = require('csgo-sharecode');
@@ -14,6 +15,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 const STEAM_USERNAME = process.env.STEAM_USERNAME;
 const STEAM_PASSWORD = process.env.STEAM_PASSWORD;
+const STEAM_SHARED_SECRET = process.env.STEAM_SHARED_SECRET;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error("❌ Missing Supabase environment variables.");
@@ -36,7 +38,8 @@ function connectToSteam() {
   console.log('🔄 Logging into Steam...');
   user.logOn({
     accountName: STEAM_USERNAME,
-    password: STEAM_PASSWORD
+    password: STEAM_PASSWORD,
+    twoFactorCode: SteamTotp.generateAuthCode(STEAM_SHARED_SECRET)
   });
 }
 
