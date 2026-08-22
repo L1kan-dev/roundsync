@@ -52,6 +52,14 @@ user.on('loggedOn', () => {
   });
 });
 
+user.on('error', (err) => {
+  console.error(`❌ Steam login error: ${err.message} (eresult: ${err.eresult}). Retrying in 15 seconds...`);
+  isConnecting = false;
+  isGcReady = false;
+  stopPolling();
+  setTimeout(connectToSteam, 15000);
+});
+
 user.on('disconnected', (eresult, msg) => {
   console.warn(`⚠️ Disconnected from Steam (Code: ${eresult}, Msg: ${msg}). Reconnecting in 15 seconds...`);
   isGcReady = false;
