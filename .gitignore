@@ -37,3 +37,8 @@ patch_changes.txt
 # System & Editor Files
 .DS_Store
 Thumbs.db
+
+# Playwright (used by the run-frontend agent skill's driver)
+playwright-report/
+test-results/
+frontend/.claude/skills/run-frontend/screenshots/
