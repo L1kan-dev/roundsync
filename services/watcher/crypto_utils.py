@@ -11,15 +11,6 @@ def get_cipher():
         print(f"⚠️ Encryption key initialization error: {e}")
         return None
 
-def encrypt_value(value: str) -> str:
-    """Encrypts a string value using Fernet if ENCRYPTION_KEY is configured."""
-    if not value:
-        return value
-    cipher = get_cipher()
-    if not cipher:
-        return value  # Return as-is if no key set (backwards compatible)
-    return cipher.encrypt(value.encode()).decode()
-
 def decrypt_value(encrypted_value: str) -> str:
     """Decrypts a string value using Fernet if ENCRYPTION_KEY is configured."""
     if not encrypted_value:

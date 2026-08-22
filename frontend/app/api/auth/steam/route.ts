@@ -23,12 +23,17 @@ export async function GET(request: Request) {
     const isValid = verifyText.includes('is_valid:true');
 
     if (isValid && steamId && steamId.match(/^\d{17}$/)) {
+      if (!process.env.JWT_SECRET) {
+        console.error('❌ Missing JWT_SECRET in frontend environment.');
+        return new Response('Server misconfigured.', { status: 500 });
+      }
+
       // Build a short-lived, signed "proof" that only OUR server could have
       // made, since it's stamped with a secret key the browser never sees.
       const expires = Date.now() + 60_000; // valid for 60 seconds
       const payload = `${steamId}:${expires}`;
       const signature = crypto
-        .createHmac('sha256', process.env.JWT_SECRET || '')
+        .createHmac('sha256', process.env.JWT_SECRET)
         .update(payload)
         .digest('hex');
       const proof = `${payload}:${signature}`;

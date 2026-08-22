@@ -3,13 +3,11 @@ import fernet from 'fernet';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
 export function encryptValue(value) {
-  if (!value || !ENCRYPTION_KEY) return value; // no key set = save as-is, same as the Python version
-  try {
-    const secret = new fernet.Secret(ENCRYPTION_KEY);
-    const token = new fernet.Token({ secret });
-    return token.encode(value);
-  } catch (err) {
-    console.error('⚠️ Encryption error:', err);
-    return value;
+  if (!value) return value;
+  if (!ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY is not configured — refusing to save unencrypted sensitive data.');
   }
+  const secret = new fernet.Secret(ENCRYPTION_KEY);
+  const token = new fernet.Token({ secret });
+  return token.encode(value);
 }

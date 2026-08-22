@@ -147,9 +147,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "adr": calculated_adr,
                 "kills": total_kills,
                 "deaths": total_deaths,
-                "headshot_pct": headshot_pct,
-                "flashes_thrown": 0,
-                "smokes_thrown": 0
+                "headshot_pct": headshot_pct
             }
         }
 

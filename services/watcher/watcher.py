@@ -51,19 +51,19 @@ def process_pending_downloads():
     try:
         response = supabase.table('matches') \
             .select('match_id', 'steam_id64', 'match_data') \
+            .contains('match_data', {'telemetry': {'status': 'pending_download'}}) \
             .limit(10) \
             .execute()
-        
+
         if response.data:
             for row in response.data:
                 match_id = row['match_id']
                 steam_id = row['steam_id64']
                 match_data = row.get('match_data') or {}
                 telemetry = match_data.get('telemetry') or {}
-                status = telemetry.get('status')
                 match_url = telemetry.get('download_url') or telemetry.get('match_url')
 
-                if status == 'pending_download' and match_url:
+                if match_url:
                     print(f"Found ready match: {match_id}. Starting download pipeline...")
                     process_and_parse_real_demo(supabase, match_id, match_url, steam_id)
                     print(f"✅ Successfully processed match: {match_id}")

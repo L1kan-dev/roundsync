@@ -21,7 +21,7 @@ The system is split into four small services that each do one job:
 
 ## Tech Stack
 
-- **frontend**: Next.js 14, React, Tailwind CSS, Recharts
+- **frontend**: Next.js 16, React 19, Tailwind CSS 4, Recharts
 - **services/api**: Node.js, Express, jsonwebtoken (login sessions), Supabase client
 - **services/watcher**: Python, demoparser2 (reads CS2 replay files), cryptography
 - **services/gc-worker**: Node.js, steam-user (talks to Steam)
@@ -107,7 +107,7 @@ RoundSync/
 ├── services/
 │   ├── api/               # Express API gateway (server.js)
 │   ├── watcher/           # Python match-discovery + parsing loop
-│   └── gc-worker/         # Node.js Steam connection worker
+│   └── gc-worker/         # Node.js Steam Game Coordinator connection worker (index.js)
 ├── docker-compose.yml     # Runs all four services together, for local dev
 ├── railway.json           # Deployment config for Railway (cloud hosting)
 └── .env                   # Secrets (never committed)
@@ -118,7 +118,8 @@ RoundSync/
 ## Security Notes
 
 - Steam login is verified server-side against Steam's OpenID service before any session is issued (fixed 2026-08-20).
-- ⚠️ **Known gap**: the game auth code you enter during setup is currently saved to the database in plain text — encryption code exists in `services/watcher/crypto_utils.py` but isn't wired into the save path yet. Don't treat this code as safe from database exposure until that's fixed.
+- The game auth code you enter during setup is encrypted (Fernet) before being saved to the database (fixed 2026-08-21). If `ENCRYPTION_KEY` isn't configured, the server refuses to save it rather than storing it unprotected.
+- The frontend automatically logs you out if the server rejects your saved session token (e.g. after a secret rotation), instead of showing a stale "logged in" state.
 
 ---
 

@@ -2,12 +2,7 @@ import SteamUser from 'steam-user';
 import GlobalOffensive from 'node-cs2';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { createRequire } from 'module';
 import SteamTotp from 'steam-totp';
-
-const require = createRequire(import.meta.url);
-const csgoSharecode = require('csgo-sharecode');
-const decodeMatch = csgoSharecode.decodeMatchShareCode || csgoSharecode.decode || csgoSharecode;
 
 dotenv.config();
 

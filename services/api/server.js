@@ -16,10 +16,10 @@ const PORT = process.env.PORT || 3001;
 const SUPABASE_URL = process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace(/\/+$/, '') : '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const JWT_SECRET = process.env.JWT_SECRET || 'roundsync-dev-secret-key-change-in-prod';
+const JWT_SECRET = process.env.JWT_SECRET;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('❌ Missing Supabase environment variables in API Gateway.');
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !JWT_SECRET) {
+  console.error('❌ Missing required environment variables (Supabase URL/key or JWT_SECRET) in API Gateway.');
   process.exit(1);
 }
 

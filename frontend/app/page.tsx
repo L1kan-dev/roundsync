@@ -17,8 +17,6 @@ interface Match {
       kills: number;
       deaths: number;
       headshot_pct: number;
-      flashes_thrown?: number;
-      smokes_thrown?: number;
     };
   };
 }
@@ -30,7 +28,7 @@ export default function Home() {
   const [matches, setMatches] = useState<Match[]>([]);
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   
-  // User Profile status (Mock setup config checks)
+  // User Profile / game integration onboarding state
   const [gameAuthCode, setGameAuthCode] = useState('');
   const [recentShareCode, setRecentShareCode] = useState('');
   const [isOnboarding, setIsOnboarding] = useState(false);
@@ -135,7 +133,7 @@ export default function Home() {
     }
   };
 
-    const handleOnboarding = async (e: React.FormEvent) => {
+    const handleOnboarding = async (e: React.SubmitEvent) => {
     e.preventDefault();
     if (!jwtToken) return;
     setIsOnboarding(true);
@@ -161,7 +159,7 @@ export default function Home() {
     }
   };
 
-  const askCoach = async (e: React.FormEvent) => {
+  const askCoach = async (e: React.SubmitEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || !jwtToken || isSendingMessage) return;
 
