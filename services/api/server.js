@@ -146,6 +146,27 @@ app.get('/api/matches', authenticateToken, async (req, res) => {
   }
 });
 
+// 3b. User Profile / Onboarding Status Endpoint
+app.get('/api/user/profile', authenticateToken, async (req, res) => {
+  const steamId = req.user.steamId;
+
+  try {
+    const { data: userRow, error } = await supabase
+      .from('users')
+      .select('game_auth_code')
+      .eq('steam_id64', steamId)
+      .maybeSingle();
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({ onboarded: Boolean(userRow?.game_auth_code) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch user profile.' });
+  }
+});
+
 // 4. AI Coaching Chat Endpoint (Gemini Integration)
 app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
   const steamId = req.user.steamId;

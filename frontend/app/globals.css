@@ -1,12 +1,129 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0f172a; /* Slate 900 */
-  --foreground: #f8fafc; /* Slate 50 */
+  --void: #05070a;
+  --panel: #0c1015;
+  --panel-raised: #10151c;
+  --edge: #1c242e;
+  --edge-bright: #2a3644;
+  --text: #e7edf3;
+  --text-dim: #8592a1;
+  --cyan: #22d3ee;
+  --cyan-dim: #0e7490;
+  --amber: #fb923c;
+  --amber-dim: #b45309;
+  --danger: #f87171;
+
+  --background: var(--void);
+  --foreground: var(--text);
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   color: var(--foreground);
   background-color: var(--background);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
 }
+
+.font-display {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.font-tel {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Radar sweep backdrop — a slow rotating conic gradient behind concentric rings,
+   evoking the in-game minimap rather than a generic glow. */
+@keyframes radar-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.radar-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.radar-backdrop::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 140vmax;
+  height: 140vmax;
+  margin-left: -70vmax;
+  margin-top: -70vmax;
+  background: conic-gradient(from 0deg, rgba(34,211,238,0.16), transparent 18%, transparent 82%, rgba(34,211,238,0.16));
+  animation: radar-spin 14s linear infinite;
+}
+
+.radar-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 50% 42%, transparent 0, transparent 119px, rgba(34,211,238,0.10) 120px, rgba(34,211,238,0.10) 121px, transparent 122px),
+    radial-gradient(circle at 50% 42%, transparent 0, transparent 219px, rgba(34,211,238,0.07) 220px, rgba(34,211,238,0.07) 221px, transparent 222px),
+    radial-gradient(circle at 50% 42%, transparent 0, transparent 319px, rgba(34,211,238,0.05) 320px, rgba(34,211,238,0.05) 321px, transparent 322px);
+}
+
+/* HUD corner brackets for panels — small tactical-readout framing */
+.hud-corners {
+  position: relative;
+}
+.hud-corners::before,
+.hud-corners::after,
+.hud-corners > .hud-tl,
+.hud-corners > .hud-tr {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+.hud-corners::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--cyan);
+  border-left: 2px solid var(--cyan);
+  opacity: 0.7;
+}
+.hud-corners::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--cyan);
+  border-right: 2px solid var(--cyan);
+  opacity: 0.7;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-8px) scale(0.98); }
+}
+.toast-enter { animation: toast-in 0.25s ease-out forwards; }
+.toast-exit { animation: toast-out 0.25s ease-in forwards; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+.live-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--void); }
+::-webkit-scrollbar-thumb { background: var(--edge-bright); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: var(--cyan-dim); }
