@@ -286,6 +286,22 @@ def _angle_diff(a: float, b: float) -> float:
     return (a - b + 180) % 360 - 180
 
 
+def _get_player_rank(parser, target_steam_id64: str):
+    """Returns (rank_new, rank_type_id) from the demo's own rank_update event, or (None, None)."""
+    target = str(target_steam_id64)
+    try:
+        rank_df = parser.parse_event("rank_update")
+        mine = rank_df[rank_df["user_steamid"].astype(str) == target] if not rank_df.empty else pd.DataFrame()
+        if not mine.empty:
+            last = mine.sort_values("tick").iloc[-1]
+            rank_new = int(last["rank_new"]) if pd.notna(last["rank_new"]) else None
+            rank_type_id = int(last["rank_type_id"]) if pd.notna(last["rank_type_id"]) else None
+            return rank_new, rank_type_id
+    except Exception:
+        pass
+    return None, None
+
+
 def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
     """One row per teammate-death or bomb-plant trigger for target_steam_id64 only (same
     scoping rule as fact_economy/fact_utility_throw). Bomb-plant "opposite site" filtering is
@@ -319,16 +335,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
             deaths_this_round = [t for t in target_death_ticks if round_for(t) == rnd]
             return not any(dt <= tick for dt in deaths_this_round)
 
-        player_rank_new, player_rank_type_id = None, None
-        try:
-            rank_df = parser.parse_event("rank_update")
-            mine = rank_df[rank_df["user_steamid"].astype(str) == target] if not rank_df.empty else pd.DataFrame()
-            if not mine.empty:
-                last = mine.sort_values("tick").iloc[-1]
-                player_rank_new = int(last["rank_new"]) if pd.notna(last["rank_new"]) else None
-                player_rank_type_id = int(last["rank_type_id"]) if pd.notna(last["rank_type_id"]) else None
-        except Exception:
-            pass
+        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
 
         triggers = []  # each: (trigger_type, trigger_tick, extra_fields_dict)
         for _, d in death_df.iterrows():
@@ -422,6 +429,165 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
             })
     except Exception as e:
         print(f"⚠️ Warning parsing fact_adaptation_event: {e}")
+    return rows
+
+
+# Real, cited conventions (not invented) — see project memory for sourcing:
+# - trade distance ≈ 15m coaching convention (refrag before the enemy can reset/reposition)
+# - contested-duel range ≈ 30m (assault rifles' effective-accuracy range) — a proxy for
+#   "an enemy is close enough that a fight is genuinely possible right now"
+# - conversion: CS engine's real, cited ~52.49 map units per meter
+CS2_UNITS_PER_METER = 52.49
+TEAMMATE_TRADE_DISTANCE_UNITS = round(15 * CS2_UNITS_PER_METER, -2)   # ≈ 800
+ENEMY_CONTESTED_RANGE_UNITS = round(30 * CS2_UNITS_PER_METER, -2)     # ≈ 1500
+POSITIONING_SAMPLE_INTERVAL_TICKS = int(TICK_RATE * 0.5)
+TRADE_KILL_WINDOW_TICKS = int(TICK_RATE * 3)
+
+
+def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
+    """One row per isolated-commitment moment for target_steam_id64 only. Fires the instant the
+    player has no living teammate within trade distance AND a living enemy within contested
+    range — anchored on the COMMITMENT, not the death, per the standing design principle (a
+    lucky survival on a bad push must still be visible). Outcome (died/survived, and whether a
+    death was tradeable) is filled in after the fact, as a column, not the trigger itself."""
+    rows = []
+    target = str(target_steam_id64)
+    try:
+        freeze_end_df = parser.parse_event("round_freeze_end")
+        round_end_df = parser.parse_event("round_end")
+        if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
+            return rows
+        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
+
+        round_bounds = {}
+        for round_number, start_tick in enumerate(freeze_ticks, start=1):
+            end_rows = round_end_df[round_end_df["round"] == round_number]
+            if not end_rows.empty:
+                round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]))
+        if not round_bounds:
+            return rows
+
+        death_df = parser.parse_event("player_death")
+        target_deaths = (
+            death_df[death_df["user_steamid"].astype(str) == target]
+            if not death_df.empty and "user_steamid" in death_df.columns else pd.DataFrame()
+        )
+
+        sample_ticks = set()
+        for start_tick, end_tick in round_bounds.values():
+            t = start_tick
+            while t <= end_tick:
+                sample_ticks.add(t)
+                t += POSITIONING_SAMPLE_INTERVAL_TICKS
+        # ensure exact death ticks are present too, so death-moment trade checks aren't
+        # off by up to half a second from the regular sampling grid
+        sample_ticks.update(int(t) for t in target_deaths["tick"].tolist())
+
+        snap = parser.parse_ticks(["X", "Y", "Z", "team_num", "is_alive"], ticks=sorted(sample_ticks))
+        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
+
+        def death_at_or_after(round_number, from_tick, to_tick):
+            if target_deaths.empty:
+                return None
+            in_round = target_deaths[(target_deaths["tick"] >= from_tick) & (target_deaths["tick"] <= to_tick)]
+            return None if in_round.empty else in_round.sort_values("tick").iloc[0]
+
+        def was_traded(attacker_steamid, death_tick):
+            if death_df.empty or attacker_steamid is None:
+                return False
+            window = death_df[
+                (death_df["user_steamid"].astype(str) == str(attacker_steamid))
+                & (death_df["tick"] > death_tick) & (death_df["tick"] <= death_tick + TRADE_KILL_WINDOW_TICKS)
+            ]
+            return not window.empty
+
+        for round_number, (start_tick, end_tick) in round_bounds.items():
+            round_snap = snap[(snap["tick"] >= start_tick) & (snap["tick"] <= end_tick)]
+            if round_snap.empty:
+                continue
+            round_ticks_sorted = sorted(round_snap["tick"].unique())
+
+            state = "safe"
+            commit_tick, commit_pos, commit_teammate_dist, commit_enemy_dist = None, None, None, None
+
+            def emit(outcome, death_row):
+                death_tick_val, tradeable, traded = None, None, None
+                if death_row is not None:
+                    death_tick_val = int(death_row["tick"])
+                    attacker = death_row.get("attacker_steamid")
+                    death_snap = snap[snap["tick"] == death_tick_val]
+                    trow_at_death = death_snap[death_snap["steamid"].astype(str) == target]
+                    if not trow_at_death.empty:
+                        tx, ty = float(trow_at_death.iloc[0]["X"]), float(trow_at_death.iloc[0]["Y"])
+                        others = death_snap[(death_snap["steamid"].astype(str) != target) & (death_snap["is_alive"])]
+                        if not others.empty:
+                            teammates = others[others["team_num"] == int(trow_at_death.iloc[0]["team_num"])]
+                            if not teammates.empty:
+                                dists = ((teammates["X"].astype(float) - tx) ** 2 + (teammates["Y"].astype(float) - ty) ** 2) ** 0.5
+                                tradeable = bool(dists.min() <= TEAMMATE_TRADE_DISTANCE_UNITS)
+                    traded = was_traded(attacker, death_tick_val)
+                rows.append({
+                    "round_number": round_number,
+                    "steam_id64": target,
+                    "commitment_tick": commit_tick,
+                    "player_x": commit_pos[0], "player_y": commit_pos[1], "player_z": commit_pos[2],
+                    "nearest_teammate_distance_units": commit_teammate_dist,
+                    "nearest_enemy_distance_units": commit_enemy_dist,
+                    "outcome": outcome,
+                    "death_tick": death_tick_val,
+                    "teammate_within_trade_range_at_death": tradeable,
+                    "was_traded": traded,
+                    "player_rank_new": player_rank_new,
+                    "player_rank_type_id": player_rank_type_id,
+                })
+
+            for tick in round_ticks_sorted:
+                tick_rows = round_snap[round_snap["tick"] == tick]
+                trow = tick_rows[tick_rows["steamid"].astype(str) == target]
+
+                if trow.empty or not bool(trow.iloc[0]["is_alive"]):
+                    if state == "isolated":
+                        death_row = death_at_or_after(round_number, commit_tick, tick)
+                        emit("died" if death_row is not None else "survived", death_row)
+                    state = "safe"
+                    commit_tick = None
+                    continue
+
+                trow = trow.iloc[0]
+                tx, ty = float(trow["X"]), float(trow["Y"])
+                team_num = int(trow["team_num"])
+
+                others = tick_rows[(tick_rows["steamid"].astype(str) != target) & (tick_rows["is_alive"])]
+                nearest_teammate_dist, nearest_enemy_dist = None, None
+                if not others.empty:
+                    others = others.copy()
+                    others["dist"] = ((others["X"].astype(float) - tx) ** 2 + (others["Y"].astype(float) - ty) ** 2) ** 0.5
+                    teammates = others[others["team_num"] == team_num]
+                    enemies = others[others["team_num"] != team_num]
+                    nearest_teammate_dist = float(teammates["dist"].min()) if not teammates.empty else None
+                    nearest_enemy_dist = float(enemies["dist"].min()) if not enemies.empty else None
+
+                is_isolated_now = (
+                    (nearest_teammate_dist is None or nearest_teammate_dist > TEAMMATE_TRADE_DISTANCE_UNITS)
+                    and (nearest_enemy_dist is not None and nearest_enemy_dist <= ENEMY_CONTESTED_RANGE_UNITS)
+                )
+
+                if is_isolated_now and state == "safe":
+                    state = "isolated"
+                    commit_tick = int(tick)
+                    commit_pos = (tx, ty, float(trow["Z"]))
+                    commit_teammate_dist = nearest_teammate_dist
+                    commit_enemy_dist = nearest_enemy_dist
+                elif not is_isolated_now and state == "isolated":
+                    emit("survived", None)
+                    state = "safe"
+                    commit_tick = None
+
+            if state == "isolated" and commit_tick is not None:
+                death_row = death_at_or_after(round_number, commit_tick, end_tick)
+                emit("died" if death_row is not None else "survived", death_row)
+    except Exception as e:
+        print(f"⚠️ Warning parsing fact_positioning_risk: {e}")
     return rows
 
 
@@ -617,6 +783,18 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 print(f"✅ Saved {len(fact_adaptation_rows)} fact_adaptation_event rows for {match_code}")
             except Exception as e:
                 print(f"⚠️ Failed to save fact_adaptation_event: {e}")
+
+        fact_positioning_rows = extract_fact_positioning_risk(parser, target_steam_id64)
+        if fact_positioning_rows:
+            try:
+                for r in fact_positioning_rows:
+                    r["match_id"] = match_code
+                supabase_client.table("fact_positioning_risk").upsert(
+                    fact_positioning_rows, on_conflict="match_id,round_number,steam_id64,commitment_tick"
+                ).execute()
+                print(f"✅ Saved {len(fact_positioning_rows)} fact_positioning_risk rows for {match_code}")
+            except Exception as e:
+                print(f"⚠️ Failed to save fact_positioning_risk: {e}")
 
         real_payload = {
             "match_id": match_code,
