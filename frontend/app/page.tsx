@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { Toast } from '@/components/Toast';
 import { TopNav } from '@/components/TopNav';
 import { InsightsDashboard } from '@/components/InsightsDashboard';
-import { RankBadge } from '@/components/RankBadge';
+import { RankPill } from '@/components/RankBadge';
 import { RankBandTakeover, RankDeltaBadge, type RankChangeEvent } from '@/components/RankChangeOverlay';
 import { rankBand, rankBandIndex, RANK_BANDS, LAST_KNOWN_RANK_KEY } from '@/lib/rank';
 
@@ -684,7 +684,6 @@ export default function Home() {
               <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12 pb-10">
                 <p className="text-xs text-[var(--text-dim)] mb-8">
                   Stats based on your last {parsedMatches.length} recent games
-                  {failedCount > 0 && <span className="text-[var(--danger)]"> · {failedCount} didn't load</span>}
                 </p>
 
                 <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
@@ -700,11 +699,9 @@ export default function Home() {
                       <p className="font-display text-lg font-bold truncate max-w-[170px]">{personaName || 'Player'}</p>
                     </div>
                     {rankBand(rankNew) && (
-                      <div className="flex items-center gap-2 pt-3 border-t border-[var(--edge)] w-full justify-center">
-                        <RankBadge color={rankBand(rankNew)!.color} size={36} />
-                        <span className="font-tel text-lg font-extrabold" style={{ color: rankBand(rankNew)!.color }}>
-                          {rankNew!.toLocaleString()}
-                        </span>
+                      <div className="flex flex-col items-center gap-1.5 pt-3 border-t border-[var(--edge)] w-full">
+                        <RankPill color={rankBand(rankNew)!.color} rankNew={rankNew!} />
+                        <p className="text-[9px] uppercase tracking-wider text-[var(--text-dim)]">CS Premier Rating</p>
                         {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
                       </div>
                     )}
@@ -722,16 +719,16 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1 lg:self-center">
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col justify-center">
                       <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg ADR</p>
                       <p className="font-tel text-2xl font-bold">{avgAdr}</p>
                     </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col justify-center">
                       <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Headshot %</p>
                       <p className="font-tel text-2xl font-bold">{avgHs}%</p>
                     </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col justify-center">
                       <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg Performance</p>
                       <p className="font-tel text-2xl font-bold text-[var(--amber)]">{avgPerformanceIndex}<span className="text-[var(--text-dim)] text-sm">/100</span></p>
                     </div>

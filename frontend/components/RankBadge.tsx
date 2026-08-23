@@ -29,3 +29,24 @@ export function RankBadge({ color, size = 64 }: { color: string; size?: number }
     </svg>
   );
 }
+
+// The full badge as CS2 actually shows it: the bar icon sitting on a colored ribbon
+// (a rectangle with one angled/chevron-cut edge), with the rating number printed on
+// that same ribbon — not just a bare icon floating next to plain text.
+export function RankPill({ color, rankNew }: { color: string; rankNew: number }) {
+  return (
+    <div
+      className="inline-flex items-center gap-2.5 pl-3 pr-6 py-2"
+      style={{
+        background: `linear-gradient(135deg, ${color}40, ${color}1f)`,
+        border: `1px solid ${color}80`,
+        clipPath: 'polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%)',
+      }}
+    >
+      <RankBadge color={color} size={26} />
+      <span className="font-tel text-lg font-extrabold" style={{ color }}>
+        {rankNew.toLocaleString()}
+      </span>
+    </div>
+  );
+}
