@@ -297,6 +297,9 @@ export default function Home() {
   const avgHs = parsedMatches.length > 0
     ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.headshot_pct, 0) / parsedMatches.length).toFixed(1)
     : '0.0';
+  const avgPerformanceIndex = parsedMatches.length > 0
+    ? Math.round(parsedMatches.reduce((acc, m) => acc + performanceIndex(m.match_data.telemetry), 0) / parsedMatches.length)
+    : 0;
 
   const chartData = parsedMatches.map(m => ({
     name: m.match_data.telemetry.map ? formatMapName(m.match_data.telemetry.map) : m.match_id.substring(5, 12),
@@ -444,7 +447,10 @@ export default function Home() {
               <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12 pb-10">
                 <p className="text-[var(--text-dim)] text-sm mb-1">Welcome back,</p>
                 <h1 className="font-display text-4xl font-bold mb-1 truncate">{personaName || 'Player'}</h1>
-                <p className="text-xs text-[var(--text-dim)] mb-8">Stats based on your last {parsedMatches.length} parsed games</p>
+                <p className="text-xs text-[var(--text-dim)] mb-8">
+                  Stats based on your last {parsedMatches.length} recent games
+                  {failedCount > 0 && <span className="text-[var(--danger)]"> · {failedCount} didn't load</span>}
+                </p>
 
                 <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
                   <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 relative">
@@ -469,13 +475,8 @@ export default function Home() {
                       <p className="font-tel text-2xl font-bold">{avgHs}%</p>
                     </div>
                     <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
-                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Matches Parsed</p>
-                      <div className="flex items-baseline gap-2">
-                        <p className="font-tel text-2xl font-bold">{parsedMatches.length}</p>
-                        {failedCount > 0 && (
-                          <p className="font-tel text-xs text-[var(--danger)]">{failedCount} failed</p>
-                        )}
-                      </div>
+                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg Performance</p>
+                      <p className="font-tel text-2xl font-bold text-[var(--amber)]">{avgPerformanceIndex}<span className="text-[var(--text-dim)] text-sm">/100</span></p>
                     </div>
                   </div>
                 </div>
