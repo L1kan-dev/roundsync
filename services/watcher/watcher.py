@@ -65,7 +65,7 @@ def process_pending_downloads():
 
                 if match_url:
                     print(f"Found ready match: {match_id}. Starting download pipeline...")
-                    process_and_parse_real_demo(supabase, match_id, match_url, steam_id)
+                    process_and_parse_real_demo(supabase, match_id, match_url, steam_id, existing_telemetry=telemetry)
                     print(f"✅ Successfully processed match: {match_id}")
                     break
     except Exception as e:

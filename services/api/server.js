@@ -17,6 +17,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL ? process.env.SUPABASE_URL.replace
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const JWT_SECRET = process.env.JWT_SECRET;
+const VALVE_API_KEY = process.env.VALVE_API_KEY || process.env.STEAM_API_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !JWT_SECRET) {
   console.error('❌ Missing required environment variables (Supabase URL/key or JWT_SECRET) in API Gateway.');
@@ -131,17 +132,19 @@ app.get('/api/matches', authenticateToken, async (req, res) => {
   try {
     const { data: matches, error } = await supabase
       .from('matches')
-      .select('match_id, match_data, created_at')
+      .select('match_id, match_data, parsed_at')
       .eq('steam_id64', steamId)
-      .order('created_at', { ascending: false })
+      .order('parsed_at', { ascending: false })
       .limit(50);
 
     if (error) {
+      console.error('❌ Failed to fetch matches:', error.message);
       return res.status(500).json({ error: error.message });
     }
 
     res.json({ matches: matches || [] });
   } catch (err) {
+    console.error('❌ Unexpected error fetching matches:', err.message);
     res.status(500).json({ error: 'Failed to fetch match history.' });
   }
 });
@@ -203,7 +206,30 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    res.json({ onboarded: Boolean(userRow?.game_auth_code) });
+    let personaName = null;
+    let avatarUrl = null;
+
+    if (VALVE_API_KEY) {
+      try {
+        const steamRes = await fetch(
+          `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${VALVE_API_KEY}&steamids=${steamId}`
+        );
+        const steamData = await steamRes.json();
+        const player = steamData?.response?.players?.[0];
+        if (player) {
+          personaName = player.personaname || null;
+          avatarUrl = player.avatarfull || null;
+        }
+      } catch (steamErr) {
+        console.warn('⚠️ Could not fetch Steam profile summary:', steamErr.message);
+      }
+    }
+
+    res.json({
+      onboarded: Boolean(userRow?.game_auth_code),
+      personaName,
+      avatarUrl
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user profile.' });
   }

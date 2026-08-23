@@ -66,7 +66,7 @@ def process_single_demo(supabase_client, steam_id64: str, auth_code: str, match_
         "match_data": initial_payload
     }, on_conflict="match_id").execute()
 
-def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, target_steam_id64: str):
+def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, target_steam_id64: str, existing_telemetry: dict = None):
     """Downloads the real demo from Valve's CDN, parses it with demoparser2, and updates Supabase."""
     temp_dir = tempfile.gettempdir()
     bz2_path = os.path.join(temp_dir, f"{match_code}.dem.bz2")
@@ -82,6 +82,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             "match_data": {
                 "match_id": match_code,
                 "telemetry": {
+                    **(existing_telemetry or {}),
                     "match_id": match_code,
                     "match_url": cdn_url,
                     "status": "downloading",
@@ -121,7 +122,14 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
 
         # Parse with demoparser2
         parser = DemoParser(dem_path)
-        
+
+        map_name = None
+        try:
+            header = parser.parse_header()
+            map_name = header.get("map_name")
+        except Exception as e:
+            print(f"⚠️ Warning parsing header: {e}")
+
         total_kills = 0
         total_deaths = 0
         headshots = 0
@@ -156,9 +164,11 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         real_payload = {
             "match_id": match_code,
             "telemetry": {
+                **(existing_telemetry or {}),
                 "match_id": match_code,
                 "match_url": cdn_url,
                 "status": "fully_parsed",
+                "map": map_name,
                 "kd_ratio": calculated_kd,
                 "adr": calculated_adr,
                 "kills": total_kills,
@@ -180,6 +190,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             error_payload = {
                 "match_id": match_code,
                 "telemetry": {
+                    **(existing_telemetry or {}),
                     "match_id": match_code,
                     "match_url": cdn_url,
                     "status": "parse_failed",

@@ -1,16 +1,17 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, CSSProperties } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Brain, BarChart2, ShieldAlert, LogOut, CheckCircle2, ChevronRight, Loader2, Settings, Target, Crosshair, Radar, Download } from 'lucide-react';
-import { LogoMark, LogoLockup } from '@/components/Logo';
+import { Brain, BarChart2, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download } from 'lucide-react';
+import { LogoMark } from '@/components/Logo';
 import { Toast } from '@/components/Toast';
+import { TopNav } from '@/components/TopNav';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 interface Match {
   match_id: string;
-  created_at: string;
+  parsed_at: string;
   match_data: {
     telemetry: {
       status: string;
@@ -19,12 +20,42 @@ interface Match {
       kills: number;
       deaths: number;
       headshot_pct: number;
+      map?: string | null;
+      match_time?: number | null;
     };
   };
 }
 
+// A lightweight composite score from what we have today (K/D, ADR, headshot%) — not
+// the full round-by-round Impact formula discussed for later; labeled as such in the UI.
+function performanceIndex(t: Match['match_data']['telemetry']): number {
+  const kdComponent = Math.min(t.kd_ratio, 3) / 3;
+  const adrComponent = Math.min(t.adr, 150) / 150;
+  const hsComponent = Math.min(t.headshot_pct, 100) / 100;
+  return Math.round((kdComponent * 0.5 + adrComponent * 0.35 + hsComponent * 0.15) * 100);
+}
+
+// Only claims a date when we have the real match_time from the Game Coordinator —
+// falling back to parsed_at would show "when RoundSync processed it," which for a
+// backlog of older matches processed in one sitting looks like a false play date.
+function formatMatchDate(t: Match['match_data']['telemetry']): string {
+  if (!t.match_time) return 'Date unavailable';
+  return new Date(t.match_time * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// Sorts most-recent-played first when we know match_time, falling back to parse
+// order for older matches that predate that field — see formatMatchDate above.
+function matchSortKey(m: Match): number {
+  return m.match_data.telemetry.match_time ? m.match_data.telemetry.match_time * 1000 : new Date(m.parsed_at).getTime();
+}
+
+function formatMapName(map?: string | null): string {
+  if (!map) return 'Unknown Map';
+  return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'home' | 'coach' | 'settings'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'matches' | 'coach' | 'settings'>('home');
   const [steamId, setSteamId] = useState<string | null>(null);
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
@@ -35,6 +66,10 @@ export default function Home() {
   const [gameAuthCode, setGameAuthCode] = useState('');
   const [recentShareCode, setRecentShareCode] = useState('');
   const [isOnboarding, setIsOnboarding] = useState(false);
+
+  // Real Steam identity — fetched from the server, not just the raw SteamID
+  const [personaName, setPersonaName] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
   const [showWelcomeToast, setShowWelcomeToast] = useState(false);
 
@@ -61,6 +96,8 @@ export default function Home() {
       if (response.status === 401 || response.status === 403) return;
       const data = await response.json();
       setIsOnboarded(Boolean(data.onboarded));
+      setPersonaName(data.personaName || null);
+      setAvatarUrl(data.avatarUrl || null);
     } catch (err) {
       console.error('Error fetching profile:', err);
     }
@@ -182,6 +219,8 @@ export default function Home() {
     setMatches([]);
     setMessages([]);
     setIsOnboarded(null);
+    setPersonaName(null);
+    setAvatarUrl(null);
     localStorage.removeItem('steamId');
     localStorage.removeItem('jwtToken');
     setActiveTab('home');
@@ -246,7 +285,9 @@ export default function Home() {
   };
 
   // Compute Dashboard Metrics
-  const parsedMatches = matches.filter(m => m.match_data.telemetry?.status === 'fully_parsed');
+  const parsedMatches = matches
+    .filter(m => m.match_data.telemetry?.status === 'fully_parsed')
+    .sort((a, b) => matchSortKey(b) - matchSortKey(a));
   const avgKd = parsedMatches.length > 0
     ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.kd_ratio, 0) / parsedMatches.length).toFixed(2)
     : '0.00';
@@ -258,12 +299,13 @@ export default function Home() {
     : '0.0';
 
   const chartData = parsedMatches.map(m => ({
-    name: m.match_id.substring(5, 12),
+    name: m.match_data.telemetry.map ? formatMapName(m.match_data.telemetry.map) : m.match_id.substring(5, 12),
     kd: m.match_data.telemetry.kd_ratio,
     adr: m.match_data.telemetry.adr
   })).reverse();
 
   const isLive = isOnboarded === true;
+  const kdRingPct = Math.max(4, Math.min(100, Number(avgKd) * 50));
 
   // Sync progress math
   const syncCounts = syncStatus?.counts;
@@ -273,7 +315,7 @@ export default function Home() {
   const readyCount = syncCounts?.fully_parsed ?? 0;
   const failedCount = syncCounts?.parse_failed ?? 0;
   const queuedCount = syncCounts ? syncCounts.pending_url + syncCounts.pending_download : 0;
-  const hasActiveSync = queuedCount > 0 || (syncCounts?.downloading ?? 0) > 0 || failedCount > 0;
+  const hasActiveSync = queuedCount > 0 || (syncCounts?.downloading ?? 0) > 0;
   const currentElapsed = syncStatus?.current ? Math.max(0, nowSeconds - syncStatus.current.startedAt) : 0;
   const currentPct = syncStatus?.avgSeconds
     ? Math.min(96, Math.round((currentElapsed / syncStatus.avgSeconds) * 100))
@@ -282,8 +324,7 @@ export default function Home() {
   // ---------- LOGGED-OUT LANDING ----------
   if (!steamId) {
     return (
-      <div className="relative min-h-screen bg-[var(--void)] text-[var(--text)] overflow-hidden flex flex-col items-center justify-center px-6">
-        <div className="radar-backdrop" />
+      <div className="relative min-h-screen text-[var(--text)] flex flex-col items-center justify-center px-6">
         <div className="relative z-10 max-w-2xl w-full text-center">
           <div className="flex justify-center mb-8">
             <LogoMark className="w-20 h-20" />
@@ -327,7 +368,7 @@ export default function Home() {
 
   // ---------- LOGGED-IN APP SHELL ----------
   return (
-    <div className="flex h-screen bg-[var(--void)] text-[var(--text)]">
+    <div className="min-h-screen text-[var(--text)]">
       {showWelcomeToast && (
         <Toast
           message="Successfully signed in"
@@ -336,123 +377,113 @@ export default function Home() {
         />
       )}
 
-      {/* Sidebar Navigation */}
-      <aside className="w-64 bg-[var(--panel)] border-r border-[var(--edge)] flex flex-col justify-between p-6">
-        <div>
-          <LogoLockup className="mb-2" />
-          {isLive && (
-            <div className="flex items-center gap-2 mb-8 text-xs text-[var(--cyan)] font-medium">
-              <span className="w-2 h-2 rounded-full bg-[var(--cyan)] live-dot" />
-              Live Sync Active
-            </div>
-          )}
-          {!isLive && <div className="mb-8" />}
+      <TopNav
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        isLive={isLive}
+        personaName={personaName}
+        avatarUrl={avatarUrl}
+        steamId={steamId}
+        onLogout={handleLogout}
+      />
 
-          <nav className="space-y-2">
-            <button
-              onClick={() => setActiveTab('home')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${
-                activeTab === 'home' ? 'bg-[var(--cyan)]/15 text-[var(--cyan)] border border-[var(--cyan-dim)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-raised)] hover:text-[var(--text)]'
-              }`}
-            >
-              <BarChart2 className="w-5 h-5" />
-              Home
-            </button>
-            <button
-              onClick={() => setActiveTab('coach')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${
-                activeTab === 'coach' ? 'bg-[var(--cyan)]/15 text-[var(--cyan)] border border-[var(--cyan-dim)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-raised)] hover:text-[var(--text)]'
-              }`}
-            >
-              <Brain className="w-5 h-5" />
-              AI Coach
-            </button>
-            <button
-              onClick={() => setActiveTab('settings')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${
-                activeTab === 'settings' ? 'bg-[var(--cyan)]/15 text-[var(--cyan)] border border-[var(--cyan-dim)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-raised)] hover:text-[var(--text)]'
-              }`}
-            >
-              <Settings className="w-5 h-5" />
-              Integration Settings
-            </button>
-          </nav>
-        </div>
-
-        <div className="bg-[var(--panel-raised)] p-4 rounded-xl border border-[var(--edge)] flex items-center justify-between">
-          <div className="truncate pr-2">
-            <p className="text-xs text-[var(--text-dim)]">Authenticated SteamID</p>
-            <p className="text-sm font-tel font-semibold truncate text-[var(--cyan)]">{steamId}</p>
+      {/* HOME: onboarding gate, then the real hero dashboard */}
+      {activeTab === 'home' && (
+        isOnboarded === null ? (
+          <div className="flex items-center justify-center h-[60vh] text-[var(--text-dim)] gap-3">
+            <Loader2 className="w-6 h-6 animate-spin" /> Checking your setup...
           </div>
-          <button
-            onClick={handleLogout}
-            className="p-2 text-[var(--text-dim)] hover:text-[var(--danger)] hover:bg-[var(--panel)] rounded-lg transition-all"
-            title="Sign Out"
-          >
-            <LogOut className="w-5 h-5" />
-          </button>
-        </div>
-      </aside>
-
-      {/* Main Panel Content */}
-      <main className="flex-1 overflow-y-auto p-10">
-
-        {/* HOME: onboarding gate, then the real dashboard */}
-        {activeTab === 'home' && (
-          isOnboarded === null ? (
-            <div className="flex items-center justify-center h-full text-[var(--text-dim)] gap-3">
-              <Loader2 className="w-6 h-6 animate-spin" /> Checking your setup...
-            </div>
-          ) : !isOnboarded ? (
-            <div className="max-w-xl mx-auto mt-12">
-              <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl">
-                <div className="flex justify-center mb-4">
-                  <Target className="w-12 h-12 text-[var(--cyan)]" />
+        ) : !isOnboarded ? (
+          <div className="max-w-xl mx-auto px-6 py-16">
+            <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl">
+              <div className="flex justify-center mb-4">
+                <Target className="w-12 h-12 text-[var(--cyan)]" />
+              </div>
+              <h3 className="text-xl font-display font-bold mb-2 text-center">One-time setup</h3>
+              <p className="text-sm text-[var(--text-dim)] text-center mb-6">
+                Give RoundSync your CS2 game authentication code and one recent match share code, and it'll sync your matches automatically from here on.
+              </p>
+              <form onSubmit={handleOnboarding} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
+                  <input
+                    type="password"
+                    required
+                    value={gameAuthCode}
+                    onChange={(e) => setGameAuthCode(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
+                  />
                 </div>
-                <h3 className="text-xl font-display font-bold mb-2 text-center">One-time setup</h3>
-                <p className="text-sm text-[var(--text-dim)] text-center mb-6">
-                  Give RoundSync your CS2 game authentication code and one recent match share code, and it'll sync your matches automatically from here on.
-                </p>
-                <form onSubmit={handleOnboarding} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
-                    <input
-                      type="password"
-                      required
-                      value={gameAuthCode}
-                      onChange={(e) => setGameAuthCode(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
-                    />
+                <div>
+                  <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code (CSGO-XXXXX-...)</label>
+                  <input
+                    type="text"
+                    required
+                    value={recentShareCode}
+                    onChange={(e) => setRecentShareCode(e.target.value)}
+                    placeholder="CSGO-abc12-def34-..."
+                    className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isOnboarding}
+                  className="w-full px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center justify-center gap-2"
+                >
+                  {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
+                  Activate Auto-Sync
+                </button>
+              </form>
+            </div>
+          </div>
+        ) : (
+          <div>
+            {/* Hero band — the featured KD ring, secondary stats. Atmosphere comes from the global app backdrop. */}
+            <div className="relative">
+              <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12 pb-10">
+                <p className="text-[var(--text-dim)] text-sm mb-1">Welcome back,</p>
+                <h1 className="font-display text-4xl font-bold mb-8 truncate">{personaName || 'Player'}</h1>
+
+                <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
+                  <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0">
+                    <div
+                      className="relative w-32 h-32 stat-ring"
+                      style={{ '--pct': kdRingPct } as CSSProperties}
+                    >
+                      <div className="absolute inset-2 rounded-full bg-[var(--panel)] flex flex-col items-center justify-center">
+                        <span className="font-tel text-3xl font-extrabold text-[var(--cyan)]">{avgKd}</span>
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mt-1">K/D Ratio</span>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code (CSGO-XXXXX-...)</label>
-                    <input
-                      type="text"
-                      required
-                      value={recentShareCode}
-                      onChange={(e) => setRecentShareCode(e.target.value)}
-                      placeholder="CSGO-abc12-def34-..."
-                      className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
-                    />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
+                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg ADR</p>
+                      <p className="font-tel text-2xl font-bold">{avgAdr}</p>
+                    </div>
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
+                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Headshot %</p>
+                      <p className="font-tel text-2xl font-bold">{avgHs}%</p>
+                    </div>
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
+                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Matches Parsed</p>
+                      <div className="flex items-baseline gap-2">
+                        <p className="font-tel text-2xl font-bold">{parsedMatches.length}</p>
+                        {failedCount > 0 && (
+                          <p className="font-tel text-xs text-[var(--danger)]">{failedCount} failed</p>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <button
-                    type="submit"
-                    disabled={isOnboarding}
-                    className="w-full px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center justify-center gap-2"
-                  >
-                    {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
-                    Activate Auto-Sync
-                  </button>
-                </form>
+                </div>
               </div>
             </div>
-          ) : (
-            <div>
-              <h1 className="font-display text-3xl font-bold mb-8">Performance Overview</h1>
 
+            <div className="max-w-7xl mx-auto px-6 py-10 space-y-8">
               {hasActiveSync && (
-                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-6 mb-8">
+                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-6">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2 text-sm font-semibold">
                       <Download className="w-4 h-4 text-[var(--cyan)]" />
@@ -506,44 +537,31 @@ export default function Home() {
                   <p>Loading match history...</p>
                 </div>
               ) : parsedMatches.length === 0 ? (
-                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl text-center text-[var(--text-dim)]">
-                  <BarChart2 className="w-12 h-12 mx-auto mb-3 text-[var(--edge-bright)]" />
-                  <p className="font-bold mb-1 text-[var(--text)]">No parsed match stats found yet</p>
-                  <p className="text-sm">RoundSync is watching for your next match — this updates automatically.</p>
+                <div className="hud-corners relative overflow-hidden bg-[var(--panel)] border border-[var(--edge)] rounded-2xl text-center text-[var(--text-dim)] py-24 px-8">
+                  <div className="radar-backdrop opacity-60" />
+                  <div className="relative z-10">
+                    <div className="w-20 h-20 mx-auto mb-5 rounded-full border-2 border-[var(--cyan-dim)] flex items-center justify-center">
+                      <Radar className="w-9 h-9 text-[var(--cyan)]" />
+                    </div>
+                    <p className="font-display text-xl font-bold mb-2 text-[var(--text)]">Scanning for your matches</p>
+                    <p className="text-sm max-w-sm mx-auto">RoundSync is watching for your next match — this dashboard fills in automatically the moment one finishes parsing.</p>
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-8">
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <p className="text-sm font-semibold text-[var(--text-dim)] mb-1">Matches Parsed</p>
-                      <p className="text-3xl font-tel font-extrabold text-[var(--cyan)]">{parsedMatches.length}</p>
-                    </div>
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <p className="text-sm font-semibold text-[var(--text-dim)] mb-1">Avg K/D Ratio</p>
-                      <p className="text-3xl font-tel font-extrabold text-[var(--cyan)]">{avgKd}</p>
-                    </div>
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <p className="text-sm font-semibold text-[var(--text-dim)] mb-1">Avg ADR</p>
-                      <p className="text-3xl font-tel font-extrabold text-[var(--cyan)]">{avgAdr}</p>
-                    </div>
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <p className="text-sm font-semibold text-[var(--text-dim)] mb-1">Avg Headshot %</p>
-                      <p className="text-3xl font-tel font-extrabold text-[var(--cyan)]">{avgHs}%</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-end">
+                <>
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-display text-xl font-bold">Trends</h2>
                     <button
                       onClick={fetchMatches}
                       disabled={isLoadingMatches}
-                      className="px-4 py-2 bg-[var(--panel-raised)] hover:bg-[var(--edge)] text-[var(--text)] font-medium rounded-xl transition-all flex items-center gap-2 border border-[var(--edge)]"
+                      className="px-4 py-2 bg-[var(--panel-raised)] hover:bg-[var(--edge)] text-[var(--text)] font-medium rounded-xl transition-all flex items-center gap-2 border border-[var(--edge)] text-sm"
                     >
                       {isLoadingMatches ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                       Refresh
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
                       <h3 className="font-display font-bold text-lg mb-4">K/D Ratio Progression</h3>
                       <div className="h-64">
@@ -574,86 +592,135 @@ export default function Home() {
                       </div>
                     </div>
                   </div>
-
-                  <div className="bg-[var(--panel)] rounded-2xl border border-[var(--edge)] overflow-hidden">
-                    <div className="px-6 py-4 border-b border-[var(--edge)]">
-                      <h3 className="font-display font-bold">Match Breakdown</h3>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-sm text-[var(--text-dim)]">
-                        <thead className="bg-[var(--void)] text-[var(--text)] font-semibold uppercase text-xs">
-                          <tr>
-                            <th className="px-6 py-3">Match Share ID</th>
-                            <th className="px-6 py-3 text-center">Kills</th>
-                            <th className="px-6 py-3 text-center">Deaths</th>
-                            <th className="px-6 py-3 text-center">K/D</th>
-                            <th className="px-6 py-3 text-center">ADR</th>
-                            <th className="px-6 py-3 text-center">Headshot %</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--edge)]">
-                          {parsedMatches.map((m) => {
-                            const t = m.match_data.telemetry;
-                            return (
-                              <tr key={m.match_id} className="hover:bg-[var(--panel-raised)] transition-colors">
-                                <td className="px-6 py-4 font-tel text-[var(--cyan)] text-xs">{m.match_id}</td>
-                                <td className="px-6 py-4 text-center font-tel text-[var(--text)]">{t.kills}</td>
-                                <td className="px-6 py-4 text-center font-tel text-[var(--text)]">{t.deaths}</td>
-                                <td className="px-6 py-4 text-center font-tel font-bold text-[var(--text)]">{t.kd_ratio}</td>
-                                <td className="px-6 py-4 text-center font-tel text-[var(--text)]">{t.adr}</td>
-                                <td className="px-6 py-4 text-center font-tel text-[var(--text)]">{t.headshot_pct}%</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
+                </>
               )}
             </div>
-          )
-        )}
+          </div>
+        )
+      )}
 
-        {/* AI COACH CHAT */}
-        {activeTab === 'coach' && (
-          <div className="h-[calc(100vh-140px)] flex flex-col justify-between">
-            <div className="mb-4">
+      {/* MATCHES: full history, one tile per match with map/date/performance */}
+      {activeTab === 'matches' && (
+        <div className="max-w-7xl mx-auto px-6 py-10">
+          <h1 className="font-display text-3xl font-bold mb-8">Match History</h1>
+
+          {isLoadingMatches && matches.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-3 text-[var(--text-dim)]">
+              <Loader2 className="w-10 h-10 animate-spin text-[var(--cyan)]" />
+              <p>Loading match history...</p>
+            </div>
+          ) : parsedMatches.length === 0 ? (
+            <div className="hud-corners relative overflow-hidden bg-[var(--panel)] border border-[var(--edge)] rounded-2xl text-center text-[var(--text-dim)] py-24 px-8">
+              <p className="font-display text-xl font-bold mb-2 text-[var(--text)]">No matches yet</p>
+              <p className="text-sm max-w-sm mx-auto">Once RoundSync finishes parsing a match, it'll show up here.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {parsedMatches.map((m) => {
+                const t = m.match_data.telemetry;
+                const accent = t.kd_ratio >= 1 ? 'var(--cyan)' : 'var(--danger)';
+                const index = performanceIndex(t);
+                return (
+                  <div
+                    key={m.match_id}
+                    className="match-card bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-5"
+                    style={{ '--accent': accent } as CSSProperties}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-display font-bold text-[var(--text)]">{formatMapName(t.map)}</span>
+                      <span className="font-tel text-xl font-extrabold" style={{ color: accent }}>{t.kd_ratio}</span>
+                    </div>
+                    <div className="mb-4">
+                      <span className="text-xs text-[var(--text-dim)]">{formatMatchDate(t)}</span>
+                    </div>
+
+                    <div className="flex items-center justify-between mb-4 bg-[var(--void)] rounded-xl px-3 py-2">
+                      <span className="text-[10px] uppercase tracking-wide text-[var(--text-dim)]">Performance Index</span>
+                      <span className="font-tel font-bold text-[var(--amber)]">{index}<span className="text-[var(--text-dim)] text-xs">/100</span></span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                        <p className="font-tel font-bold text-[var(--text)]">{t.kills}</p>
+                        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Kills</p>
+                      </div>
+                      <div>
+                        <p className="font-tel font-bold text-[var(--text)]">{t.adr}</p>
+                        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">ADR</p>
+                      </div>
+                      <div>
+                        <p className="font-tel font-bold text-[var(--text)]">{t.headshot_pct}%</p>
+                        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">HS</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AI COACH CHAT */}
+      {activeTab === 'coach' && (
+        <div className="flex flex-col h-[calc(100vh-4rem)]">
+          <div className="relative shrink-0">
+            <div className="relative z-10 max-w-5xl mx-auto px-6 py-8">
               <h1 className="font-display text-3xl font-bold mb-1">Conversational AI Coach</h1>
               <p className="text-[var(--text-dim)]">Ask about a specific moment in your last match — not a generic tip.</p>
             </div>
+          </div>
 
+          <div className="max-w-5xl mx-auto px-6 py-6 w-full flex-1 min-h-0 flex flex-col">
             {!isOnboarded ? (
-              <div className="bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl flex items-center gap-4 text-[var(--amber)] flex-1 justify-center max-h-[200px]">
+              <div className="bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl flex items-center gap-4 text-[var(--amber)] justify-center">
                 <ShieldAlert className="w-6 h-6" /> Finish the one-time setup on Home before consulting your Coach.
               </div>
             ) : (
-              <div className="flex-1 bg-[var(--panel)] border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col justify-between h-[80%]">
+              <div className="hud-corners glass flex-1 border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col min-h-0">
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center text-center h-full text-[var(--text-dim)] py-12">
-                      <Brain className="w-16 h-16 text-[var(--edge-bright)] mb-3" />
-                      <p className="font-bold text-lg text-[var(--text)]">Your AI Coach is ready</p>
+                      <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-[var(--cyan-dim)] flex items-center justify-center">
+                        <Brain className="w-8 h-8 text-[var(--cyan)]" />
+                      </div>
+                      <p className="font-display font-bold text-lg text-[var(--text)]">Your AI Coach is ready</p>
                       <p className="text-sm max-w-md">Ask questions like: "Why is my ADR dropping?" or "How can I improve my utility usage?"</p>
                     </div>
                   ) : (
                     messages.map((m, idx) => (
-                      <div key={idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div key={idx} className={`flex items-end gap-2.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        {m.role === 'assistant' && (
+                          <div className="w-7 h-7 rounded-full bg-[var(--panel-raised)] border border-[var(--cyan-dim)] flex items-center justify-center shrink-0">
+                            <Brain className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                          </div>
+                        )}
                         <div
-                          className={`max-w-[80%] rounded-2xl px-5 py-3 text-sm leading-relaxed ${
+                          className={`max-w-[75%] rounded-2xl px-5 py-3 text-sm leading-relaxed ${
                             m.role === 'user'
-                              ? 'bg-[var(--cyan)] text-[#03141a] rounded-tr-none font-medium'
-                              : 'bg-[var(--panel-raised)] text-[var(--text)] rounded-tl-none border border-[var(--edge)]'
+                              ? 'bg-[var(--cyan)] text-[#03141a] rounded-br-none font-medium'
+                              : 'bg-[var(--panel-raised)] text-[var(--text)] rounded-bl-none border border-[var(--edge)]'
                           }`}
                         >
                           <p className="whitespace-pre-wrap">{m.content}</p>
                         </div>
+                        {m.role === 'user' && (
+                          avatarUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={avatarUrl} alt="" className="w-7 h-7 rounded-full border border-[var(--edge-bright)] shrink-0" />
+                          ) : (
+                            <div className="w-7 h-7 rounded-full bg-[var(--panel-raised)] border border-[var(--edge-bright)] shrink-0" />
+                          )
+                        )}
                       </div>
                     ))
                   )}
                   {isSendingMessage && (
-                    <div className="flex justify-start">
-                      <div className="bg-[var(--panel-raised)] text-[var(--text-dim)] rounded-2xl rounded-tl-none border border-[var(--edge)] px-5 py-3 text-sm flex items-center gap-2">
+                    <div className="flex items-end gap-2.5 justify-start">
+                      <div className="w-7 h-7 rounded-full bg-[var(--panel-raised)] border border-[var(--cyan-dim)] flex items-center justify-center shrink-0">
+                        <Brain className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                      </div>
+                      <div className="bg-[var(--panel-raised)] text-[var(--text-dim)] rounded-2xl rounded-bl-none border border-[var(--edge)] px-5 py-3 text-sm flex items-center gap-2">
                         <Loader2 className="w-4 h-4 animate-spin text-[var(--cyan)]" />
                         AI Coach is studying your match telemetry...
                       </div>
@@ -662,7 +729,7 @@ export default function Home() {
                   <div ref={messagesEndRef} />
                 </div>
 
-                <form onSubmit={askCoach} className="bg-[var(--void)] p-4 border-t border-[var(--edge)] flex gap-3">
+                <form onSubmit={askCoach} className="bg-[var(--void)]/60 p-4 border-t border-[var(--edge)] flex gap-3 shrink-0">
                   <input
                     type="text"
                     required
@@ -683,54 +750,54 @@ export default function Home() {
               </div>
             )}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* INTEGRATION SETTINGS — always reachable, pre-fillable re-entry point */}
-        {activeTab === 'settings' && (
-          <div className="max-w-xl">
-            <h1 className="font-display text-3xl font-bold mb-8">Integration Settings</h1>
-            <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl">
-              {isOnboarded && (
-                <div className="flex items-center gap-3 text-[var(--cyan)] font-medium mb-6 text-sm">
-                  <CheckCircle2 className="w-5 h-5" /> Auto-Sync is currently active.
-                </div>
-              )}
-              <form onSubmit={handleOnboarding} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
-                  <input
-                    type="password"
-                    required
-                    value={gameAuthCode}
-                    onChange={(e) => setGameAuthCode(e.target.value)}
-                    placeholder="••••••••••••"
-                    className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code</label>
-                  <input
-                    type="text"
-                    required
-                    value={recentShareCode}
-                    onChange={(e) => setRecentShareCode(e.target.value)}
-                    placeholder="CSGO-abc12-def34-..."
-                    className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={isOnboarding}
-                  className="px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center gap-2"
-                >
-                  {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
-                  {isOnboarded ? 'Update Codes' : 'Activate Auto-Sync'}
-                </button>
-              </form>
-            </div>
+      {/* INTEGRATION SETTINGS — always reachable, pre-fillable re-entry point */}
+      {activeTab === 'settings' && (
+        <div className="max-w-xl mx-auto px-6 py-16">
+          <h1 className="font-display text-3xl font-bold mb-8">Integration Settings</h1>
+          <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl">
+            {isOnboarded && (
+              <div className="flex items-center gap-3 text-[var(--cyan)] font-medium mb-6 text-sm">
+                <CheckCircle2 className="w-5 h-5" /> Auto-Sync is currently active.
+              </div>
+            )}
+            <form onSubmit={handleOnboarding} className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
+                <input
+                  type="password"
+                  required
+                  value={gameAuthCode}
+                  onChange={(e) => setGameAuthCode(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code</label>
+                <input
+                  type="text"
+                  required
+                  value={recentShareCode}
+                  onChange={(e) => setRecentShareCode(e.target.value)}
+                  placeholder="CSGO-abc12-def34-..."
+                  className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isOnboarding}
+                className="px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center gap-2"
+              >
+                {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
+                {isOnboarded ? 'Update Codes' : 'Activate Auto-Sync'}
+              </button>
+            </form>
           </div>
-        )}
-      </main>
+        </div>
+      )}
     </div>
   );
 }

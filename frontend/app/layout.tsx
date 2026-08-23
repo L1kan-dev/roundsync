@@ -1,5 +1,6 @@
 import './globals.css'
 import { Rajdhani, JetBrains_Mono, Inter } from 'next/font/google'
+import { Mascot } from '@/components/Mascot'
 
 const display = Rajdhani({ subsets: ['latin'], weight: ['600', '700'], variable: '--font-display' })
 const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['500', '600'], variable: '--font-mono' })
@@ -17,7 +18,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${display.variable} ${mono.variable} ${body.variable}`}>
-      <body>{children}</body>
+      <body>
+        <div className="app-backdrop">
+          <div className="hero-mesh" />
+          <div className="hero-grid" />
+          <Mascot className="absolute bottom-[-8%] right-[-6%] w-[560px] h-[640px] opacity-[0.05]" />
+        </div>
+        {children}
+      </body>
     </html>
   )
 }

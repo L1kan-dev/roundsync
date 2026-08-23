@@ -1,13 +1,15 @@
 # RoundSync — Automated CS2 AI Coach
 
 **Status**: Active Development
-**Last Updated**: 2026-08-20
+**Last Updated**: 2026-08-23
 
 ---
 
 ## Overview
 
 RoundSync is a Counter-Strike 2 AI coaching platform. It automatically watches for your finished matches, downloads and analyzes the replay file, and gives you personalized tactical feedback through Google Gemini.
+
+The frontend has three tabs once you're signed in and set up: **Home** (a hero dashboard with your average K/D, ADR, headshot %, and trend charts), **Matches** (your full match history — one card per match with the real map name, when it was played, K/D, and a lightweight Performance Index), and **AI Coach** (a chat interface to ask about specific moments in your games). A live sync-progress panel shows on Home whenever matches are actively being downloaded/parsed in the background.
 
 The system is split into four small services that each do one job:
 
@@ -101,9 +103,12 @@ cd services/gc-worker && npm install && node index.js
 ```
 RoundSync/
 ├── frontend/              # Next.js website
-│   └── app/
-│       ├── page.tsx       # Main UI (dashboard, login, AI coach chat)
-│       └── api/auth/steam/route.ts   # Handles the Steam login callback
+│   ├── app/
+│   │   ├── page.tsx       # Main UI (landing, onboarding, dashboard, matches, AI coach chat)
+│   │   ├── layout.tsx     # Global fonts + the fixed background (mesh/grid/mascot) shown on every tab
+│   │   └── api/auth/steam/route.ts   # Handles the Steam login callback
+│   ├── components/        # Logo, TopNav, Mascot (background art), Toast
+│   └── .claude/skills/run-frontend/   # Agent skill for building/launching/screenshotting the frontend
 ├── services/
 │   ├── api/               # Express API gateway (server.js)
 │   ├── watcher/           # Python match-discovery + parsing loop

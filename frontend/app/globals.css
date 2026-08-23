@@ -127,3 +127,89 @@ body {
 ::-webkit-scrollbar-track { background: var(--void); }
 ::-webkit-scrollbar-thumb { background: var(--edge-bright); border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--cyan-dim); }
+
+/* Global app backdrop — fixed behind every page/tab so the atmosphere never
+   hard-cuts into flat black once you scroll past a hero section. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Gradient-mesh hero backdrop — soft blurred color blobs + a fine grid,
+   giving the hero real depth instead of a flat panel color. */
+@keyframes drift-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(4%, -6%) scale(1.08); }
+}
+@keyframes drift-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-5%, 5%) scale(1.05); }
+}
+
+.hero-mesh {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.hero-mesh::before,
+.hero-mesh::after {
+  content: "";
+  position: absolute;
+  width: 55%;
+  height: 140%;
+  top: -20%;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.35;
+}
+.hero-mesh::before {
+  left: -10%;
+  background: radial-gradient(circle, var(--cyan), transparent 70%);
+  animation: drift-a 16s ease-in-out infinite;
+}
+.hero-mesh::after {
+  right: -10%;
+  background: radial-gradient(circle, var(--amber), transparent 70%);
+  animation: drift-b 18s ease-in-out infinite;
+}
+
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(231,237,243,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(231,237,243,0.05) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(to bottom, black, transparent 90%);
+}
+
+/* Glass panel — used for the top nav and floating surfaces over the hero mesh */
+.glass {
+  background: rgba(12, 16, 21, 0.6);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+/* Radial progress ring for the featured stat, driven by a CSS variable (--pct 0-100) */
+.stat-ring {
+  --pct: 0;
+  background: conic-gradient(var(--cyan) calc(var(--pct) * 1%), var(--edge) 0);
+  border-radius: 9999px;
+  transition: background 0.6s ease;
+}
+
+@keyframes dropdown-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dropdown-enter { animation: dropdown-in 0.15s ease-out forwards; transform-origin: top right; }
+
+/* Match card accent — a thin top border colored by performance, computed inline via style */
+.match-card {
+  border-top: 3px solid var(--accent, var(--edge-bright));
+}

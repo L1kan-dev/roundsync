@@ -137,7 +137,8 @@ async function processPendingMatches() {
             outcome_id: outcomeId ? outcomeId.toString() : telemetry.outcome_id,
             token: token ? parseInt(token, 10) : telemetry.token,
             status: 'pending_download',
-            download_url: directUrl
+            download_url: directUrl,
+            match_time: gcData.matchtime != null ? Number(gcData.matchtime) : (telemetry.match_time || null)
           };
 
           const { error: updateError } = await supabase
