@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback, CSSProperties } from '
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { Brain, BarChart2, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
+import ReactMarkdown from 'react-markdown';
 import { Toast } from '@/components/Toast';
 import { TopNav } from '@/components/TopNav';
 
@@ -707,7 +708,24 @@ export default function Home() {
                               : 'bg-[var(--panel-raised)] text-[var(--text)] rounded-bl-none border border-[var(--edge)]'
                           }`}
                         >
-                          <p className="whitespace-pre-wrap">{m.content}</p>
+                          {m.role === 'assistant' ? (
+                            <ReactMarkdown
+                              components={{
+                                h1: (p) => <h3 className="font-display font-bold text-base mt-2 mb-1" {...p} />,
+                                h2: (p) => <h3 className="font-display font-bold text-base mt-2 mb-1" {...p} />,
+                                h3: (p) => <h4 className="font-display font-bold text-sm mt-2 mb-1" {...p} />,
+                                strong: (p) => <strong className="text-[var(--cyan)] font-semibold" {...p} />,
+                                hr: () => <hr className="border-[var(--edge)] my-2" />,
+                                ul: (p) => <ul className="list-disc list-inside space-y-1 my-1" {...p} />,
+                                ol: (p) => <ol className="list-decimal list-inside space-y-1 my-1" {...p} />,
+                                p: (p) => <p className="mb-2 last:mb-0" {...p} />,
+                              }}
+                            >
+                              {m.content}
+                            </ReactMarkdown>
+                          ) : (
+                            <p className="whitespace-pre-wrap">{m.content}</p>
+                          )}
                         </div>
                         {m.role === 'user' && (
                           avatarUrl ? (
