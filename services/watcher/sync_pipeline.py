@@ -7,6 +7,110 @@ import pandas as pd
 from demoparser2 import DemoParser
 from crypto_utils import decrypt_value
 
+# weptype codes confirmed empirically against a real match (see services/watcher/DEMOPARSER2_FIELDS.md)
+WEAPON_CLASS_BY_WEPTYPE = {1: "pistol", 2: "smg", 3: "rifle", 4: "shotgun", 5: "sniper"}
+WEAPON_CLASS_RANK = {"pistol": 0, "smg": 1, "shotgun": 1, "sniper": 2, "rifle": 2}
+
+
+def classify_team_buy_capacity(start_balance: int, is_ct: bool) -> str:
+    """Money-only classification (never spend) to avoid judging a buy decision using itself as the yardstick."""
+    if start_balance < 2000:
+        return "full_eco"
+    full_buy_threshold = 5000 if is_ct else 4500
+    if start_balance < full_buy_threshold:
+        return "semi_eco"
+    return "full_buy_capacity"
+
+
+def classify_loadout_tier(weapon_class: str, had_armor: bool, team_buy_capacity: str) -> str:
+    """The real eco/half-buy/force-buy/full-buy label, from what was actually bought."""
+    if weapon_class in ("rifle", "sniper"):
+        return "full_buy" if had_armor else "half_buy"
+    if weapon_class in ("smg", "shotgun"):
+        if not had_armor:
+            return "force_buy"
+        return "half_buy" if team_buy_capacity == "full_buy_capacity" else "force_buy"
+    return "eco"
+
+
+def extract_fact_economy(parser, target_steam_id64: str) -> list:
+    """One row per round for target_steam_id64 only (see project memory for why not all 10 players)."""
+    rows = []
+    try:
+        freeze_end_df = parser.parse_event("round_freeze_end")
+        if freeze_end_df.empty:
+            return rows
+        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
+
+        snaps = parser.parse_ticks(
+            ["start_balance", "cash_spent_this_round", "round_start_equip_value",
+             "armor_value", "team_num", "ct_losing_streak", "t_losing_streak"],
+            ticks=freeze_ticks,
+        )
+        snaps = snaps[snaps["steamid"].astype(str) == str(target_steam_id64)]
+
+        equip_df = parser.parse_event("item_equip")
+        equip_df = equip_df[equip_df["user_steamid"].astype(str) == str(target_steam_id64)]
+        equip_df = equip_df[equip_df["weptype"].isin(WEAPON_CLASS_BY_WEPTYPE.keys())]
+
+        prev_tick = 0
+        for round_number, tick in enumerate(freeze_ticks, start=1):
+            snap_row = snaps[snaps["tick"] == tick]
+            if snap_row.empty:
+                prev_tick = tick
+                continue
+            row = snap_row.iloc[0]
+
+            team_num = int(row["team_num"])
+            is_ct = team_num == 3
+            team = "CT" if is_ct else "T"
+
+            round_equips = equip_df[(equip_df["tick"] > prev_tick) & (equip_df["tick"] <= tick)]
+            primary_weapon = None
+            primary_weapon_class = "pistol"
+            if not round_equips.empty:
+                round_equips = round_equips.copy()
+                round_equips["class_rank"] = round_equips["weptype"].map(
+                    lambda w: WEAPON_CLASS_RANK[WEAPON_CLASS_BY_WEPTYPE[int(w)]]
+                )
+                best = round_equips.sort_values("class_rank", ascending=False).iloc[0]
+                primary_weapon = best["item"]
+                primary_weapon_class = WEAPON_CLASS_BY_WEPTYPE[int(best["weptype"])]
+
+            had_armor = int(row["armor_value"]) > 0
+            start_balance = int(row["start_balance"])
+            cash_spent_this_round = int(row["cash_spent_this_round"])
+            team_buy_capacity = classify_team_buy_capacity(start_balance, is_ct)
+            if cash_spent_this_round == 0:
+                # Nothing was actually bought this round (e.g. a carried-over weapon from a
+                # won round auto-re-equips and fires an item_equip event) — labeling this as
+                # an active eco/force/full-buy DECISION would be misleading, since no decision
+                # was made. Still records what they were holding, just not the judgment label.
+                loadout_tier = "carried_over"
+            else:
+                loadout_tier = classify_loadout_tier(primary_weapon_class, had_armor, team_buy_capacity)
+            team_losing_streak = int(row["ct_losing_streak"] if is_ct else row["t_losing_streak"])
+
+            rows.append({
+                "round_number": round_number,
+                "steam_id64": str(target_steam_id64),
+                "team": team,
+                "start_balance": start_balance,
+                "cash_spent_this_round": cash_spent_this_round,
+                "round_start_equip_value": int(row["round_start_equip_value"]),
+                "primary_weapon": primary_weapon,
+                "primary_weapon_class": primary_weapon_class,
+                "had_armor": had_armor,
+                "team_buy_capacity": team_buy_capacity,
+                "loadout_tier": loadout_tier,
+                "team_losing_streak": team_losing_streak,
+            })
+            prev_tick = tick
+    except Exception as e:
+        print(f"⚠️ Warning parsing fact_economy: {e}")
+    return rows
+
+
 def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
     """Queries Valve API using VALVE_API_KEY or STEAM_API_KEY from env to validate a match code."""
     api_key = os.getenv("VALVE_API_KEY") or os.getenv("STEAM_API_KEY")
@@ -163,6 +267,18 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         calculated_kd = round(total_kills / max(1, total_deaths), 2)
         headshot_pct = round((headshots / max(1, total_kills)) * 100, 1) if total_kills > 0 else 0.0
         calculated_adr = round(total_damage / max(1, rounds_played), 1) if rounds_played > 0 else 0.0
+
+        fact_economy_rows = extract_fact_economy(parser, target_steam_id64)
+        if fact_economy_rows:
+            try:
+                for r in fact_economy_rows:
+                    r["match_id"] = match_code
+                supabase_client.table("fact_economy").upsert(
+                    fact_economy_rows, on_conflict="match_id,round_number,steam_id64"
+                ).execute()
+                print(f"✅ Saved {len(fact_economy_rows)} fact_economy rows for {match_code}")
+            except Exception as e:
+                print(f"⚠️ Failed to save fact_economy: {e}")
 
         real_payload = {
             "match_id": match_code,
