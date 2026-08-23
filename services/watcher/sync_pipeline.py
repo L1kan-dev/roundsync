@@ -1138,7 +1138,8 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 for r in fact_adaptation_rows:
                     r["match_id"] = match_code
                 supabase_client.table("fact_adaptation_event").upsert(
-                    fact_adaptation_rows, on_conflict="match_id,round_number,steam_id64,trigger_type,trigger_tick"
+                    fact_adaptation_rows,
+                    on_conflict="match_id,round_number,steam_id64,trigger_type,trigger_tick,teammate_steamid,source_enemy_steamid"
                 ).execute()
                 print(f"✅ Saved {len(fact_adaptation_rows)} fact_adaptation_event rows for {match_code}")
             except Exception as e:

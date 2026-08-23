@@ -7,6 +7,7 @@ import { LogoMark } from '@/components/Logo';
 import ReactMarkdown from 'react-markdown';
 import { Toast } from '@/components/Toast';
 import { TopNav } from '@/components/TopNav';
+import { InsightsDashboard } from '@/components/InsightsDashboard';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -53,7 +54,7 @@ function matchSortKey(m: Match): number {
   return m.match_data.telemetry.match_time ? m.match_data.telemetry.match_time * 1000 : new Date(m.parsed_at).getTime();
 }
 
-function formatMapName(map?: string | null): string {
+export function formatMapName(map?: string | null): string {
   if (!map) return 'Unknown Map';
   return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -106,7 +107,7 @@ function TypedAssistantMessage({ content, skipAnimation, onDone }: { content: st
 }
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'home' | 'matches' | 'coach' | 'settings'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'matches' | 'insights' | 'coach' | 'settings'>('home');
   const [steamId, setSteamId] = useState<string | null>(null);
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
@@ -328,6 +329,14 @@ export default function Home() {
     } finally {
       setIsOnboarding(false);
     }
+  };
+
+  // Lets the Insights dashboard's "Ask the coach about this" chips route a contextual
+  // question straight into the chat tab, prefilled — the same bridge as the example-prompt
+  // chips already use, just triggered from a different tab instead of the empty chat state.
+  const askCoachFromInsights = (question: string) => {
+    setChatInput(question);
+    setActiveTab('coach');
   };
 
   const askCoach = async (e: React.FormEvent) => {
@@ -757,6 +766,19 @@ export default function Home() {
             </div>
           )}
         </div>
+      )}
+
+      {/* INSIGHTS DASHBOARD */}
+      {activeTab === 'insights' && (
+        isOnboarded ? (
+          jwtToken && <InsightsDashboard jwtToken={jwtToken} onAskCoach={askCoachFromInsights} />
+        ) : (
+          <div className="max-w-3xl mx-auto px-6 py-16">
+            <div className="bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl flex items-center gap-4 text-[var(--amber)] justify-center">
+              <ShieldAlert className="w-6 h-6" /> Finish the one-time setup on Home before viewing Insights.
+            </div>
+          </div>
+        )
       )}
 
       {/* AI COACH CHAT */}

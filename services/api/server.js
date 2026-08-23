@@ -344,12 +344,17 @@ function summarizePositioning(rows) {
   const died = rows.filter((r) => r.outcome === 'died');
   const tradeable = died.filter((r) => r.teammate_within_trade_range_at_death === true);
   const traded = died.filter((r) => r.was_traded === true);
+  const survivedOrTradeable = (rows.length - died.length) + tradeable.length;
   return {
     isolated_commitments: rows.length,
     died_pct: round1(100 * died.length / rows.length),
     survived_pct: round1(100 * (rows.length - died.length) / rows.length),
     of_deaths_teammate_was_in_trade_range_pct: died.length ? round1(100 * tradeable.length / died.length) : null,
     of_deaths_actually_traded_pct: died.length ? round1(100 * traded.length / died.length) : null,
+    // Judges the DECISION, not just the death: a push that dies but had a teammate in
+    // trade range wasn't necessarily a bad call — same principle the fact table itself
+    // was designed around. Used by the dashboard's Trade Discipline score.
+    survived_or_tradeable_pct: round1(100 * survivedOrTradeable / rows.length),
   };
 }
 
@@ -370,6 +375,7 @@ function summarizeDuels(rows) {
     lost: lost.length,
     avg_angle_deviation_deg_when_won: avgDeviation(won),
     avg_angle_deviation_deg_when_lost: avgDeviation(lost),
+    avg_angle_deviation_deg_overall: avgDeviation(real),
     avg_time_to_damage_seconds_when_won: avgTTD(won),
   };
 }
@@ -406,6 +412,177 @@ async function buildFactSummary(steamId, matchIds) {
     engage: summarizeEngage(engage.data || []),
   };
 }
+
+// --- Dashboard-only helpers: 0-100 scores, per-map breakdown, per-match trends ---
+// Every score below is a direct percentage or simple blend of numbers already computed
+// above — no new invented coefficients. See project docs for the reasoning per score.
+function computeCategoryScores(factSummary) {
+  const clamp = (n) => Math.max(0, Math.min(100, round1(n)));
+  const scores = {};
+
+  if (factSummary.economy) {
+    scores.economic_discipline = clamp(100 - factSummary.economy.buy_decisions_against_team_economy_pct);
+  }
+  if (factSummary.utility && factSummary.utility.flashbangs_thrown > 0) {
+    scores.utility_iq = clamp(100 - (factSummary.utility.team_flash_pct || 0));
+  }
+  if (factSummary.adaptation) {
+    const types = Object.values(factSummary.adaptation);
+    if (types.length > 0) {
+      const avgReacted = types.reduce((s, t) => s + (100 - t.no_visible_reaction_within_3s_pct), 0) / types.length;
+      scores.awareness = clamp(avgReacted);
+    }
+  }
+  if (factSummary.positioning) {
+    scores.trade_discipline = clamp(factSummary.positioning.survived_or_tradeable_pct);
+  }
+  if (factSummary.duels && factSummary.duels.avg_angle_deviation_deg_overall !== null
+    && factSummary.duels.avg_angle_deviation_deg_overall !== undefined) {
+    scores.aim_placement = clamp(100 * Math.max(0, 1 - factSummary.duels.avg_angle_deviation_deg_overall / 60));
+  }
+  if (factSummary.engage) {
+    const parts = [factSummary.engage.round_win_pct_when_engaged, factSummary.engage.survived_pct_when_disengaged]
+      .filter((v) => v !== null && v !== undefined);
+    if (parts.length > 0) {
+      scores.engage_iq = clamp(parts.reduce((a, b) => a + b, 0) / parts.length);
+    }
+  }
+  return scores;
+}
+
+function countBy(rows, field) {
+  const counts = {};
+  for (const r of rows) {
+    const key = r[field] || 'unknown';
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return counts;
+}
+
+// Mirrors the frontend's performanceIndex() in frontend/app/page.tsx exactly — kept in
+// sync deliberately, both are the same "lightweight composite, not the full Impact
+// formula" placeholder.
+function performanceIndexServer(t) {
+  const kdComponent = Math.min(t.kd_ratio || 0, 3) / 3;
+  const adrComponent = Math.min(t.adr || 0, 150) / 150;
+  const hsComponent = Math.min(t.headshot_pct || 0, 100) / 100;
+  return Math.round((kdComponent * 0.5 + adrComponent * 0.35 + hsComponent * 0.15) * 100);
+}
+
+function buildMapBreakdown(matchList) {
+  const byMap = new Map();
+  for (const m of matchList) {
+    const t = m.match_data?.telemetry || {};
+    const map = m.map || t.map;
+    if (!map || t.kd_ratio === undefined || t.kd_ratio === null) continue;
+    if (!byMap.has(map)) byMap.set(map, { map, games: 0, kdSum: 0, adrSum: 0, hsSum: 0, perfSum: 0 });
+    const entry = byMap.get(map);
+    entry.games += 1;
+    entry.kdSum += t.kd_ratio || 0;
+    entry.adrSum += t.adr || 0;
+    entry.hsSum += t.headshot_pct || 0;
+    entry.perfSum += performanceIndexServer(t);
+  }
+  return Array.from(byMap.values())
+    .map((e) => ({
+      map: e.map,
+      games: e.games,
+      avg_kd: round1(e.kdSum / e.games),
+      avg_adr: round1(e.adrSum / e.games),
+      avg_hs_pct: round1(e.hsSum / e.games),
+      avg_performance: round1(e.perfSum / e.games),
+    }))
+    .sort((a, b) => b.games - a.games);
+}
+
+// Oldest -> newest, matching the existing Home-tab trend charts' ordering convention.
+function buildTrends(matchList, adaptationRows, positioningRows) {
+  const matchOrder = matchList.map((m) => m.match_id).slice().reverse();
+  const mapByMatchId = new Map(matchList.map((m) => [m.match_id, m.map || m.match_data?.telemetry?.map || null]));
+
+  const reactionByMatch = new Map();
+  for (const r of adaptationRows) {
+    if (!reactionByMatch.has(r.match_id)) reactionByMatch.set(r.match_id, { total: 0, reacted: 0 });
+    const e = reactionByMatch.get(r.match_id);
+    e.total += 1;
+    if (r.reaction_time_seconds !== null && r.reaction_time_seconds !== undefined) e.reacted += 1;
+  }
+
+  const positioningByMatch = new Map();
+  for (const r of positioningRows) {
+    if (!positioningByMatch.has(r.match_id)) positioningByMatch.set(r.match_id, { total: 0, good: 0 });
+    const e = positioningByMatch.get(r.match_id);
+    e.total += 1;
+    if (r.outcome === 'survived' || r.teammate_within_trade_range_at_death === true) e.good += 1;
+  }
+
+  const reaction = matchOrder.filter((id) => reactionByMatch.has(id)).map((id) => {
+    const e = reactionByMatch.get(id);
+    return { match_id: id, map: mapByMatchId.get(id), reaction_pct: round1(100 * e.reacted / e.total) };
+  });
+
+  const positioning = matchOrder.filter((id) => positioningByMatch.has(id)).map((id) => {
+    const e = positioningByMatch.get(id);
+    return { match_id: id, map: mapByMatchId.get(id), good_decision_pct: round1(100 * e.good / e.total) };
+  });
+
+  return { reaction, positioning };
+}
+
+async function buildDashboardPayload(steamId) {
+  const { data: matches } = await supabase
+    .from('matches')
+    .select('match_id, match_data, map, parsed_at')
+    .eq('steam_id64', steamId)
+    .order('parsed_at', { ascending: false })
+    .limit(30);
+
+  const matchList = matches || [];
+  const matchIds = matchList.map((m) => m.match_id);
+
+  const [economy, utility, adaptation, positioning, duels, engage, rankInfo] = await Promise.all([
+    supabase.from('fact_economy').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+    supabase.from('fact_utility_throw').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+    supabase.from('fact_adaptation_event').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+    supabase.from('fact_positioning_risk').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+    supabase.from('fact_duel_placement').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+    supabase.from('fact_engage_decision').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+    getPlayerRankInfo(steamId, matchIds),
+  ]);
+
+  const factSummary = {
+    economy: summarizeEconomy(economy.data || []),
+    utility: summarizeUtility(utility.data || []),
+    adaptation: summarizeAdaptation(adaptation.data || []),
+    positioning: summarizePositioning(positioning.data || []),
+    duels: summarizeDuels(duels.data || []),
+    engage: summarizeEngage(engage.data || []),
+  };
+
+  const trends = buildTrends(matchList, adaptation.data || [], positioning.data || []);
+
+  return {
+    matchesTracked: matchList.length,
+    rankNew: rankInfo.rankNew,
+    rankTypeId: rankInfo.rankTypeId,
+    factSummary,
+    categoryScores: computeCategoryScores(factSummary),
+    mapBreakdown: buildMapBreakdown(matchList),
+    trends,
+    loadoutMix: countBy(economy.data || [], 'loadout_tier'),
+  };
+}
+
+app.get('/api/stats/dashboard', authenticateToken, async (req, res) => {
+  const steamId = req.user.steamId;
+  try {
+    const payload = await buildDashboardPayload(steamId);
+    res.json(payload);
+  } catch (err) {
+    console.error('Dashboard Stats API Error:', err);
+    res.status(500).json({ error: 'Failed to build dashboard stats.' });
+  }
+});
 
 // How many of the most recent turns get replayed back to Gemini for conversational
 // continuity — kept small on purpose, since the fact-summary + match-summary context

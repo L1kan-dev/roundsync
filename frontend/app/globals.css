@@ -14,6 +14,14 @@
   --amber-dim: #b45309;
   --danger: #f87171;
 
+  /* Insights dashboard categorical set — validated (CVD/contrast/lightness) against the
+     dark panel surface, close cousins of --cyan-dim/--amber-dim so multi-series charts
+     stay part of the same brand family instead of a clashing generic palette. */
+  --series-cyan: #0891b2;
+  --series-violet: #8b5cf6;
+  --series-amber: #d97706;
+  --series-rose: #e11d48;
+
   --background: var(--void);
   --foreground: var(--text);
 }
@@ -208,6 +216,56 @@ body {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .dropdown-enter { animation: dropdown-in 0.15s ease-out forwards; transform-origin: top right; }
+
+/* Insights dashboard — staggered card entrance (delay set per-card via inline style) */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.card-in { animation: card-in 0.5s ease-out forwards; opacity: 0; }
+
+/* Rank-change celebration — particle burst radiating from center via rotate+translate
+   (avoids relying on newer CSS trig() support), expanding rings, and a bouncy scale-in
+   for the takeover content. */
+@keyframes rank-particle-burst {
+  0% { transform: translate(-50%, -50%) rotate(var(--angle)) translateX(0) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) rotate(var(--angle)) translateX(var(--distance)) scale(0.2); opacity: 0; }
+}
+.rank-particle {
+  top: 50%;
+  left: 50%;
+  animation: rank-particle-burst 1.1s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+}
+
+@keyframes rank-ring-expand {
+  0% { width: 40px; height: 40px; opacity: 0.8; }
+  100% { width: 640px; height: 640px; opacity: 0; }
+}
+.rank-ring {
+  border: 2px solid;
+  border-radius: 9999px;
+  animation: rank-ring-expand 1.5s ease-out forwards;
+}
+
+@keyframes rank-takeover-in {
+  0% { opacity: 0; transform: scale(0.85); }
+  60% { opacity: 1; transform: scale(1.03); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.rank-takeover-content { animation: rank-takeover-in 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards; }
+
+@keyframes rank-band-pulse-anim {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.3); }
+}
+.rank-band-pulse { animation: rank-band-pulse-anim 1.2s ease-in-out infinite; }
+
+@keyframes rank-delta-pop-anim {
+  0% { transform: scale(0.5); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.rank-delta-pop { animation: rank-delta-pop-anim 0.4s ease-out forwards; }
 
 /* Match card accent — a thin top border colored by performance, computed inline via style */
 .match-card {

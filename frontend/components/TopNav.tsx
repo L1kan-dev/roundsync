@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Settings, LogOut, ChevronDown, BarChart2, Brain, Swords } from 'lucide-react';
+import { Settings, LogOut, ChevronDown, BarChart2, Brain, Swords, LayoutGrid } from 'lucide-react';
 import { LogoLockup } from './Logo';
 
-type Tab = 'home' | 'matches' | 'coach' | 'settings';
+type Tab = 'home' | 'matches' | 'insights' | 'coach' | 'settings';
 
 interface TopNavProps {
   activeTab: Tab;
@@ -51,6 +51,14 @@ export function TopNav({ activeTab, onTabChange, isLive, personaName, avatarUrl,
             }`}
           >
             <Swords className="w-4 h-4" /> Matches
+          </button>
+          <button
+            onClick={() => onTabChange('insights')}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              activeTab === 'insights' ? 'bg-[var(--cyan)] text-[#03141a]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+            }`}
+          >
+            <LayoutGrid className="w-4 h-4" /> Insights
           </button>
           <button
             onClick={() => onTabChange('coach')}
