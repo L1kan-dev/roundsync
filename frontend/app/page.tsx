@@ -680,28 +680,33 @@ export default function Home() {
             {/* Hero band — the featured KD ring, secondary stats. Atmosphere comes from the global app backdrop. */}
             <div className="relative">
               <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12 pb-10">
-                <p className="text-[var(--text-dim)] text-sm mb-1">Welcome back,</p>
-                <h1 className="font-display text-4xl font-bold mb-1 truncate">{personaName || 'Player'}</h1>
                 <p className="text-xs text-[var(--text-dim)] mb-8">
                   Stats based on your last {parsedMatches.length} recent games
                   {failedCount > 0 && <span className="text-[var(--danger)]"> · {failedCount} didn't load</span>}
                 </p>
 
                 <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
-                  {rankBand(rankNew) && (
-                    <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 gap-2">
-                      <RankBadge color={rankBand(rankNew)!.color} size={88} />
-                      <div className="text-center">
-                        <p className="font-tel text-xl font-extrabold" style={{ color: rankBand(rankNew)!.color }}>
-                          {rankNew!.toLocaleString()}
-                        </p>
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">{rankBand(rankNew)!.label} · CS Rating</p>
-                        {rankChangeEvent && !rankChangeEvent.crossedBand && (
-                          <div className="mt-1 flex justify-center"><RankDeltaBadge event={rankChangeEvent} /></div>
-                        )}
-                      </div>
+                  {/* Profile block: picture + name, rating below */}
+                  <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 gap-4 min-w-[190px]">
+                    <div className="flex flex-col items-center gap-3">
+                      {avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={avatarUrl} alt="" className="w-16 h-16 rounded-full border-2 border-[var(--edge-bright)]" />
+                      ) : (
+                        <div className="w-16 h-16 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)]" />
+                      )}
+                      <p className="font-display text-lg font-bold truncate max-w-[170px]">{personaName || 'Player'}</p>
                     </div>
-                  )}
+                    {rankBand(rankNew) && (
+                      <div className="flex items-center gap-2 pt-3 border-t border-[var(--edge)] w-full justify-center">
+                        <RankBadge color={rankBand(rankNew)!.color} size={36} />
+                        <span className="font-tel text-lg font-extrabold" style={{ color: rankBand(rankNew)!.color }}>
+                          {rankNew!.toLocaleString()}
+                        </span>
+                        {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
+                      </div>
+                    )}
+                  </div>
 
                   <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 relative">
                     <div

@@ -1,12 +1,15 @@
-// Real, current (2026) CS2 Premier CS Rating bands — same ones the AI Coach's tone and
-// the Insights dashboard already use server-side. Single source of truth for the frontend.
+// Real CS2 Premier CS Rating bands, corrected against an actual in-game reference
+// screenshot the user provided (an earlier web-research-sourced 7-band guess was wrong
+// on both the thresholds AND the count — it's 6 real bands, not 7). Same bands the AI
+// Coach's tone and the Insights dashboard use server-side — keep services/api/server.js's
+// rankTierInstruction() in sync if these ever change again.
 export const RANK_BANDS = [
-  { max: 4999, label: 'Grey', color: '#9ca3af' },
-  { max: 9999, label: 'Light Blue', color: '#7dd3fc' },
-  { max: 14999, label: 'Blue', color: '#60a5fa' },
-  { max: 19999, label: 'Purple', color: '#a78bfa' },
-  { max: 24999, label: 'Pink', color: '#f472b6' },
-  { max: 29999, label: 'Red', color: '#ef4444' },
+  { max: 1999, label: 'Grey', color: '#9ca3af' },
+  { max: 5999, label: 'White', color: '#e5e7eb' },
+  { max: 8999, label: 'Light Blue', color: '#7dd3fc' },
+  { max: 12999, label: 'Blue', color: '#60a5fa' },
+  { max: 14999, label: 'Violet', color: '#a78bfa' },
+  { max: 29999, label: 'Purple', color: '#c084fc' },
   { max: Infinity, label: 'Gold', color: '#fbbf24' },
 ] as const;
 
