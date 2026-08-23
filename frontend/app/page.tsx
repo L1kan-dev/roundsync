@@ -443,11 +443,11 @@ export default function Home() {
             <div className="relative">
               <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12 pb-10">
                 <p className="text-[var(--text-dim)] text-sm mb-1">Welcome back,</p>
-                <h1 className="font-display text-4xl font-bold mb-8 truncate">{personaName || 'Player'}</h1>
+                <h1 className="font-display text-4xl font-bold mb-1 truncate">{personaName || 'Player'}</h1>
+                <p className="text-xs text-[var(--text-dim)] mb-8">Stats based on your last {parsedMatches.length} parsed games</p>
 
                 <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
                   <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 relative">
-                    <span className="absolute top-4 right-5 text-[10px] text-[var(--text-dim)]">{parsedMatches.length} games</span>
                     <div
                       className="relative w-32 h-32 stat-ring"
                       style={{ '--pct': kdRingPct } as CSSProperties}
@@ -461,17 +461,11 @@ export default function Home() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
                     <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
-                        <p className="text-[10px] text-[var(--text-dim)]">{parsedMatches.length} games</p>
-                      </div>
+                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg ADR</p>
                       <p className="font-tel text-2xl font-bold">{avgAdr}</p>
                     </div>
                     <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
-                        <p className="text-[10px] text-[var(--text-dim)]">{parsedMatches.length} games</p>
-                      </div>
+                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Headshot %</p>
                       <p className="font-tel text-2xl font-bold">{avgHs}%</p>
                     </div>
                     <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
@@ -560,12 +554,15 @@ export default function Home() {
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <h3 className="font-display font-bold text-lg mb-4">K/D Ratio Progression</h3>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-display font-bold text-lg">K/D Ratio Progression</h3>
+                        <span className="text-[10px] text-[var(--text-dim)]">Hover a point for match details</span>
+                      </div>
                       <div className="h-64">
                         <ResponsiveContainer width="100%" height="100%">
                           <LineChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                            <XAxis dataKey="name" stroke="#8592a1" />
+                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
                             <YAxis stroke="#8592a1" />
                             <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
                             <Line type="monotone" dataKey="kd" stroke="#22d3ee" strokeWidth={3} activeDot={{ r: 8 }} />
@@ -575,12 +572,15 @@ export default function Home() {
                     </div>
 
                     <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <h3 className="font-display font-bold text-lg mb-4">Average Damage per Round (ADR)</h3>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-display font-bold text-lg">Average Damage per Round (ADR)</h3>
+                        <span className="text-[10px] text-[var(--text-dim)]">Hover a bar for match details</span>
+                      </div>
                       <div className="h-64">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                            <XAxis dataKey="name" stroke="#8592a1" />
+                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
                             <YAxis stroke="#8592a1" />
                             <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
                             <Bar dataKey="adr" fill="#fb923c" radius={[4, 4, 0, 0]} />
