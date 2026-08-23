@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback, CSSProperties } from 'react';
-import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Brain, BarChart2, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus, TrendingUp, Zap } from 'lucide-react';
+import { ResponsiveContainer, LineChart, Line, Area, AreaChart, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { Brain, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus, TrendingUp, Zap, LogIn, Flame, Users, Repeat } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
 import ReactMarkdown from 'react-markdown';
 import { Toast } from '@/components/Toast';
 import { TopNav } from '@/components/TopNav';
 import { InsightsDashboard } from '@/components/InsightsDashboard';
-import { RankPill } from '@/components/RankBadge';
+import { RankBadge } from '@/components/RankBadge';
 import { RankBandTakeover, RankDeltaBadge, type RankChangeEvent } from '@/components/RankChangeOverlay';
 import { rankBand, rankBandIndex, RANK_BANDS, LAST_KNOWN_RANK_KEY } from '@/lib/rank';
 
@@ -30,6 +30,11 @@ interface Match {
       total_damage?: number | null;
       headshots?: number | null;
       rounds_played?: number | null;
+      rank_at_match_start?: number | null;
+      entry_success_pct?: number | null;
+      utility_dmg_per_round?: number | null;
+      clutches_won?: number | null;
+      trade_kill_pct?: number | null;
     };
   };
 }
@@ -60,6 +65,44 @@ function matchSortKey(m: Match): number {
 export function formatMapName(map?: string | null): string {
   if (!map) return 'Unknown Map';
   return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Only these 5 maps have a real in-game screenshot saved locally (see
+// frontend/public/maps/screens/) — every other map falls back to a plain gradient panel
+// instead of a broken <img>.
+const MAPS_WITH_SCREENSHOTS = new Set(['de_mirage', 'de_inferno', 'de_ancient', 'de_nuke', 'de_overpass']);
+function mapScreenshotUrl(map?: string | null): string | null {
+  if (!map || !MAPS_WITH_SCREENSHOTS.has(map)) return null;
+  return `/maps/screens/${map}.png`;
+}
+
+// Recent Matches card accent — not win/loss, but the card's position in the strip: leftmost
+// reads CT cyan, rightmost reads T amber, fading between them across the row (the same
+// CT=left/cyan, T=right/amber pairing the landing hero's operators already use).
+function ctTAccent(index: number, total: number): string {
+  const t = total > 1 ? index / (total - 1) : 0;
+  const ct = { r: 0x22, g: 0xd3, b: 0xee };
+  const tt = { r: 0xfb, g: 0x92, b: 0x3c };
+  const r = Math.round(ct.r + (tt.r - ct.r) * t);
+  const g = Math.round(ct.g + (tt.g - ct.g) * t);
+  const b = Math.round(ct.b + (tt.b - ct.b) * t);
+  return `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// Averages an optional telemetry field across matches that actually have it, same
+// optional-field/graceful-fallback pattern avgAdr/avgHs already use for total_damage/
+// headshots — a match parsed before a field existed just doesn't count toward the average
+// instead of dragging it toward a fake zero. Returns null (tile shows "—") when no match has it.
+function avgOptionalField(matches: Match[], pick: (t: Match['match_data']['telemetry']) => number | null | undefined): number | null {
+  const values = matches.map((m) => pick(m.match_data.telemetry)).filter((v): v is number => typeof v === 'number');
+  if (values.length === 0) return null;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function sumOptionalField(matches: Match[], pick: (t: Match['match_data']['telemetry']) => number | null | undefined): number | null {
+  const values = matches.map((m) => pick(m.match_data.telemetry)).filter((v): v is number => typeof v === 'number');
+  if (values.length === 0) return null;
+  return values.reduce((a, b) => a + b, 0);
 }
 
 interface ChatHistoryEntry { question: string; response: string; created_at: string }
@@ -532,6 +575,19 @@ export default function Home() {
     ? Math.round(parsedMatches.reduce((acc, m) => acc + performanceIndex(m.match_data.telemetry), 0) / parsedMatches.length)
     : 0;
 
+  // Secondary KPI row (Part 3 backend fields) — each is null when no recent match has that
+  // field yet (older matches parsed before this shipped), in which case the tile shows "—".
+  const avgEntrySuccessPct = avgOptionalField(parsedMatches, (t) => t.entry_success_pct);
+  const avgUtilityDmgPerRound = avgOptionalField(parsedMatches, (t) => t.utility_dmg_per_round);
+  const totalClutchesWon = sumOptionalField(parsedMatches, (t) => t.clutches_won);
+  const avgTradeKillPct = avgOptionalField(parsedMatches, (t) => t.trade_kill_pct);
+
+  // Recent Form strip — same kd_ratio >= 1 win/loss proxy the Matches tab already uses for
+  // match-card accent color, just tallied here instead of colored per-card.
+  const recentForm = parsedMatches.slice(0, 10);
+  const recentWins = recentForm.filter((m) => m.match_data.telemetry.kd_ratio >= 1).length;
+  const recentLosses = recentForm.length - recentWins;
+
   const chartData = parsedMatches.map(m => ({
     name: m.match_data.telemetry.map ? formatMapName(m.match_data.telemetry.map) : m.match_id.substring(5, 12),
     kd: m.match_data.telemetry.kd_ratio,
@@ -541,7 +597,6 @@ export default function Home() {
   })).reverse();
 
   const isLive = isOnboarded === true;
-  const kdRingPct = Math.max(4, Math.min(100, Number(avgKd) * 50));
 
   // Sync progress math
   const syncCounts = syncStatus?.counts;
@@ -560,7 +615,23 @@ export default function Home() {
   // ---------- LOGGED-OUT LANDING ----------
   if (!steamId) {
     return (
-      <div className="relative min-h-screen text-[var(--text)] flex flex-col items-center justify-center px-6">
+      <div className="relative min-h-screen overflow-hidden text-[var(--text)] flex flex-col items-center justify-center px-6">
+        {/* CT / T operators, deliberately part of THIS page's composition — bigger and
+            closer to the edges than the faint ambient pair in layout.tsx, aiming inward
+            toward the centered wordmark. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/operators/ct.png"
+          alt=""
+          className="pointer-events-none select-none absolute bottom-[-4%] left-[-4%] w-[34vw] max-w-[520px] h-[92vh] object-contain object-bottom opacity-30 z-0"
+        />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/operators/t.png"
+          alt=""
+          className="pointer-events-none select-none absolute bottom-[-4%] right-[-4%] w-[34vw] max-w-[520px] h-[92vh] object-contain object-bottom opacity-30 z-0"
+        />
+
         <div className="relative z-10 max-w-2xl w-full text-center">
           <div className="flex justify-center mb-8">
             <LogoMark className="w-20 h-20" />
@@ -573,30 +644,39 @@ export default function Home() {
             <span className="text-[var(--amber)] font-semibold"> why </span>
             it happened — the specific peek, the specific decision — not a generic tip.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 my-10 text-left">
-            <div className="hud-corners bg-[var(--panel)]/80 border border-[var(--edge)] rounded-xl p-5">
-              <Crosshair className="w-6 h-6 text-[var(--cyan)] mb-3" />
-              <p className="font-semibold text-sm mb-1">Moment-level analysis</p>
-              <p className="text-xs text-[var(--text-dim)]">Not match averages — the exact peek, duel, and decision.</p>
-            </div>
-            <div className="hud-corners bg-[var(--panel)]/80 border border-[var(--edge)] rounded-xl p-5">
-              <Radar className="w-6 h-6 text-[var(--cyan)] mb-3" />
-              <p className="font-semibold text-sm mb-1">Personalized, not generic</p>
-              <p className="text-xs text-[var(--text-dim)]">No population benchmarks — coaching built from your own games.</p>
-            </div>
-            <div className="hud-corners bg-[var(--panel)]/80 border border-[var(--edge)] rounded-xl p-5">
-              <Brain className="w-6 h-6 text-[var(--cyan)] mb-3" />
-              <p className="font-semibold text-sm mb-1">A coach that explains why</p>
-              <p className="text-xs text-[var(--text-dim)]">Ask it anything about your last match, in plain language.</p>
-            </div>
-          </div>
+
           <button
             onClick={loginWithSteam}
-            className="px-8 py-4 bg-[var(--cyan)] hover:bg-[#5eead4] text-[#03141a] font-bold rounded-xl shadow-lg shadow-cyan-500/20 transition-all inline-flex items-center gap-3 text-lg"
+            className="mt-6 px-8 py-4 bg-[var(--cyan)] hover:bg-[#5eead4] text-[#03141a] font-bold rounded-xl shadow-lg shadow-cyan-500/20 transition-all inline-flex items-center gap-3 text-lg"
           >
             Sign In With Steam
             <ChevronRight className="w-5 h-5" />
           </button>
+
+          {/* HUD-style readout strip — thin dividers between columns instead of 3 boxy cards */}
+          <div className="hud-corners relative mt-12 bg-[var(--panel)]/80 border border-[var(--edge)] rounded-xl grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-[var(--edge)] text-left">
+            <div className="p-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Crosshair className="w-4 h-4 text-[var(--cyan)] shrink-0" />
+                <p className="font-semibold text-sm">Moment-level analysis</p>
+              </div>
+              <p className="text-xs text-[var(--text-dim)]">Not match averages — the exact peek, duel, and decision.</p>
+            </div>
+            <div className="p-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Radar className="w-4 h-4 text-[var(--cyan)] shrink-0" />
+                <p className="font-semibold text-sm">Personalized, not generic</p>
+              </div>
+              <p className="text-xs text-[var(--text-dim)]">No population benchmarks — coaching built from your own games.</p>
+            </div>
+            <div className="p-5">
+              <div className="flex items-center gap-2 mb-1.5">
+                <Brain className="w-4 h-4 text-[var(--cyan)] shrink-0" />
+                <p className="font-semibold text-sm">A coach that explains why</p>
+              </div>
+              <p className="text-xs text-[var(--text-dim)]">Ask it anything about your last match, in plain language.</p>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -674,79 +754,135 @@ export default function Home() {
             </div>
           </div>
         ) : (
-          <div className="h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
+          <div className="h-[calc(100vh-4rem)] overflow-y-auto">
             {rankChangeEvent && rankChangeEvent.crossedBand && (
               <RankBandTakeover event={rankChangeEvent} onDone={() => setRankChangeEvent(null)} />
             )}
 
-            {/* Hero band — one full-width grid so every card carries equal visual weight
-                instead of a cluster of small cards on the left with dead space on the right.
-                Deliberately compact (shrink-0): the charts below get whatever's left. */}
-            <div className="relative shrink-0">
-              <div className="relative z-10 max-w-7xl mx-auto px-6 pt-6 pb-4 w-full">
-                <p className="text-xs text-[var(--text-dim)] mb-3">
-                  Stats based on your last {parsedMatches.length} recent games
-                </p>
+            <div className="max-w-7xl mx-auto px-6 py-6">
+              <p className="text-xs text-[var(--text-dim)] mb-3">
+                Stats based on your last {parsedMatches.length} recent games
+              </p>
 
-                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                  {/* Identity + rank */}
-                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col items-center justify-center gap-2 col-span-2 lg:col-span-1">
-                    <div className="flex items-center gap-2.5 w-full">
-                      {avatarUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={avatarUrl} alt="" className="w-9 h-9 rounded-full border-2 border-[var(--edge-bright)] shrink-0" />
-                      ) : (
-                        <div className="w-9 h-9 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)] shrink-0" />
-                      )}
-                      <p className="font-display text-sm font-bold truncate">{personaName || 'Player'}</p>
+              {/* Identity/rating card (left) + KPI columns (right) */}
+              <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-3 mb-3">
+                <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center text-center gap-3">
+                  {avatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatarUrl} alt="" className="w-24 h-24 rounded-full border-2 border-[var(--edge-bright)]" />
+                  ) : (
+                    <div className="w-24 h-24 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)]" />
+                  )}
+                  <p className="font-display text-xl font-bold truncate">{personaName || 'Player'}</p>
+
+                  <div className="flex flex-col items-center">
+                    <RankBadge color={rankBand(rankNew)?.color ?? '#9ca3af'} rankNew={rankNew} size={46} />
+                    {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
+                  </div>
+
+                  <div className="w-full mt-1">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Performance</span>
+                      <span className="font-tel text-sm font-bold text-[var(--amber)]">
+                        {avgPerformanceIndex}<span className="text-[var(--text-dim)]">/100</span>
+                      </span>
                     </div>
-                    {rankBand(rankNew) && (
-                      <div className="flex flex-col items-center gap-1 w-full">
-                        <RankPill color={rankBand(rankNew)!.color} rankNew={rankNew!} />
-                        {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
+                    <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-[var(--amber)] rounded-full transition-all duration-500"
+                        style={{ width: `${Math.max(4, Math.min(100, avgPerformanceIndex))}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  {/* K/D, ADR, Headshot % */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-4">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <Target className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">K/D Ratio</p>
                       </div>
-                    )}
+                      <p className="font-tel text-2xl font-bold text-[var(--cyan)]">{avgKd}</p>
+                    </div>
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-4">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <Zap className="w-3.5 h-3.5 text-[var(--amber)]" />
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
+                      </div>
+                      <p className="font-tel text-2xl font-bold">{avgAdr}</p>
+                    </div>
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-4">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <Crosshair className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
+                      </div>
+                      <p className="font-tel text-2xl font-bold">{avgHs}%</p>
+                    </div>
                   </div>
 
-                  {/* K/D ring */}
-                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col items-center justify-center">
-                    <div className="relative w-16 h-16 stat-ring" style={{ '--pct': kdRingPct } as CSSProperties}>
-                      <div className="absolute inset-1.5 rounded-full bg-[var(--panel)] flex flex-col items-center justify-center">
-                        <span className="font-tel text-lg font-extrabold text-[var(--cyan)]">{avgKd}</span>
+                  {/* Recent Form strip */}
+                  <div className="glass border border-[var(--edge)] rounded-2xl px-4 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] shrink-0">Recent Form</p>
+                      <div className="flex items-center gap-1.5">
+                        {recentForm.map((m) => {
+                          const won = m.match_data.telemetry.kd_ratio >= 1;
+                          return (
+                            <span
+                              key={m.match_id}
+                              className="w-2.5 h-2.5 rounded-full"
+                              style={{ background: won ? 'var(--cyan)' : 'var(--danger)' }}
+                              title={won ? 'Win' : 'Loss'}
+                            />
+                          );
+                        })}
                       </div>
                     </div>
-                    <span className="text-[9px] uppercase tracking-wider text-[var(--text-dim)] mt-1.5">K/D Ratio</span>
+                    <p className="font-tel text-sm font-bold">
+                      <span className="text-[var(--cyan)]">{recentWins}W</span>
+                      <span className="text-[var(--text-dim)]">–</span>
+                      <span className="text-[var(--danger)]">{recentLosses}L</span>
+                    </p>
                   </div>
 
-                  {/* Secondary stats — equal-weight tiles filling the same row */}
-                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <Zap className="w-3 h-3 text-[var(--amber)]" />
-                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
+                  {/* Secondary metrics — real per-match fields from the demo parser */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <LogIn className="w-3 h-3 text-[var(--cyan)]" />
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Entry Success</p>
+                      </div>
+                      <p className="font-tel text-lg font-bold">{avgEntrySuccessPct !== null ? `${avgEntrySuccessPct.toFixed(0)}%` : '—'}</p>
                     </div>
-                    <p className="font-tel text-lg font-bold">{avgAdr}</p>
-                  </div>
-                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <Crosshair className="w-3 h-3 text-[var(--cyan)]" />
-                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Flame className="w-3 h-3 text-[var(--amber)]" />
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Utility Dmg/Rd</p>
+                      </div>
+                      <p className="font-tel text-lg font-bold">{avgUtilityDmgPerRound !== null ? avgUtilityDmgPerRound.toFixed(1) : '—'}</p>
                     </div>
-                    <p className="font-tel text-lg font-bold">{avgHs}%</p>
-                  </div>
-                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center col-span-2 lg:col-span-1">
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <TrendingUp className="w-3 h-3 text-[var(--amber)]" />
-                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Avg Performance</p>
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Users className="w-3 h-3 text-[var(--cyan)]" />
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Clutches Won</p>
+                      </div>
+                      <p className="font-tel text-lg font-bold">{totalClutchesWon !== null ? totalClutchesWon : '—'}</p>
                     </div>
-                    <p className="font-tel text-lg font-bold text-[var(--amber)]">{avgPerformanceIndex}<span className="text-[var(--text-dim)] text-xs">/100</span></p>
+                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Repeat className="w-3 h-3 text-[var(--amber)]" />
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Trade Kill %</p>
+                      </div>
+                      <p className="font-tel text-lg font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(0)}%` : '—'}</p>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div className="max-w-7xl mx-auto px-6 pb-4 w-full flex-1 min-h-0 flex flex-col">
               {hasActiveSync && (
-                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-4 shrink-0 mb-3">
+                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-4 mb-3">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-sm font-semibold">
                       <Download className="w-4 h-4 text-[var(--cyan)]" />
@@ -795,12 +931,12 @@ export default function Home() {
               )}
 
               {isLoadingMatches && matches.length === 0 ? (
-                <div className="flex flex-col items-center justify-center flex-1 gap-3 text-[var(--text-dim)]">
+                <div className="flex flex-col items-center justify-center py-20 gap-3 text-[var(--text-dim)]">
                   <Loader2 className="w-10 h-10 animate-spin text-[var(--cyan)]" />
                   <p>Loading match history...</p>
                 </div>
               ) : parsedMatches.length === 0 ? (
-                <div className="hud-corners relative overflow-hidden bg-[var(--panel)] border border-[var(--edge)] rounded-2xl text-center text-[var(--text-dim)] flex-1 flex items-center justify-center">
+                <div className="hud-corners relative overflow-hidden bg-[var(--panel)] border border-[var(--edge)] rounded-2xl text-center text-[var(--text-dim)] py-20">
                   <div className="radar-backdrop opacity-60" />
                   <div className="relative z-10 px-8">
                     <div className="w-20 h-20 mx-auto mb-5 rounded-full border-2 border-[var(--cyan-dim)] flex items-center justify-center">
@@ -811,63 +947,127 @@ export default function Home() {
                   </div>
                 </div>
               ) : (
-                <div className="flex-1 min-h-0 flex flex-col">
-                  <div className="flex items-center justify-between shrink-0 mb-2">
-                    <h2 className="font-display text-lg font-bold">Trends</h2>
-                    <span className="text-[10px] text-[var(--text-dim)]">Hover any chart for match details</span>
+                <>
+                  {/* Recent Matches — map-screenshot cards with rank-at-match-start pill */}
+                  <div className="mb-4">
+                    <h2 className="font-display text-lg font-bold mb-2">Recent Matches</h2>
+                    <div className="flex gap-3 overflow-x-auto pb-1">
+                      {parsedMatches.slice(0, 5).map((m, i, arr) => {
+                        const t = m.match_data.telemetry;
+                        const accent = ctTAccent(i, arr.length);
+                        const bg = mapScreenshotUrl(t.map);
+                        const matchRankBand = rankBand(t.rank_at_match_start);
+                        return (
+                          <div key={m.match_id} className="relative shrink-0 w-56 h-44 rounded-2xl overflow-hidden border border-[var(--edge)] flex flex-col">
+                            {/* picture — 3/4 of the card */}
+                            <div className="relative" style={{ flex: 3 }}>
+                              {bg ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={bg} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                              ) : (
+                                <div className="absolute inset-0 bg-gradient-to-br from-[var(--panel-raised)] to-[var(--void)]" />
+                              )}
+                              {matchRankBand && typeof t.rank_at_match_start === 'number' && (
+                                <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/50 rounded-full px-2 py-1">
+                                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: matchRankBand.color }} />
+                                  <span className="font-tel text-[10px] font-bold text-[var(--text)]">{t.rank_at_match_start}</span>
+                                </div>
+                              )}
+                            </div>
+                            {/* info — 1/4 of the card, accent fades CT cyan (left) to T amber (right) across the strip */}
+                            <div
+                              className="flex flex-col justify-center px-3 bg-[var(--panel)]"
+                              style={{ flex: 1, borderTop: `2px solid ${accent}` }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-display font-bold text-sm truncate">{formatMapName(t.map)}</span>
+                                <span className="font-tel text-base font-extrabold shrink-0 ml-2" style={{ color: accent }}>{t.kd_ratio}</span>
+                              </div>
+                              <p className="text-[10px] text-[var(--text-dim)]">{formatMatchDate(t)}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-2 grid-rows-2 gap-3 flex-1 min-h-0">
-                    {([
-                      { key: 'kd' as const, title: 'K/D Ratio', color: '#22d3ee', type: 'line' as const, decimals: 2 },
-                      { key: 'adr' as const, title: 'Average Damage per Round', color: '#fb923c', type: 'bar' as const, decimals: 0 },
-                      { key: 'hs' as const, title: 'Headshot %', color: '#8b5cf6', type: 'line' as const, decimals: 0 },
-                      { key: 'perf' as const, title: 'Performance Index', color: '#e11d48', type: 'bar' as const, decimals: 0 },
-                    ]).map(({ key, title, color, type, decimals }) => {
-                      const recent = chartData.slice(-5);
-                      const prior = chartData.slice(-10, -5);
-                      const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
-                      const recentAvg = chartData.length > 0 ? avg(recent) : 0;
-                      const priorAvg = prior.length > 0 ? avg(prior) : recentAvg;
-                      const delta = recentAvg - priorAvg;
-                      const isUp = delta > 0.001;
-                      const isDown = delta < -0.001;
-                      return (
-                        <div key={key} className="hud-corners bg-[var(--panel)] p-4 rounded-2xl border border-[var(--edge)] flex flex-col min-h-0">
-                          <div className="flex items-center justify-between shrink-0 mb-2">
-                            <h3 className="font-display font-bold text-sm">{title}</h3>
-                            {chartData.length >= 6 && (isUp || isDown) && (
-                              <span className={`text-xs font-tel font-semibold flex items-center gap-1 ${isUp ? 'text-[var(--cyan)]' : 'text-[var(--danger)]'}`}>
-                                {recentAvg.toFixed(decimals)} {isUp ? '▲' : '▼'} {Math.abs(delta).toFixed(decimals)}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex-1 min-h-0">
-                            <ResponsiveContainer width="100%" height="100%">
-                              {type === 'line' ? (
-                                <LineChart data={chartData}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                                  <XAxis dataKey="name" stroke="#8592a1" tick={false} />
-                                  <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} />
-                                  <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                                  <Line type="monotone" dataKey={key} stroke={color} strokeWidth={2.5} dot={{ r: 2 }} activeDot={{ r: 6 }} />
-                                </LineChart>
-                              ) : (
-                                <BarChart data={chartData}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                                  <XAxis dataKey="name" stroke="#8592a1" tick={false} />
-                                  <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} domain={key === 'perf' ? [0, 100] : undefined} />
-                                  <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                                  <Bar dataKey={key} fill={color} radius={[3, 3, 0, 0]} />
-                                </BarChart>
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h2 className="font-display text-lg font-bold">Trends</h2>
+                      <span className="text-[10px] text-[var(--text-dim)]">Hover any chart for match details</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {([
+                        { key: 'kd' as const, title: 'K/D Ratio', color: '#22d3ee', type: 'line' as const, decimals: 2 },
+                        { key: 'adr' as const, title: 'Average Damage per Round', color: '#fb923c', type: 'bar' as const, decimals: 0 },
+                        { key: 'hs' as const, title: 'Headshot %', color: '#8b5cf6', type: 'line' as const, decimals: 0 },
+                        { key: 'perf' as const, title: 'Performance Index', color: '#e11d48', type: 'bar' as const, decimals: 0 },
+                      ]).map(({ key, title, color, type, decimals }) => {
+                        const recent = chartData.slice(-5);
+                        const prior = chartData.slice(-10, -5);
+                        const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
+                        const recentAvg = chartData.length > 0 ? avg(recent) : 0;
+                        const priorAvg = prior.length > 0 ? avg(prior) : recentAvg;
+                        const delta = recentAvg - priorAvg;
+                        const isUp = delta > 0.001;
+                        const isDown = delta < -0.001;
+                        const gradId = `grad-${key}`;
+                        return (
+                          <div key={key} className="hud-corners bg-[var(--panel)] p-4 rounded-2xl border border-[var(--edge)] flex flex-col" style={{ height: 220 }}>
+                            <div className="flex items-center justify-between shrink-0 mb-2">
+                              <h3 className="font-display font-bold text-sm">{title}</h3>
+                              {chartData.length >= 6 && (isUp || isDown) && (
+                                <span className={`text-xs font-tel font-semibold flex items-center gap-1 ${isUp ? 'text-[var(--cyan)]' : 'text-[var(--danger)]'}`}>
+                                  {recentAvg.toFixed(decimals)} {isUp ? '▲' : '▼'} {Math.abs(delta).toFixed(decimals)}
+                                </span>
                               )}
-                            </ResponsiveContainer>
+                            </div>
+                            <div className="flex-1 min-h-0">
+                              <ResponsiveContainer width="100%" height="100%">
+                                {type === 'line' ? (
+                                  <AreaChart data={chartData}>
+                                    <defs>
+                                      <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor={color} stopOpacity={0.45} />
+                                        <stop offset="100%" stopColor={color} stopOpacity={0} />
+                                      </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
+                                    <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                                    <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} />
+                                    <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                                    <Area type="monotone" dataKey={key} stroke={color} strokeWidth={2.5} fill={`url(#${gradId})`} dot={{ r: 2 }} activeDot={{ r: 6 }} />
+                                  </AreaChart>
+                                ) : (
+                                  <BarChart data={chartData}>
+                                    <defs>
+                                      <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor={color} stopOpacity={1} />
+                                        <stop offset="100%" stopColor={color} stopOpacity={0.35} />
+                                      </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
+                                    <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                                    <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} domain={key === 'perf' ? [0, 100] : undefined} />
+                                    <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                                    <Bar dataKey={key} fill={`url(#${gradId})`} radius={[6, 6, 0, 0]} />
+                                  </BarChart>
+                                )}
+                              </ResponsiveContainer>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+
+                  <p className="text-center text-[10px] leading-relaxed text-[var(--text-dim)] max-w-2xl mx-auto pb-6">
+                    RoundSync is an independent, fan-made tool and is not affiliated with or endorsed by Valve Corporation.
+                    Counter-Strike 2, map imagery, and rank icons are trademarks/property of Valve Corporation, used here for
+                    identification purposes only.
+                  </p>
+                </>
               )}
             </div>
           </div>

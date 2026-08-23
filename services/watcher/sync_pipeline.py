@@ -297,7 +297,10 @@ def _angle_diff(a: float, b: float) -> float:
 
 
 def _get_player_rank(parser, target_steam_id64: str):
-    """Returns (rank_new, rank_type_id) from the demo's own rank_update event, or (None, None)."""
+    """Returns (rank_new, rank_old, rank_type_id) from the demo's own rank_update event, or
+    (None, None, None). rank_new is the player's rank AFTER this match (what the rest of the
+    fact tables already store); rank_old is their rank BEFORE it started — i.e. what their
+    Recent Matches card should show as "rank at match start" (see Part 4 of the redesign)."""
     target = str(target_steam_id64)
     try:
         rank_df = parser.parse_event("rank_update")
@@ -305,11 +308,12 @@ def _get_player_rank(parser, target_steam_id64: str):
         if not mine.empty:
             last = mine.sort_values("tick").iloc[-1]
             rank_new = int(last["rank_new"]) if pd.notna(last["rank_new"]) else None
+            rank_old = int(last["rank_old"]) if pd.notna(last["rank_old"]) else None
             rank_type_id = int(last["rank_type_id"]) if pd.notna(last["rank_type_id"]) else None
-            return rank_new, rank_type_id
+            return rank_new, rank_old, rank_type_id
     except Exception:
         pass
-    return None, None
+    return None, None, None
 
 
 def _find_enemy_audible_triggers(parser, target: str, round_bounds: dict) -> list:
@@ -419,7 +423,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
             deaths_this_round = [t for t in target_death_ticks if round_for(t) == rnd]
             return not any(dt <= tick for dt in deaths_this_round)
 
-        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
+        player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
 
         triggers = []  # each: (trigger_type, trigger_tick, extra_fields_dict)
         for _, d in death_df.iterrows():
@@ -585,7 +589,7 @@ def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
         sample_ticks.update(int(t) for t in target_deaths["tick"].tolist())
 
         snap = parser.parse_ticks(["X", "Y", "Z", "team_num", "is_alive"], ticks=sorted(sample_ticks))
-        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
+        player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
 
         def death_at_or_after(round_number, from_tick, to_tick):
             if target_deaths.empty:
@@ -737,7 +741,7 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
         hurt_df = parser.parse_event("player_hurt")
         death_df = parser.parse_event("player_death")
         pos_df = parser.parse_ticks(["X", "Y", "Z", "yaw", "team_num", "is_alive"], ticks=opening_ticks)
-        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
+        player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
 
         for opening_tick in opening_ticks:
             trow = pos_df[(pos_df["tick"] == opening_tick) & (pos_df["steamid"].astype(str) == target)]
@@ -861,7 +865,7 @@ def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
                 sample_ticks.add(t)
                 t += POSITIONING_SAMPLE_INTERVAL_TICKS
         snap = parser.parse_ticks(["team_num", "is_alive"], ticks=sorted(sample_ticks))
-        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
+        player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
 
         def running_stats(steamid, cutoff_tick):
             kills = len(death_df[(death_df["attacker_steamid"].astype(str) == steamid) & (death_df["tick"] < cutoff_tick)])
@@ -949,6 +953,151 @@ def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
     except Exception as e:
         print(f"⚠️ Warning parsing fact_engage_decision: {e}")
     return rows
+
+
+def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -> dict:
+    """Four Home-dashboard KPI tiles, computed once per match from data already parsed here
+    (deaths_df is passed in so this doesn't re-run parse_event("player_death") a second time).
+    Every value defaults to None and is left out of the telemetry blob by the caller when it
+    couldn't be computed — same optional-field/graceful-fallback pattern as total_damage/
+    headshots/rounds_played already use, so older already-parsed matches just show nothing for
+    a tile instead of a fake zero."""
+    target = str(target_steam_id64)
+    metrics = {
+        "entry_success_pct": None,
+        "utility_dmg_per_round": None,
+        "clutches_won": None,
+        "trade_kill_pct": None,
+    }
+    try:
+        freeze_end_df = parser.parse_event("round_freeze_end")
+        round_end_df = parser.parse_event("round_end")
+        if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
+            return metrics
+        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
+
+        round_bounds = {}
+        for round_number, start_tick in enumerate(freeze_ticks, start=1):
+            end_rows = round_end_df[round_end_df["round"] == round_number]
+            if not end_rows.empty:
+                round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]), str(end_rows.iloc[0]["winner"]))
+        if not round_bounds:
+            return metrics
+
+        if deaths_df.empty or "user_steamid" not in deaths_df.columns or "attacker_steamid" not in deaths_df.columns:
+            return metrics
+
+        team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks)
+
+        def team_for(steamid, tick):
+            candidates = [t for t in freeze_ticks if t <= tick]
+            lookup_tick = max(candidates) if candidates else freeze_ticks[0]
+            sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
+            return None if sub.empty else ("CT" if int(sub.iloc[0]["team_num"]) == 3 else "T")
+
+        # --- 1. Entry Success % — win rate of the FIRST death of the round, for either side,
+        # when target was one of the two people involved (the killer or the victim). Rounds
+        # where target wasn't part of the opening duel are excluded entirely, not counted as
+        # a loss, since they say nothing about target's own entry performance.
+        entry_wins, entry_losses = 0, 0
+        for start_tick, end_tick, _winner in round_bounds.values():
+            round_deaths = deaths_df[(deaths_df["tick"] >= start_tick) & (deaths_df["tick"] <= end_tick)]
+            if round_deaths.empty:
+                continue
+            first_death = round_deaths.sort_values("tick").iloc[0]
+            victim = str(first_death["user_steamid"])
+            attacker = str(first_death["attacker_steamid"])
+            if victim == target:
+                entry_losses += 1
+            elif attacker == target:
+                entry_wins += 1
+        entry_total = entry_wins + entry_losses
+        if entry_total > 0:
+            metrics["entry_success_pct"] = round(100 * entry_wins / entry_total, 1)
+
+        # --- 2. Clutches Won — target is the last player alive on their team, at least one
+        # enemy is still alive at that same moment, and their team goes on to win the round.
+        # Uses the same per-round alive-count sampling as extract_fact_engage_decision above
+        # (the "much cheaper clutch-detection signal" noted in DEMOPARSER2_FIELDS.md), not a
+        # full player_death reconstruction.
+        sample_ticks = set()
+        for start_tick, end_tick, _winner in round_bounds.values():
+            t = start_tick
+            while t <= end_tick:
+                sample_ticks.add(t)
+                t += POSITIONING_SAMPLE_INTERVAL_TICKS
+        alive_snap = parser.parse_ticks(["team_num", "is_alive"], ticks=sorted(sample_ticks))
+
+        clutches_won = 0
+        for start_tick, end_tick, winner in round_bounds.values():
+            round_snap = alive_snap[(alive_snap["tick"] >= start_tick) & (alive_snap["tick"] <= end_tick)]
+            if round_snap.empty:
+                continue
+            round_ticks_sorted = sorted(round_snap["tick"].unique())
+            target_team = team_for(target, start_tick)
+            if target_team is None or winner != target_team:
+                continue
+            was_clutch = False
+            for tick in round_ticks_sorted:
+                tick_rows = round_snap[round_snap["tick"] == tick]
+                trow = tick_rows[tick_rows["steamid"].astype(str) == target]
+                if trow.empty or not bool(trow.iloc[0]["is_alive"]):
+                    continue
+                target_team_num = int(trow.iloc[0]["team_num"])
+                teammates_alive = len(tick_rows[
+                    (tick_rows["team_num"] == target_team_num) & (tick_rows["is_alive"])
+                    & (tick_rows["steamid"].astype(str) != target)
+                ])
+                enemies_alive = len(tick_rows[(tick_rows["team_num"] != target_team_num) & (tick_rows["is_alive"])])
+                if teammates_alive == 0 and enemies_alive >= 1:
+                    was_clutch = True
+                    break
+            if was_clutch:
+                clutches_won += 1
+        metrics["clutches_won"] = clutches_won
+
+        # --- 3. Utility Dmg/Round — the aggregate m_iUtilityDamage scoreboard stat, sampled at
+        # the last tick of the match (it's a running total, so the final round's value is the
+        # match total) and divided by round count, same shape as ADR's total_damage/rounds_played.
+        try:
+            last_tick = max(end_tick for _, end_tick, _ in round_bounds.values())
+            util_snap = parser.parse_ticks(["utility_damage_total"], ticks=[last_tick])
+            util_row = util_snap[util_snap["steamid"].astype(str) == target]
+            if not util_row.empty:
+                utility_damage_total = float(util_row.iloc[0]["utility_damage_total"])
+                metrics["utility_dmg_per_round"] = round(utility_damage_total / len(round_bounds), 1)
+        except Exception as e:
+            print(f"⚠️ Warning parsing utility_damage_total: {e}")
+
+        # --- 4. Trade Kill % — of target's own kills, what share avenged a teammate: the enemy
+        # they killed had killed one of target's teammates within TRADE_KILL_WINDOW_TICKS (the
+        # same 3-second trade window fact_positioning_risk already uses, just applied in the
+        # other direction — crediting the trader instead of flagging the traded death).
+        my_kills = deaths_df[deaths_df["attacker_steamid"].astype(str) == target]
+        if not my_kills.empty:
+            trade_kills = 0
+            for _, kill in my_kills.iterrows():
+                kill_tick = int(kill["tick"])
+                enemy_steamid = str(kill["user_steamid"])
+                window_start = kill_tick - TRADE_KILL_WINDOW_TICKS
+                prior_enemy_kills = deaths_df[
+                    (deaths_df["attacker_steamid"].astype(str) == enemy_steamid)
+                    & (deaths_df["tick"] >= window_start) & (deaths_df["tick"] < kill_tick)
+                ]
+                if prior_enemy_kills.empty:
+                    continue
+                target_team = team_for(target, kill_tick)
+                for _, prior_kill in prior_enemy_kills.iterrows():
+                    victim = str(prior_kill["user_steamid"])
+                    if victim == target:
+                        continue
+                    if team_for(victim, kill_tick) == target_team:
+                        trade_kills += 1
+                        break
+            metrics["trade_kill_pct"] = round(100 * trade_kills / len(my_kills), 1)
+    except Exception as e:
+        print(f"⚠️ Warning parsing match secondary metrics: {e}")
+    return metrics
 
 
 def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
@@ -1078,6 +1227,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         total_deaths = 0
         headshots = 0
         rounds_played = 0
+        deaths_df = pd.DataFrame()
 
         try:
             deaths_df = parser.parse_event("player_death", other=["total_rounds_played"])
@@ -1107,6 +1257,14 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         calculated_kd = round(total_kills / max(1, total_deaths), 2)
         headshot_pct = round((headshots / max(1, total_kills)) * 100, 1) if total_kills > 0 else 0.0
         calculated_adr = round(total_damage / max(1, rounds_played), 1) if rounds_played > 0 else 0.0
+
+        # Rank at match START (not current rank) for the Recent Matches card — the demo's own
+        # rank_update event carries rank_old (pre-match) alongside rank_new (post-match, already
+        # used elsewhere). Only ranked Premier matches fire this event, so it's None for
+        # unranked/other modes — the frontend shows "—" for that match's rank pill in that case.
+        _rank_new_unused, rank_at_match_start, _rank_type_unused = _get_player_rank(parser, target_steam_id64)
+
+        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, deaths_df)
 
         fact_economy_rows = extract_fact_economy(parser, target_steam_id64)
         if fact_economy_rows:
@@ -1197,6 +1355,11 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "total_damage": total_damage,
                 "headshots": headshots,
                 "rounds_played": rounds_played,
+                "rank_at_match_start": rank_at_match_start,
+                "entry_success_pct": secondary_metrics["entry_success_pct"],
+                "utility_dmg_per_round": secondary_metrics["utility_dmg_per_round"],
+                "clutches_won": secondary_metrics["clutches_won"],
+                "trade_kill_pct": secondary_metrics["trade_kill_pct"],
                 "processing_seconds": round(time.time() - start_time, 1)
             }
         }
