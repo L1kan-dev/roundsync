@@ -58,12 +58,60 @@ function formatMapName(map?: string | null): string {
   return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+const markdownComponents = {
+  h1: (p: React.ComponentProps<'h3'>) => <h3 className="font-display font-bold text-base mt-2 mb-1" {...p} />,
+  h2: (p: React.ComponentProps<'h3'>) => <h3 className="font-display font-bold text-base mt-2 mb-1" {...p} />,
+  h3: (p: React.ComponentProps<'h4'>) => <h4 className="font-display font-bold text-sm mt-2 mb-1" {...p} />,
+  strong: (p: React.ComponentProps<'strong'>) => <strong className="text-[var(--cyan)] font-semibold" {...p} />,
+  hr: () => <hr className="border-[var(--edge)] my-2" />,
+  ul: (p: React.ComponentProps<'ul'>) => <ul className="list-disc list-inside space-y-1 my-1" {...p} />,
+  ol: (p: React.ComponentProps<'ol'>) => <ol className="list-decimal list-inside space-y-1 my-1" {...p} />,
+  p: (p: React.ComponentProps<'p'>) => <p className="mb-2 last:mb-0" {...p} />,
+};
+
+const TYPEWRITER_CHARS_PER_TICK = 3;
+const TYPEWRITER_TICK_MS = 15;
+
+// Shown as clickable starting points in the empty chat state — teaches good question
+// shape by example (specific, tied to a real decision) instead of a wall of instructions.
+const EXAMPLE_COACH_PROMPTS = [
+  'Why do I keep dying early in rounds?',
+  'Am I throwing away rounds by buying when the team is on an eco?',
+  'Are my flashes helping my team or blinding them?',
+  'How is my reaction time to information compared to my rank?',
+];
+
+// Reveals a finished AI reply a few characters at a time instead of it appearing all at
+// once ("teleporting" onto screen). skipAnimation lets an already-seen message render
+// instantly on re-render, so the effect only ever plays once per message.
+function TypedAssistantMessage({ content, skipAnimation, onDone }: { content: string; skipAnimation: boolean; onDone: () => void }) {
+  const [visibleChars, setVisibleChars] = useState(skipAnimation ? content.length : 0);
+
+  useEffect(() => {
+    if (skipAnimation) return;
+    let shown = 0;
+    const interval = setInterval(() => {
+      shown = Math.min(shown + TYPEWRITER_CHARS_PER_TICK, content.length);
+      setVisibleChars(shown);
+      if (shown >= content.length) {
+        clearInterval(interval);
+        onDone();
+      }
+    }, TYPEWRITER_TICK_MS);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return <ReactMarkdown components={markdownComponents}>{content.slice(0, visibleChars)}</ReactMarkdown>;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<'home' | 'matches' | 'coach' | 'settings'>('home');
   const [steamId, setSteamId] = useState<string | null>(null);
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
+  const typedMessageIndices = useRef<Set<number>>(new Set());
 
   // Onboarding status — null while unknown, then a real true/false from the server
   const [isOnboarded, setIsOnboarded] = useState<boolean | null>(null);
@@ -104,6 +152,29 @@ export default function Home() {
       setAvatarUrl(data.avatarUrl || null);
     } catch (err) {
       console.error('Error fetching profile:', err);
+    }
+  }, []);
+
+  // Loads past coaching Q&A on page load so a refresh doesn't wipe the conversation.
+  // Every loaded message is marked as already-typed so the typewriter effect only ever
+  // plays for a genuinely new reply, not on every past message when history is restored.
+  const fetchChatHistory = useCallback(async (token: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/coaching/history`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.status === 401 || response.status === 403) return;
+      const data = await response.json();
+      if (!Array.isArray(data.history)) return;
+      const restored: { role: 'user' | 'assistant'; content: string }[] = [];
+      data.history.forEach((h: { question: string; response: string }) => {
+        restored.push({ role: 'user', content: h.question });
+        restored.push({ role: 'assistant', content: h.response });
+      });
+      restored.forEach((m, idx) => { if (m.role === 'assistant') typedMessageIndices.current.add(idx); });
+      setMessages(restored);
+    } catch (err) {
+      console.error('Error fetching chat history:', err);
     }
   }, []);
 
@@ -158,13 +229,14 @@ export default function Home() {
       fetchProfile(jwtToken);
       fetchMatches();
       fetchSyncStatus(jwtToken);
+      fetchChatHistory(jwtToken);
       const interval = setInterval(() => {
         fetchMatches();
         fetchSyncStatus(jwtToken);
       }, 10000);
       return () => clearInterval(interval);
     }
-  }, [jwtToken, fetchProfile, fetchMatches, fetchSyncStatus]);
+  }, [jwtToken, fetchProfile, fetchMatches, fetchSyncStatus, fetchChatHistory]);
 
   // Tick every second so the "elapsed" timer on the currently-downloading match moves smoothly
   // between the 10-second polls, instead of jumping.
@@ -222,6 +294,7 @@ export default function Home() {
     setJwtToken(null);
     setMatches([]);
     setMessages([]);
+    typedMessageIndices.current.clear();
     setIsOnboarded(null);
     setPersonaName(null);
     setAvatarUrl(null);
@@ -710,7 +783,21 @@ export default function Home() {
                         <Brain className="w-8 h-8 text-[var(--cyan)]" />
                       </div>
                       <p className="font-display font-bold text-lg text-[var(--text)]">Your AI Coach is ready</p>
-                      <p className="text-sm max-w-md">Ask questions like: "Why is my ADR dropping?" or "How can I improve my utility usage?"</p>
+                      <p className="text-sm max-w-md mb-4">
+                        Specific questions get specific answers — vague ones like "am I good?" just waste a question. Try one of these, or ask your own the same way:
+                      </p>
+                      <div className="flex flex-wrap gap-2 justify-center max-w-lg">
+                        {EXAMPLE_COACH_PROMPTS.map((example) => (
+                          <button
+                            key={example}
+                            type="button"
+                            onClick={() => setChatInput(example)}
+                            className="text-xs px-3 py-1.5 rounded-full border border-[var(--edge)] bg-[var(--panel-raised)] text-[var(--text)] hover:border-[var(--cyan-dim)] hover:text-[var(--cyan)] transition-colors"
+                          >
+                            {example}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : (
                     messages.map((m, idx) => (
@@ -728,20 +815,11 @@ export default function Home() {
                           }`}
                         >
                           {m.role === 'assistant' ? (
-                            <ReactMarkdown
-                              components={{
-                                h1: (p) => <h3 className="font-display font-bold text-base mt-2 mb-1" {...p} />,
-                                h2: (p) => <h3 className="font-display font-bold text-base mt-2 mb-1" {...p} />,
-                                h3: (p) => <h4 className="font-display font-bold text-sm mt-2 mb-1" {...p} />,
-                                strong: (p) => <strong className="text-[var(--cyan)] font-semibold" {...p} />,
-                                hr: () => <hr className="border-[var(--edge)] my-2" />,
-                                ul: (p) => <ul className="list-disc list-inside space-y-1 my-1" {...p} />,
-                                ol: (p) => <ol className="list-decimal list-inside space-y-1 my-1" {...p} />,
-                                p: (p) => <p className="mb-2 last:mb-0" {...p} />,
-                              }}
-                            >
-                              {m.content}
-                            </ReactMarkdown>
+                            <TypedAssistantMessage
+                              content={m.content}
+                              skipAnimation={typedMessageIndices.current.has(idx)}
+                              onDone={() => typedMessageIndices.current.add(idx)}
+                            />
                           ) : (
                             <p className="whitespace-pre-wrap">{m.content}</p>
                           )}
