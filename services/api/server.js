@@ -225,10 +225,30 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
       }
     }
 
+    // Real Premier CS Rating for the Home dashboard's rank badge — cheap: reuses the
+    // same fact_adaptation_event lookup the AI Coach and Insights dashboard already use.
+    let rankNew = null;
+    let rankTypeId = null;
+    try {
+      const { data: recentMatches } = await supabase
+        .from('matches')
+        .select('match_id')
+        .eq('steam_id64', steamId)
+        .order('parsed_at', { ascending: false })
+        .limit(30);
+      const rankInfo = await getPlayerRankInfo(steamId, (recentMatches || []).map((m) => m.match_id));
+      rankNew = rankInfo.rankNew;
+      rankTypeId = rankInfo.rankTypeId;
+    } catch (rankErr) {
+      console.warn('⚠️ Could not fetch rank info:', rankErr.message);
+    }
+
     res.json({
       onboarded: Boolean(userRow?.game_auth_code),
       personaName,
-      avatarUrl
+      avatarUrl,
+      rankNew,
+      rankTypeId
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user profile.' });

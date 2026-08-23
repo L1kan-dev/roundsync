@@ -3,10 +3,9 @@
 import React, { useEffect, useState } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
 import {
-  Loader2, Sparkles, Coins, Flame, Ear, Users, MapPinned, Crosshair, MessageCircleQuestion,
+  Loader2, Coins, Flame, Ear, Users, MapPinned, Crosshair, MessageCircleQuestion, ChevronDown,
 } from 'lucide-react';
 import { formatMapName } from '@/app/page';
-import { RankBandTakeover, RankDeltaBadge, type RankChangeEvent } from '@/components/RankChangeOverlay';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -51,25 +50,6 @@ interface DashboardPayload {
   loadoutMix: Record<string, number>;
 }
 
-// Same real, current (2026) Premier CS Rating bands used server-side for the AI Coach's tone.
-const RANK_BANDS = [
-  { max: 4999, label: 'Grey', color: '#9ca3af' },
-  { max: 9999, label: 'Light Blue', color: '#7dd3fc' },
-  { max: 14999, label: 'Blue', color: '#60a5fa' },
-  { max: 19999, label: 'Purple', color: '#a78bfa' },
-  { max: 24999, label: 'Pink', color: '#f472b6' },
-  { max: 29999, label: 'Red', color: '#ef4444' },
-  { max: Infinity, label: 'Gold', color: '#fbbf24' },
-];
-function rankBand(rankNew: number | null) {
-  if (rankNew === null || rankNew === undefined) return null;
-  return RANK_BANDS.find((b) => rankNew <= b.max) || RANK_BANDS[RANK_BANDS.length - 1];
-}
-function rankBandIndex(rankNew: number): number {
-  const idx = RANK_BANDS.findIndex((b) => rankNew <= b.max);
-  return idx === -1 ? RANK_BANDS.length - 1 : idx;
-}
-const LAST_KNOWN_RANK_KEY = 'roundsync_last_known_rank';
 
 const CATEGORY_META: Record<string, { label: string; askPrompt: string }> = {
   economic_discipline: { label: 'Economic Discipline', askPrompt: 'Which rounds was I buying against my team\'s economy?' },
@@ -96,51 +76,6 @@ const LOADOUT_COLORS: Record<string, string> = {
   full_buy: 'var(--series-cyan)', half_buy: 'var(--series-violet)', force_buy: 'var(--series-rose)',
   eco: 'var(--series-amber)', carried_over: 'var(--edge-bright)',
 };
-
-function useCountUp(target: number, active: boolean, durationMs = 900) {
-  const [value, setValue] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    let raf = 0;
-    const start = performance.now();
-    const tick = (now: number) => {
-      const progress = Math.min(1, (now - start) / durationMs);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setValue(Math.round(target * eased));
-      if (progress < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, target, durationMs]);
-  return value;
-}
-
-function ScoreBar({ label, value, delayMs, onAsk }: { label: string; value: number; delayMs: number; onAsk: () => void }) {
-  const [filled, setFilled] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setFilled(true), delayMs);
-    return () => clearTimeout(t);
-  }, [delayMs]);
-  const displayed = useCountUp(value, filled, 900);
-  const color = value < 50 ? 'var(--amber)' : 'var(--cyan)';
-  return (
-    <button type="button" onClick={onAsk} className="w-full text-left group">
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-sm font-medium text-[var(--text)] group-hover:text-[var(--cyan)] transition-colors">{label}</span>
-        <span className="font-tel text-sm font-bold" style={{ color }}>
-          {displayed}<span className="text-[var(--text-dim)] font-normal">/100</span>
-        </span>
-      </div>
-      <div className="h-2.5 rounded-full bg-[var(--panel-raised)] border border-[var(--edge)] overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all ease-out"
-          style={{ width: filled ? `${value}%` : '0%', background: color, transitionDuration: '1100ms' }}
-        />
-      </div>
-    </button>
-  );
-}
 
 function EmptyCard({ label }: { label: string }) {
   return (
@@ -303,20 +238,61 @@ function MapHeatmap({ rows }: { rows: MapBreakdownRow[] }) {
   );
 }
 
-type SubTab = 'overview' | 'aim' | 'decisions' | 'resources';
+type SubTab = 'aim' | 'decisions' | 'resources' | 'maps';
 
 const SUB_TABS: { key: SubTab; label: string; icon: React.ElementType }[] = [
-  { key: 'overview', label: 'Overview', icon: Sparkles },
   { key: 'aim', label: 'Aim & Reaction', icon: Crosshair },
   { key: 'decisions', label: 'Decision-Making', icon: Users },
   { key: 'resources', label: 'Economy & Utility', icon: Coins },
+  { key: 'maps', label: 'Performance by Map', icon: MapPinned },
 ];
+
+function CategoryDropdown({ value, onChange }: { value: SubTab; onChange: (v: SubTab) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+  const current = SUB_TABS.find((t) => t.key === value)!;
+  const CurrentIcon = current.icon;
+  return (
+    <div className="relative w-fit" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-3 pl-4 pr-3 py-2.5 rounded-xl border border-[var(--edge)] bg-[var(--panel)] hover:border-[var(--cyan-dim)] transition-colors min-w-[240px]"
+      >
+        <CurrentIcon className="w-4 h-4 text-[var(--cyan)]" />
+        <span className="font-display font-bold text-sm flex-1 text-left">{current.label}</span>
+        <ChevronDown className={`w-4 h-4 text-[var(--text-dim)] transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="dropdown-enter absolute left-0 mt-2 w-full min-w-[240px] bg-[var(--panel)] border border-[var(--edge)] rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-20">
+          {SUB_TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => { onChange(key); setOpen(false); }}
+              className={`w-full flex items-center gap-3 px-4 py-3 text-sm text-left transition-colors ${
+                key === value ? 'text-[var(--cyan)] bg-[var(--panel-raised)]' : 'hover:bg-[var(--panel-raised)]'
+              }`}
+            >
+              <Icon className="w-4 h-4" /> {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; onAskCoach: (question: string) => void }) {
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [subTab, setSubTab] = useState<SubTab>('overview');
-  const [rankChangeEvent, setRankChangeEvent] = useState<RankChangeEvent | null>(null);
+  const [subTab, setSubTab] = useState<SubTab>('aim');
 
   useEffect(() => {
     let cancelled = false;
@@ -336,41 +312,6 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
     return () => { cancelled = true; };
   }, [jwtToken]);
 
-  // Detects a real rank change since the last time this player loaded Insights (tracked
-  // per-browser via localStorage, not a server-side history table — this is purely a
-  // presentation flourish, not data the rest of the app depends on). Fires the full-screen
-  // takeover only when the player crossed into a different Premier band; a same-band move
-  // gets the small inline badge instead.
-  useEffect(() => {
-    if (!data || data.rankNew === null || data.rankNew === undefined) return;
-    let stored: string | null = null;
-    try {
-      stored = localStorage.getItem(LAST_KNOWN_RANK_KEY);
-    } catch {
-      return;
-    }
-    const prevRank = stored !== null ? parseInt(stored, 10) : null;
-    if (prevRank !== null && !Number.isNaN(prevRank) && prevRank !== data.rankNew) {
-      const prevBandIdx = rankBandIndex(prevRank);
-      const newBandIdx = rankBandIndex(data.rankNew);
-      setRankChangeEvent({
-        direction: data.rankNew > prevRank ? 'up' : 'down',
-        crossedBand: prevBandIdx !== newBandIdx,
-        prevRank,
-        newRank: data.rankNew,
-        prevBandLabel: RANK_BANDS[prevBandIdx].label,
-        newBandLabel: RANK_BANDS[newBandIdx].label,
-        prevBandColor: RANK_BANDS[prevBandIdx].color,
-        newBandColor: RANK_BANDS[newBandIdx].color,
-      });
-    }
-    try {
-      localStorage.setItem(LAST_KNOWN_RANK_KEY, String(data.rankNew));
-    } catch {
-      // best-effort only — a private window or cleared storage just means no celebration next time
-    }
-  }, [data]);
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[50vh] text-[var(--text-dim)] gap-3">
@@ -382,72 +323,41 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
     return <div className="max-w-3xl mx-auto px-6 py-16 text-center text-[var(--text-dim)]">Couldn't load your insights right now.</div>;
   }
 
-  const band = rankBand(data.rankNew);
   const { factSummary } = data;
+  const hasScores = CATEGORY_ORDER.some((k) => data.categoryScores[k] !== undefined);
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-10 space-y-8">
-      {rankChangeEvent && rankChangeEvent.crossedBand && (
-        <RankBandTakeover event={rankChangeEvent} onDone={() => setRankChangeEvent(null)} />
+    <div className="max-w-7xl mx-auto px-6 py-10 space-y-6">
+      {/* Compact score strip — the one thing unique to Insights vs. Home's raw match stats:
+          the synthesized decision-quality scores, not another copy of K/D/ADR/HS. */}
+      {hasScores && (
+        <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-5 card-in">
+          <div className="flex flex-wrap gap-x-8 gap-y-3">
+            {CATEGORY_ORDER.filter((k) => data.categoryScores[k] !== undefined).map((key) => {
+              const value = data.categoryScores[key];
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onAskCoach(CATEGORY_META[key].askPrompt)}
+                  className="flex items-center gap-2 group"
+                >
+                  <span className="text-xs text-[var(--text-dim)] group-hover:text-[var(--text)] transition-colors">{CATEGORY_META[key].label}</span>
+                  <span className={`font-tel text-sm font-bold ${value < 50 ? 'text-[var(--amber)]' : 'text-[var(--cyan)]'}`}>{value}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
-      {/* Hero: rank + headline */}
-      <div className="hud-corners glass border border-[var(--edge)] rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4 card-in">
-        <div>
-          <h2 className="font-display text-2xl font-bold mb-1">Decision Quality Snapshot</h2>
-          <p className="text-xs text-[var(--text-dim)]">
-            An early scoring convention built from your own {data.matchesTracked} tracked games — not a population benchmark.
-          </p>
-        </div>
-        {band && (
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full border border-[var(--edge)]" style={{ borderColor: band.color + '55' }}>
-            <span className="w-2.5 h-2.5 rounded-full" style={{ background: band.color }} />
-            <span className="text-sm font-semibold">{band.label} · {data.rankNew?.toLocaleString()} CS Rating</span>
-            {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
-          </div>
-        )}
-      </div>
+      {/* Dropdown selector — pick one category, see it full screen */}
+      <CategoryDropdown value={subTab} onChange={setSubTab} />
 
-      {/* Sub-nav */}
-      <div className="flex flex-wrap gap-1 bg-[var(--panel)]/60 border border-[var(--edge)] rounded-full p-1 w-fit">
-        {SUB_TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setSubTab(key)}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              subTab === key ? 'bg-[var(--cyan)] text-[#03141a]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
-            }`}
-          >
-            <Icon className="w-4 h-4" /> {label}
-          </button>
-        ))}
-      </div>
-
-      {subTab === 'overview' && (
-        <div className="space-y-6">
-          <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ animationDelay: '80ms' }}>
-            <h3 className="font-display font-bold text-lg mb-5">Category Scores</h3>
-            {CATEGORY_ORDER.some((k) => data.categoryScores[k] !== undefined) ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
-                {CATEGORY_ORDER.filter((k) => data.categoryScores[k] !== undefined).map((key, i) => (
-                  <ScoreBar
-                    key={key}
-                    label={CATEGORY_META[key].label}
-                    value={data.categoryScores[key]}
-                    delayMs={150 + i * 80}
-                    onAsk={() => onAskCoach(CATEGORY_META[key].askPrompt)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <EmptyCard label="category score" />
-            )}
-          </div>
-
-          <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ animationDelay: '160ms' }}>
-            <h3 className="font-display font-bold text-lg mb-4">Performance by Map</h3>
-            <MapHeatmap rows={data.mapBreakdown} />
-          </div>
+      {subTab === 'maps' && (
+        <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-8 card-in">
+          <h3 className="font-display font-bold text-2xl mb-6">Performance by Map</h3>
+          <MapHeatmap rows={data.mapBreakdown} />
         </div>
       )}
 

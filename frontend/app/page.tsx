@@ -2,12 +2,15 @@
 
 import React, { useState, useEffect, useRef, useCallback, CSSProperties } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Brain, BarChart2, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download } from 'lucide-react';
+import { Brain, BarChart2, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
 import ReactMarkdown from 'react-markdown';
 import { Toast } from '@/components/Toast';
 import { TopNav } from '@/components/TopNav';
 import { InsightsDashboard } from '@/components/InsightsDashboard';
+import { RankBadge } from '@/components/RankBadge';
+import { RankBandTakeover, RankDeltaBadge, type RankChangeEvent } from '@/components/RankChangeOverlay';
+import { rankBand, rankBandIndex, RANK_BANDS, LAST_KNOWN_RANK_KEY } from '@/lib/rank';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -57,6 +60,54 @@ function matchSortKey(m: Match): number {
 export function formatMapName(map?: string | null): string {
   if (!map) return 'Unknown Map';
   return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+interface ChatHistoryEntry { question: string; response: string; created_at: string }
+interface ConversationGroup { id: string; entries: ChatHistoryEntry[]; startedAt: string; lastAt: string }
+
+// coaching_history has no explicit thread/session concept — it's one flat log per player.
+// Group it into browsable "conversations" the same way most chat apps do when they lack
+// real thread boundaries: a long gap since the last message starts a new one.
+const CONVERSATION_GAP_MS = 3 * 60 * 60 * 1000; // 3 hours
+
+function groupIntoConversations(history: ChatHistoryEntry[]): ConversationGroup[] {
+  const groups: ConversationGroup[] = [];
+  for (const entry of history) {
+    const last = groups[groups.length - 1];
+    const gap = last ? new Date(entry.created_at).getTime() - new Date(last.lastAt).getTime() : Infinity;
+    if (last && gap < CONVERSATION_GAP_MS) {
+      last.entries.push(entry);
+      last.lastAt = entry.created_at;
+    } else {
+      groups.push({ id: entry.created_at, entries: [entry], startedAt: entry.created_at, lastAt: entry.created_at });
+    }
+  }
+  return groups;
+}
+
+function conversationToMessages(group: ConversationGroup): { role: 'user' | 'assistant'; content: string }[] {
+  const messages: { role: 'user' | 'assistant'; content: string }[] = [];
+  group.entries.forEach((e) => {
+    messages.push({ role: 'user', content: e.question });
+    messages.push({ role: 'assistant', content: e.response });
+  });
+  return messages;
+}
+
+function conversationPreview(group: ConversationGroup): string {
+  const first = group.entries[0]?.question || '';
+  return first.length > 48 ? first.slice(0, 48) + '…' : first;
+}
+
+function conversationDateLabel(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+  if (isToday) return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (isYesterday) return 'Yesterday';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 const markdownComponents = {
@@ -123,6 +174,8 @@ export default function Home() {
   // Real Steam identity — fetched from the server, not just the raw SteamID
   const [personaName, setPersonaName] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [rankNew, setRankNew] = useState<number | null>(null);
+  const [rankChangeEvent, setRankChangeEvent] = useState<RankChangeEvent | null>(null);
 
   const [showWelcomeToast, setShowWelcomeToast] = useState(false);
 
@@ -140,6 +193,13 @@ export default function Home() {
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Conversations for the recent-chats sidebar. Initial grouping comes from a gap-based
+  // heuristic over server history (coaching_history has no real thread concept); once
+  // loaded, groups are managed as real client state (not re-derived), so "New Chat"
+  // followed immediately by a message reliably starts its own group instead of silently
+  // merging into the previous one because they happened to be close in time.
+  const [conversations, setConversations] = useState<ConversationGroup[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
 
   const fetchProfile = useCallback(async (token: string) => {
     try {
@@ -151,6 +211,7 @@ export default function Home() {
       setIsOnboarded(Boolean(data.onboarded));
       setPersonaName(data.personaName || null);
       setAvatarUrl(data.avatarUrl || null);
+      setRankNew(typeof data.rankNew === 'number' ? data.rankNew : null);
     } catch (err) {
       console.error('Error fetching profile:', err);
     }
@@ -167,13 +228,9 @@ export default function Home() {
       if (response.status === 401 || response.status === 403) return;
       const data = await response.json();
       if (!Array.isArray(data.history)) return;
-      const restored: { role: 'user' | 'assistant'; content: string }[] = [];
-      data.history.forEach((h: { question: string; response: string }) => {
-        restored.push({ role: 'user', content: h.question });
-        restored.push({ role: 'assistant', content: h.response });
-      });
-      restored.forEach((m, idx) => { if (m.role === 'assistant') typedMessageIndices.current.add(idx); });
-      setMessages(restored);
+      // Only populates the recent-chats sidebar — the chat pane itself starts blank on
+      // a fresh page load. The player picks a past conversation to continue, or starts new.
+      setConversations(groupIntoConversations(data.history));
     } catch (err) {
       console.error('Error fetching chat history:', err);
     }
@@ -238,6 +295,42 @@ export default function Home() {
       return () => clearInterval(interval);
     }
   }, [jwtToken, fetchProfile, fetchMatches, fetchSyncStatus, fetchChatHistory]);
+
+  // Detects a real rank change since the last time this player loaded Home (tracked
+  // per-browser via localStorage, not a server-side history table — this is purely a
+  // presentation flourish, not data the rest of the app depends on). Fires the full-screen
+  // takeover only when the player crossed into a different Premier band; a same-band move
+  // gets the small inline badge instead. Lives on Home (not Insights) since this is where
+  // the player's rank badge is actually shown.
+  useEffect(() => {
+    if (rankNew === null || rankNew === undefined) return;
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(LAST_KNOWN_RANK_KEY);
+    } catch {
+      return;
+    }
+    const prevRank = stored !== null ? parseInt(stored, 10) : null;
+    if (prevRank !== null && !Number.isNaN(prevRank) && prevRank !== rankNew) {
+      const prevBandIdx = rankBandIndex(prevRank);
+      const newBandIdx = rankBandIndex(rankNew);
+      setRankChangeEvent({
+        direction: rankNew > prevRank ? 'up' : 'down',
+        crossedBand: prevBandIdx !== newBandIdx,
+        prevRank,
+        newRank: rankNew,
+        prevBandLabel: RANK_BANDS[prevBandIdx].label,
+        newBandLabel: RANK_BANDS[newBandIdx].label,
+        prevBandColor: RANK_BANDS[prevBandIdx].color,
+        newBandColor: RANK_BANDS[newBandIdx].color,
+      });
+    }
+    try {
+      localStorage.setItem(LAST_KNOWN_RANK_KEY, String(rankNew));
+    } catch {
+      // best-effort only — a private window or cleared storage just means no celebration next time
+    }
+  }, [rankNew]);
 
   // Tick every second so the "elapsed" timer on the currently-downloading match moves smoothly
   // between the 10-second polls, instead of jumping.
@@ -360,6 +453,23 @@ export default function Home() {
       const data = await response.json();
       if (data.response) {
         setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+
+        // File this real exchange into the active conversation (or start a new one if
+        // there isn't one — first message ever, or right after "New Chat").
+        const newEntry: ChatHistoryEntry = { question: userMsg, response: data.response, created_at: new Date().toISOString() };
+        const existingIdx = activeConversationId ? conversations.findIndex((g) => g.id === activeConversationId) : -1;
+        if (existingIdx !== -1) {
+          setConversations((prev) => {
+            const updated = [...prev];
+            const group = updated[existingIdx];
+            updated[existingIdx] = { ...group, entries: [...group.entries, newEntry], lastAt: newEntry.created_at };
+            return updated;
+          });
+        } else {
+          const newGroup: ConversationGroup = { id: newEntry.created_at, entries: [newEntry], startedAt: newEntry.created_at, lastAt: newEntry.created_at };
+          setConversations((prev) => [...prev, newGroup]);
+          setActiveConversationId(newGroup.id);
+        }
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ Error: ${data.error || 'Server error'}` }]);
       }
@@ -368,6 +478,18 @@ export default function Home() {
     } finally {
       setIsSendingMessage(false);
     }
+  };
+
+  const switchConversation = (group: ConversationGroup) => {
+    const restored = conversationToMessages(group);
+    restored.forEach((m, idx) => { if (m.role === 'assistant') typedMessageIndices.current.add(idx); });
+    setMessages(restored);
+    setActiveConversationId(group.id);
+  };
+
+  const startNewChat = () => {
+    setMessages([]);
+    setActiveConversationId(null);
   };
 
   // Compute Dashboard Metrics
@@ -551,6 +673,10 @@ export default function Home() {
           </div>
         ) : (
           <div>
+            {rankChangeEvent && rankChangeEvent.crossedBand && (
+              <RankBandTakeover event={rankChangeEvent} onDone={() => setRankChangeEvent(null)} />
+            )}
+
             {/* Hero band — the featured KD ring, secondary stats. Atmosphere comes from the global app backdrop. */}
             <div className="relative">
               <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12 pb-10">
@@ -562,6 +688,21 @@ export default function Home() {
                 </p>
 
                 <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
+                  {rankBand(rankNew) && (
+                    <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 gap-2">
+                      <RankBadge color={rankBand(rankNew)!.color} size={88} />
+                      <div className="text-center">
+                        <p className="font-tel text-xl font-extrabold" style={{ color: rankBand(rankNew)!.color }}>
+                          {rankNew!.toLocaleString()}
+                        </p>
+                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">{rankBand(rankNew)!.label} · CS Rating</p>
+                        {rankChangeEvent && !rankChangeEvent.crossedBand && (
+                          <div className="mt-1 flex justify-center"><RankDeltaBadge event={rankChangeEvent} /></div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 relative">
                     <div
                       className="relative w-32 h-32 stat-ring"
@@ -791,12 +932,45 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="max-w-5xl mx-auto px-6 py-6 w-full flex-1 min-h-0 flex flex-col">
+          <div className="max-w-6xl mx-auto px-6 py-6 w-full flex-1 min-h-0 flex flex-col">
             {!isOnboarded ? (
               <div className="bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl flex items-center gap-4 text-[var(--amber)] justify-center">
                 <ShieldAlert className="w-6 h-6" /> Finish the one-time setup on Home before consulting your Coach.
               </div>
             ) : (
+              <div className="flex-1 min-h-0 flex gap-4">
+              {/* Recent chats sidebar */}
+              <div className="w-64 shrink-0 hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl flex flex-col overflow-hidden">
+                <div className="p-3 border-b border-[var(--edge)]">
+                  <button
+                    onClick={startNewChat}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--cyan)] hover:bg-[#5eead4] text-[#03141a] font-bold text-sm transition-colors"
+                  >
+                    <Plus className="w-4 h-4" /> New Chat
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                  {conversations.length === 0 ? (
+                    <p className="text-xs text-[var(--text-dim)] text-center py-6 px-3">Your past conversations will show up here.</p>
+                  ) : (
+                    [...conversations].reverse().map((group) => (
+                      <button
+                        key={group.id}
+                        onClick={() => switchConversation(group)}
+                        className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-colors border ${
+                          activeConversationId === group.id
+                            ? 'bg-[var(--panel-raised)] border-[var(--cyan-dim)]'
+                            : 'border-transparent hover:bg-[var(--panel-raised)]'
+                        }`}
+                      >
+                        <p className="font-medium text-[var(--text)] truncate">{conversationPreview(group)}</p>
+                        <p className="text-[10px] text-[var(--text-dim)] mt-0.5">{conversationDateLabel(group.lastAt)}</p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
               <div className="hud-corners glass flex-1 border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col min-h-0">
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {messages.length === 0 ? (
@@ -889,6 +1063,7 @@ export default function Home() {
                     Ask Coach
                   </button>
                 </form>
+              </div>
               </div>
             )}
           </div>
