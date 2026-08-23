@@ -446,7 +446,8 @@ export default function Home() {
                 <h1 className="font-display text-4xl font-bold mb-8 truncate">{personaName || 'Player'}</h1>
 
                 <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
-                  <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0">
+                  <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 relative">
+                    <span className="absolute top-4 right-5 text-[10px] text-[var(--text-dim)]">{parsedMatches.length} games</span>
                     <div
                       className="relative w-32 h-32 stat-ring"
                       style={{ '--pct': kdRingPct } as CSSProperties}
@@ -460,11 +461,17 @@ export default function Home() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
                     <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
-                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg ADR</p>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
+                        <p className="text-[10px] text-[var(--text-dim)]">{parsedMatches.length} games</p>
+                      </div>
                       <p className="font-tel text-2xl font-bold">{avgAdr}</p>
                     </div>
                     <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
-                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Headshot %</p>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
+                        <p className="text-[10px] text-[var(--text-dim)]">{parsedMatches.length} games</p>
+                      </div>
                       <p className="font-tel text-2xl font-bold">{avgHs}%</p>
                     </div>
                     <div className="glass border border-[var(--edge)] rounded-2xl p-5 flex flex-col justify-center">
@@ -549,17 +556,7 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-display text-xl font-bold">Trends</h2>
-                    <button
-                      onClick={fetchMatches}
-                      disabled={isLoadingMatches}
-                      className="px-4 py-2 bg-[var(--panel-raised)] hover:bg-[var(--edge)] text-[var(--text)] font-medium rounded-xl transition-all flex items-center gap-2 border border-[var(--edge)] text-sm"
-                    >
-                      {isLoadingMatches ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                      Refresh
-                    </button>
-                  </div>
+                  <h2 className="font-display text-xl font-bold">Trends</h2>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
