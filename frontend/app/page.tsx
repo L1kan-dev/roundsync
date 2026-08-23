@@ -288,8 +288,15 @@ export default function Home() {
   const parsedMatches = matches
     .filter(m => m.match_data.telemetry?.status === 'fully_parsed')
     .sort((a, b) => matchSortKey(b) - matchSortKey(a));
+  // Dashboard-only: a true combined K/D (total kills ÷ total deaths across recent
+  // matches), not an average of each match's individual ratio — this specifically
+  // does NOT apply to the per-match K/D shown in the Matches tab or trend chart,
+  // which are already each match's own real ratio and need no change.
   const avgKd = parsedMatches.length > 0
-    ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.kd_ratio, 0) / parsedMatches.length).toFixed(2)
+    ? (
+        parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.kills, 0) /
+        Math.max(1, parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.deaths, 0))
+      ).toFixed(2)
     : '0.00';
   const avgAdr = parsedMatches.length > 0
     ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.adr, 0) / parsedMatches.length).toFixed(1)
