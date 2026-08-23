@@ -111,6 +111,168 @@ def extract_fact_economy(parser, target_steam_id64: str) -> list:
     return rows
 
 
+# Standard CS2 matchmaking/Premier tick rate — used only to convert blind_duration
+# (seconds) into a tick window for the flash-assist lookup. Not read from the demo
+# itself (no explicit tick-rate field found in parse_header()'s output).
+TICK_RATE = 64.0
+
+GRENADE_DETONATE_EVENTS = {
+    "flashbang_detonate": "flashbang",
+    "hegrenade_detonate": "hegrenade",
+    "decoy_started": "decoy",
+    "smokegrenade_detonate": "smokegrenade",
+}
+
+
+def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
+    """One row per grenade thrown by target_steam_id64 only (same scoping rule as fact_economy)."""
+    rows = []
+    target = str(target_steam_id64)
+    try:
+        freeze_end_df = parser.parse_event("round_freeze_end")
+        freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
+
+        team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
+
+        def team_for(steamid, tick):
+            candidates = [t for t in freeze_ticks if t <= tick]
+            lookup_tick = max(candidates) if candidates else (freeze_ticks[0] if freeze_ticks else tick)
+            sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
+            if sub.empty:
+                return None
+            return "CT" if int(sub.iloc[0]["team_num"]) == 3 else "T"
+
+        def round_for(tick):
+            return max(1, sum(1 for t in freeze_ticks if t <= tick))
+
+        throws = []
+        for event_name, label in GRENADE_DETONATE_EVENTS.items():
+            try:
+                df = parser.parse_event(event_name)
+            except Exception:
+                continue
+            if df.empty or "user_steamid" not in df.columns:
+                continue
+            mine = df[df["user_steamid"].astype(str) == target]
+            for _, r in mine.iterrows():
+                throws.append({
+                    "tick": int(r["tick"]), "type": label, "entityid": r.get("entityid"),
+                    "x": r.get("x"), "y": r.get("y"), "z": r.get("z"),
+                })
+
+        # Molotov vs incendiary aren't distinguishable from inferno_startburn alone —
+        # both grenades produce the same event. Disambiguate via the nearest preceding
+        # weapon_fire by the same player (weapon_fire's `weapon` field does name the
+        # exact grenade).
+        try:
+            inferno_df = parser.parse_event("inferno_startburn")
+        except Exception:
+            inferno_df = pd.DataFrame()
+        try:
+            fire_df = parser.parse_event("weapon_fire")
+        except Exception:
+            fire_df = pd.DataFrame()
+
+        my_infernos = inferno_df[inferno_df["user_steamid"].astype(str) == target] if not inferno_df.empty else pd.DataFrame()
+        my_fires = (
+            fire_df[(fire_df["user_steamid"].astype(str) == target) & (fire_df["weapon"].astype(str).str.contains("molotov|incendiary|incgrenade", case=False, na=False))]
+            if not fire_df.empty else pd.DataFrame()
+        )
+        for _, r in my_infernos.iterrows():
+            tick = int(r["tick"])
+            grenade_type = "molotov"
+            if not my_fires.empty:
+                preceding = my_fires[my_fires["tick"] <= tick]
+                if not preceding.empty:
+                    best = preceding.sort_values("tick").iloc[-1]
+                    grenade_type = "incendiary" if "incendiary" in str(best["weapon"]).lower() or "incgrenade" in str(best["weapon"]).lower() else "molotov"
+            throws.append({
+                "tick": tick, "type": grenade_type, "entityid": r.get("entityid"),
+                "x": r.get("x"), "y": r.get("y"), "z": r.get("z"),
+            })
+
+        try:
+            blind_df = parser.parse_event("player_blind")
+        except Exception:
+            blind_df = pd.DataFrame()
+        try:
+            hurt_df = parser.parse_event("player_hurt")
+        except Exception:
+            hurt_df = pd.DataFrame()
+        try:
+            death_df = parser.parse_event("player_death")
+        except Exception:
+            death_df = pd.DataFrame()
+        try:
+            inferno_expire_df = parser.parse_event("inferno_expire")
+        except Exception:
+            inferno_expire_df = pd.DataFrame()
+
+        for t in throws:
+            round_number = round_for(t["tick"])
+            enemies_blinded = None
+            teammates_blinded = None
+            total_enemy_blind_duration = None
+            flash_assist = None
+            damage_dealt = None
+
+            if t["type"] == "flashbang" and not blind_df.empty and t["entityid"] is not None:
+                matched = blind_df[blind_df["entityid"] == t["entityid"]]
+                thrower_team = team_for(target, t["tick"])
+                enemies_blinded, teammates_blinded, total_enemy_blind_duration = 0, 0, 0.0
+                flash_assist = False
+                for _, b in matched.iterrows():
+                    victim = str(b["user_steamid"])
+                    duration = float(b["blind_duration"])
+                    if team_for(victim, t["tick"]) == thrower_team:
+                        teammates_blinded += 1
+                        continue
+                    enemies_blinded += 1
+                    total_enemy_blind_duration += duration
+                    if not death_df.empty:
+                        window_end = b["tick"] + duration * TICK_RATE
+                        kills_on_victim = death_df[
+                            (death_df["user_steamid"].astype(str) == victim)
+                            & (death_df["tick"] >= b["tick"]) & (death_df["tick"] <= window_end)
+                        ]
+                        for _, k in kills_on_victim.iterrows():
+                            killer = str(k["attacker_steamid"])
+                            if killer != target and team_for(killer, t["tick"]) == thrower_team:
+                                flash_assist = True
+
+            elif t["type"] in ("hegrenade", "molotov", "incendiary") and not hurt_df.empty:
+                keywords = {"hegrenade": "hegrenade", "molotov": "molotov|inferno", "incendiary": "incendiary|inferno"}[t["type"]]
+                window_start, window_end = t["tick"], t["tick"] + int(TICK_RATE * 10)
+                if t["type"] in ("molotov", "incendiary") and not inferno_expire_df.empty and t["entityid"] is not None:
+                    exp = inferno_expire_df[inferno_expire_df["entityid"] == t["entityid"]]
+                    if not exp.empty:
+                        window_end = int(exp.iloc[0]["tick"])
+                relevant = hurt_df[
+                    (hurt_df["attacker_steamid"].astype(str) == target)
+                    & (hurt_df["tick"] >= window_start) & (hurt_df["tick"] <= window_end)
+                    & (hurt_df["weapon"].astype(str).str.contains(keywords, case=False, na=False))
+                ]
+                damage_dealt = int(relevant["dmg_health"].sum()) if not relevant.empty else 0
+
+            rows.append({
+                "round_number": round_number,
+                "steam_id64": target,
+                "throw_tick": t["tick"],
+                "grenade_type": t["type"],
+                "land_x": float(t["x"]) if t["x"] is not None and not pd.isna(t["x"]) else None,
+                "land_y": float(t["y"]) if t["y"] is not None and not pd.isna(t["y"]) else None,
+                "land_z": float(t["z"]) if t["z"] is not None and not pd.isna(t["z"]) else None,
+                "enemies_blinded": enemies_blinded,
+                "teammates_blinded": teammates_blinded,
+                "total_enemy_blind_duration": total_enemy_blind_duration,
+                "flash_assist": flash_assist,
+                "damage_dealt": damage_dealt,
+            })
+    except Exception as e:
+        print(f"⚠️ Warning parsing fact_utility_throw: {e}")
+    return rows
+
+
 def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
     """Queries Valve API using VALVE_API_KEY or STEAM_API_KEY from env to validate a match code."""
     api_key = os.getenv("VALVE_API_KEY") or os.getenv("STEAM_API_KEY")
@@ -279,6 +441,18 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 print(f"✅ Saved {len(fact_economy_rows)} fact_economy rows for {match_code}")
             except Exception as e:
                 print(f"⚠️ Failed to save fact_economy: {e}")
+
+        fact_utility_rows = extract_fact_utility_throw(parser, target_steam_id64)
+        if fact_utility_rows:
+            try:
+                for r in fact_utility_rows:
+                    r["match_id"] = match_code
+                supabase_client.table("fact_utility_throw").upsert(
+                    fact_utility_rows, on_conflict="match_id,round_number,steam_id64,throw_tick"
+                ).execute()
+                print(f"✅ Saved {len(fact_utility_rows)} fact_utility_throw rows for {match_code}")
+            except Exception as e:
+                print(f"⚠️ Failed to save fact_utility_throw: {e}")
 
         real_payload = {
             "match_id": match_code,
