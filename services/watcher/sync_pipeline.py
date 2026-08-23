@@ -1,4 +1,5 @@
 import bz2
+import math
 import os
 import tempfile
 import time
@@ -591,6 +592,137 @@ def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
     return rows
 
 
+# A gap this long between shots ends one engagement attempt and starts counting a new one.
+BURST_GAP_TICKS = int(TICK_RATE * 2)
+# How far past the opening shot we look for the hit/kill/death that resolves the engagement.
+ENGAGEMENT_WINDOW_TICKS = int(TICK_RATE * 5)
+NON_GUN_WEAPON_KEYWORDS = "grenade|molotov|decoy|incgrenade"
+
+
+def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
+    """One row per gunfight target_steam_id64 opens (their own opening shot only — this is a
+    proxy for pre-aim, not true visibility-based pre-aim, see project memory). Fires for both
+    wins and losses, per the decision-vs-outcome principle. When target's shots land, the real
+    opponent (and a real time-to-damage) comes from player_hurt; when they don't, the nearest
+    living enemy is used as a best-guess opponent for the angle check only, flagged via
+    opponent_inferred so the two cases are never silently conflated."""
+    rows = []
+    target = str(target_steam_id64)
+    try:
+        freeze_end_df = parser.parse_event("round_freeze_end")
+        freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
+
+        def round_for(tick):
+            return max(1, sum(1 for t in freeze_ticks if t <= tick))
+
+        fire_df = parser.parse_event("weapon_fire")
+        if fire_df.empty or "user_steamid" not in fire_df.columns:
+            return rows
+        my_fires = fire_df[fire_df["user_steamid"].astype(str) == target]
+        my_fires = my_fires[~my_fires["weapon"].astype(str).str.contains(NON_GUN_WEAPON_KEYWORDS, case=False, na=False)]
+        if my_fires.empty:
+            return rows
+
+        fire_ticks = sorted(int(t) for t in my_fires["tick"].tolist())
+        bursts, current = [], [fire_ticks[0]]
+        for t in fire_ticks[1:]:
+            if t - current[-1] > BURST_GAP_TICKS:
+                bursts.append(current)
+                current = [t]
+            else:
+                current.append(t)
+        bursts.append(current)
+        opening_ticks = [b[0] for b in bursts]
+
+        hurt_df = parser.parse_event("player_hurt")
+        death_df = parser.parse_event("player_death")
+        pos_df = parser.parse_ticks(["X", "Y", "Z", "yaw", "team_num", "is_alive"], ticks=opening_ticks)
+        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
+
+        for opening_tick in opening_ticks:
+            trow = pos_df[(pos_df["tick"] == opening_tick) & (pos_df["steamid"].astype(str) == target)]
+            if trow.empty:
+                continue
+            trow = trow.iloc[0]
+            tx, ty, tz = float(trow["X"]), float(trow["Y"]), float(trow["Z"])
+            tyaw, team_num = float(trow["yaw"]), int(trow["team_num"])
+            window_end = opening_tick + ENGAGEMENT_WINDOW_TICKS
+
+            opponent_steamid, opponent_inferred, opp_x, opp_y = None, False, None, None
+            if not hurt_df.empty:
+                my_hits = hurt_df[
+                    (hurt_df["attacker_steamid"].astype(str) == target)
+                    & (hurt_df["tick"] >= opening_tick) & (hurt_df["tick"] <= window_end)
+                ]
+                if not my_hits.empty:
+                    opponent_steamid = str(my_hits.sort_values("tick").iloc[0]["user_steamid"])
+
+            if opponent_steamid is not None:
+                opp_row = pos_df[(pos_df["tick"] == opening_tick) & (pos_df["steamid"].astype(str) == opponent_steamid)]
+                if opp_row.empty:
+                    continue
+                opp_x, opp_y = float(opp_row.iloc[0]["X"]), float(opp_row.iloc[0]["Y"])
+            else:
+                others = pos_df[
+                    (pos_df["tick"] == opening_tick) & (pos_df["steamid"].astype(str) != target) & (pos_df["is_alive"])
+                ]
+                enemies = others[others["team_num"] != team_num]
+                if enemies.empty:
+                    continue
+                enemies = enemies.copy()
+                enemies["dist"] = ((enemies["X"].astype(float) - tx) ** 2 + (enemies["Y"].astype(float) - ty) ** 2) ** 0.5
+                nearest = enemies.sort_values("dist").iloc[0]
+                opponent_steamid, opponent_inferred = str(nearest["steamid"]), True
+                opp_x, opp_y = float(nearest["X"]), float(nearest["Y"])
+
+            angle_to_opponent = math.degrees(math.atan2(opp_y - ty, opp_x - tx))
+            angle_deviation_deg = round(abs(_angle_diff(angle_to_opponent, tyaw)), 2)
+
+            time_to_damage_seconds = None
+            if not opponent_inferred and not hurt_df.empty:
+                landed = hurt_df[
+                    (hurt_df["attacker_steamid"].astype(str) == target)
+                    & (hurt_df["user_steamid"].astype(str) == opponent_steamid)
+                    & (hurt_df["tick"] >= opening_tick) & (hurt_df["tick"] <= window_end)
+                ]
+                if not landed.empty:
+                    first_hit_tick = int(landed.sort_values("tick").iloc[0]["tick"])
+                    time_to_damage_seconds = round((first_hit_tick - opening_tick) / TICK_RATE, 2)
+
+            engagement_result = "no_result"
+            if not death_df.empty:
+                won = death_df[
+                    (death_df["attacker_steamid"].astype(str) == target)
+                    & (death_df["user_steamid"].astype(str) == opponent_steamid)
+                    & (death_df["tick"] >= opening_tick) & (death_df["tick"] <= window_end)
+                ]
+                lost = death_df[
+                    (death_df["user_steamid"].astype(str) == target)
+                    & (death_df["tick"] >= opening_tick) & (death_df["tick"] <= window_end)
+                ]
+                if not won.empty:
+                    engagement_result = "won"
+                elif not lost.empty:
+                    engagement_result = "lost"
+
+            rows.append({
+                "round_number": round_for(opening_tick),
+                "steam_id64": target,
+                "engagement_tick": opening_tick,
+                "opponent_steamid": opponent_steamid,
+                "opponent_inferred": opponent_inferred,
+                "player_x": tx, "player_y": ty, "player_z": tz, "player_yaw": tyaw,
+                "angle_deviation_deg": angle_deviation_deg,
+                "time_to_damage_seconds": time_to_damage_seconds,
+                "engagement_result": engagement_result,
+                "player_rank_new": player_rank_new,
+                "player_rank_type_id": player_rank_type_id,
+            })
+    except Exception as e:
+        print(f"⚠️ Warning parsing fact_duel_placement: {e}")
+    return rows
+
+
 def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
     """Queries Valve API using VALVE_API_KEY or STEAM_API_KEY from env to validate a match code."""
     api_key = os.getenv("VALVE_API_KEY") or os.getenv("STEAM_API_KEY")
@@ -795,6 +927,18 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 print(f"✅ Saved {len(fact_positioning_rows)} fact_positioning_risk rows for {match_code}")
             except Exception as e:
                 print(f"⚠️ Failed to save fact_positioning_risk: {e}")
+
+        fact_duel_rows = extract_fact_duel_placement(parser, target_steam_id64)
+        if fact_duel_rows:
+            try:
+                for r in fact_duel_rows:
+                    r["match_id"] = match_code
+                supabase_client.table("fact_duel_placement").upsert(
+                    fact_duel_rows, on_conflict="match_id,round_number,steam_id64,engagement_tick"
+                ).execute()
+                print(f"✅ Saved {len(fact_duel_rows)} fact_duel_placement rows for {match_code}")
+            except Exception as e:
+                print(f"⚠️ Failed to save fact_duel_placement: {e}")
 
         real_payload = {
             "match_id": match_code,
