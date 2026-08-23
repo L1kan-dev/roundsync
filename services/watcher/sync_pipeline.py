@@ -273,6 +273,158 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
     return rows
 
 
+# How far ahead of a trigger we sample the player's view/position, and how big a
+# change counts as "started reacting" — a first-pass convention (see project memory),
+# not a measured constant. Revisit once real match data can calibrate it.
+ADAPTATION_SAMPLE_OFFSETS_SEC = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+YAW_CHANGE_THRESHOLD_DEG = 30.0
+MOVE_DISTANCE_THRESHOLD_UNITS = 50.0
+
+
+def _angle_diff(a: float, b: float) -> float:
+    """Signed shortest distance between two angles in degrees, handling the -180/180 wraparound."""
+    return (a - b + 180) % 360 - 180
+
+
+def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
+    """One row per teammate-death or bomb-plant trigger for target_steam_id64 only (same
+    scoping rule as fact_economy/fact_utility_throw). Bomb-plant "opposite site" filtering is
+    NOT applied here — distance_to_plant_units is stored as a raw fact and thresholded later,
+    same facts-vs-rules split as reaction_time_seconds itself."""
+    rows = []
+    target = str(target_steam_id64)
+    try:
+        freeze_end_df = parser.parse_event("round_freeze_end")
+        freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
+
+        def round_for(tick):
+            return max(1, sum(1 for t in freeze_ticks if t <= tick))
+
+        team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
+
+        def team_for(steamid, tick):
+            candidates = [t for t in freeze_ticks if t <= tick]
+            lookup_tick = max(candidates) if candidates else (freeze_ticks[0] if freeze_ticks else tick)
+            sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
+            return None if sub.empty else ("CT" if int(sub.iloc[0]["team_num"]) == 3 else "T")
+
+        death_df = parser.parse_event("player_death")
+        if death_df.empty or "user_steamid" not in death_df.columns:
+            return rows
+
+        target_death_ticks = sorted(death_df[death_df["user_steamid"].astype(str) == target]["tick"].tolist())
+
+        def target_alive_at(tick):
+            rnd = round_for(tick)
+            deaths_this_round = [t for t in target_death_ticks if round_for(t) == rnd]
+            return not any(dt <= tick for dt in deaths_this_round)
+
+        player_rank_new, player_rank_type_id = None, None
+        try:
+            rank_df = parser.parse_event("rank_update")
+            mine = rank_df[rank_df["user_steamid"].astype(str) == target] if not rank_df.empty else pd.DataFrame()
+            if not mine.empty:
+                last = mine.sort_values("tick").iloc[-1]
+                player_rank_new = int(last["rank_new"]) if pd.notna(last["rank_new"]) else None
+                player_rank_type_id = int(last["rank_type_id"]) if pd.notna(last["rank_type_id"]) else None
+        except Exception:
+            pass
+
+        triggers = []  # each: (trigger_type, trigger_tick, extra_fields_dict)
+        for _, d in death_df.iterrows():
+            victim = str(d["user_steamid"])
+            if victim == target:
+                continue
+            tick = int(d["tick"])
+            if team_for(victim, tick) is None or team_for(victim, tick) != team_for(target, tick):
+                continue
+            if not target_alive_at(tick):
+                continue
+            triggers.append(("teammate_death", tick, {"teammate_steamid": victim}))
+
+        try:
+            plant_df = parser.parse_event("bomb_planted")
+        except Exception:
+            plant_df = pd.DataFrame()
+        if not plant_df.empty and "user_steamid" in plant_df.columns:
+            planter_ticks = sorted(int(t) for t in plant_df["tick"].tolist())
+            planter_pos_df = parser.parse_ticks(["X", "Y"], ticks=planter_ticks)
+            for _, p in plant_df.iterrows():
+                planter = str(p["user_steamid"])
+                tick = int(p["tick"])
+                if planter == target or not target_alive_at(tick):
+                    continue
+                planter_row = planter_pos_df[
+                    (planter_pos_df["tick"] == tick) & (planter_pos_df["steamid"].astype(str) == planter)
+                ]
+                if planter_row.empty:
+                    continue
+                triggers.append(("bomb_plant", tick, {
+                    "bomb_site": str(p["site"]),
+                    "_planter_x": float(planter_row.iloc[0]["X"]),
+                    "_planter_y": float(planter_row.iloc[0]["Y"]),
+                }))
+
+        if not triggers:
+            return rows
+
+        sample_ticks_needed = {
+            tick + int(off * TICK_RATE)
+            for _, tick, _ in triggers
+            for off in ADAPTATION_SAMPLE_OFFSETS_SEC
+        }
+        pos_df = parser.parse_ticks(["X", "Y", "Z", "yaw"], ticks=sorted(sample_ticks_needed))
+        pos_df = pos_df[pos_df["steamid"].astype(str) == target]
+
+        def sample_at(tick):
+            sub = pos_df[pos_df["tick"] == tick]
+            return None if sub.empty else sub.iloc[0]
+
+        for trigger_type, trigger_tick, extra in triggers:
+            baseline = sample_at(trigger_tick)
+            if baseline is None:
+                continue
+
+            reaction_time_seconds, reaction_type = None, None
+            for off in ADAPTATION_SAMPLE_OFFSETS_SEC[1:]:
+                probe = sample_at(trigger_tick + int(off * TICK_RATE))
+                if probe is None:
+                    continue
+                turned = abs(_angle_diff(float(probe["yaw"]), float(baseline["yaw"]))) >= YAW_CHANGE_THRESHOLD_DEG
+                moved = ((float(probe["X"]) - float(baseline["X"])) ** 2
+                         + (float(probe["Y"]) - float(baseline["Y"])) ** 2) ** 0.5 >= MOVE_DISTANCE_THRESHOLD_UNITS
+                if turned or moved:
+                    reaction_time_seconds = off
+                    reaction_type = "both" if turned and moved else ("view_turn" if turned else "movement")
+                    break
+
+            distance_to_plant_units = None
+            if trigger_type == "bomb_plant":
+                distance_to_plant_units = ((float(baseline["X"]) - extra["_planter_x"]) ** 2
+                                            + (float(baseline["Y"]) - extra["_planter_y"]) ** 2) ** 0.5
+
+            rows.append({
+                "round_number": round_for(trigger_tick),
+                "steam_id64": target,
+                "trigger_type": trigger_type,
+                "trigger_tick": trigger_tick,
+                "teammate_steamid": extra.get("teammate_steamid"),
+                "bomb_site": extra.get("bomb_site"),
+                "distance_to_plant_units": distance_to_plant_units,
+                "player_x": float(baseline["X"]),
+                "player_y": float(baseline["Y"]),
+                "player_z": float(baseline["Z"]),
+                "player_yaw": float(baseline["yaw"]),
+                "reaction_time_seconds": reaction_time_seconds,
+                "reaction_type": reaction_type,
+                "player_rank_new": player_rank_new,
+                "player_rank_type_id": player_rank_type_id,
+            })
+    except Exception as e:
+        print(f"⚠️ Warning parsing fact_adaptation_event: {e}")
+    return rows
+
+
 def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
     """Queries Valve API using VALVE_API_KEY or STEAM_API_KEY from env to validate a match code."""
     api_key = os.getenv("VALVE_API_KEY") or os.getenv("STEAM_API_KEY")
@@ -453,6 +605,18 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 print(f"✅ Saved {len(fact_utility_rows)} fact_utility_throw rows for {match_code}")
             except Exception as e:
                 print(f"⚠️ Failed to save fact_utility_throw: {e}")
+
+        fact_adaptation_rows = extract_fact_adaptation_event(parser, target_steam_id64)
+        if fact_adaptation_rows:
+            try:
+                for r in fact_adaptation_rows:
+                    r["match_id"] = match_code
+                supabase_client.table("fact_adaptation_event").upsert(
+                    fact_adaptation_rows, on_conflict="match_id,round_number,steam_id64,trigger_type,trigger_tick"
+                ).execute()
+                print(f"✅ Saved {len(fact_adaptation_rows)} fact_adaptation_event rows for {match_code}")
+            except Exception as e:
+                print(f"⚠️ Failed to save fact_adaptation_event: {e}")
 
         real_payload = {
             "match_id": match_code,
