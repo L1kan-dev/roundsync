@@ -281,6 +281,15 @@ ADAPTATION_SAMPLE_OFFSETS_SEC = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 YAW_CHANGE_THRESHOLD_DEG = 30.0
 MOVE_DISTANCE_THRESHOLD_UNITS = 50.0
 
+# Movement-speed and audible-range conventions for category 8 (sound awareness). Both are
+# real, cited community-tested approximations, NOT confirmed engine constants — see project
+# memory. Speed is measured from real position deltas between samples rather than a raw
+# velocity tick field, several of which are known to silently drop from bulk parse_ticks() calls.
+RUN_SPEED_THRESHOLD_UPS = 200.0
+WALK_SPEED_THRESHOLD_UPS = 80.0
+RUNNING_AUDIBLE_RANGE_UNITS = 1000.0
+WALKING_AUDIBLE_RANGE_UNITS = 900.0
+
 
 def _angle_diff(a: float, b: float) -> float:
     """Signed shortest distance between two angles in degrees, handling the -180/180 wraparound."""
@@ -303,11 +312,85 @@ def _get_player_rank(parser, target_steam_id64: str):
     return None, None
 
 
+def _find_enemy_audible_triggers(parser, target: str, round_bounds: dict) -> list:
+    """Returns [(tick, extra_dict), ...] for moments a living enemy becomes NEWLY audible to
+    target (crosses into footstep range while walking/running) — a continuous per-round scan,
+    unlike the discrete-event triggers in extract_fact_adaptation_event. Fires only on the
+    transition into range, same anchor-on-new-information principle as every other trigger."""
+    triggers = []
+    sample_ticks = set()
+    for start_tick, end_tick in round_bounds.values():
+        t = start_tick
+        while t <= end_tick:
+            sample_ticks.add(t)
+            t += POSITIONING_SAMPLE_INTERVAL_TICKS
+    if not sample_ticks:
+        return triggers
+    snap = parser.parse_ticks(["X", "Y", "team_num", "is_alive"], ticks=sorted(sample_ticks))
+
+    for start_tick, end_tick in round_bounds.values():
+        round_snap = snap[(snap["tick"] >= start_tick) & (snap["tick"] <= end_tick)]
+        if round_snap.empty:
+            continue
+        round_ticks_sorted = sorted(round_snap["tick"].unique())
+
+        target_team_num = None
+        for tick in round_ticks_sorted:
+            trow = round_snap[(round_snap["tick"] == tick) & (round_snap["steamid"].astype(str) == target)]
+            if not trow.empty:
+                target_team_num = int(trow.iloc[0]["team_num"])
+                break
+        if target_team_num is None:
+            continue
+
+        prev_positions, was_audible = {}, {}
+        for tick in round_ticks_sorted:
+            tick_rows = round_snap[round_snap["tick"] == tick]
+            trow = tick_rows[tick_rows["steamid"].astype(str) == target]
+            if trow.empty or not bool(trow.iloc[0]["is_alive"]):
+                continue
+            tx, ty = float(trow.iloc[0]["X"]), float(trow.iloc[0]["Y"])
+
+            enemies = tick_rows[(tick_rows["team_num"] != target_team_num) & (tick_rows["is_alive"])]
+            for _, erow in enemies.iterrows():
+                esteam = str(erow["steamid"])
+                ex, ey = float(erow["X"]), float(erow["Y"])
+                prev = prev_positions.get(esteam)
+                prev_positions[esteam] = (tick, ex, ey)
+                if prev is None:
+                    continue
+                prev_tick, px, py = prev
+                dt = (tick - prev_tick) / TICK_RATE
+                if dt <= 0:
+                    continue
+                speed = ((ex - px) ** 2 + (ey - py) ** 2) ** 0.5 / dt
+
+                if speed >= RUN_SPEED_THRESHOLD_UPS:
+                    movement_state = "running"
+                elif speed >= WALK_SPEED_THRESHOLD_UPS:
+                    movement_state = "walking"
+                else:
+                    movement_state = "silent"
+
+                distance = ((ex - tx) ** 2 + (ey - ty) ** 2) ** 0.5
+                audible_range = RUNNING_AUDIBLE_RANGE_UNITS if movement_state == "running" else WALKING_AUDIBLE_RANGE_UNITS
+                is_audible_now = movement_state != "silent" and distance <= audible_range
+
+                if is_audible_now and not was_audible.get(esteam, False):
+                    triggers.append((int(tick), {
+                        "source_enemy_steamid": esteam,
+                        "enemy_movement_state": movement_state,
+                        "enemy_distance_units": distance,
+                    }))
+                was_audible[esteam] = is_audible_now
+    return triggers
+
+
 def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
-    """One row per teammate-death or bomb-plant trigger for target_steam_id64 only (same
-    scoping rule as fact_economy/fact_utility_throw). Bomb-plant "opposite site" filtering is
-    NOT applied here — distance_to_plant_units is stored as a raw fact and thresholded later,
-    same facts-vs-rules split as reaction_time_seconds itself."""
+    """One row per teammate-death, bomb-plant, or enemy-audible-movement trigger for
+    target_steam_id64 only (same scoping rule as fact_economy/fact_utility_throw). Bomb-plant
+    "opposite site" filtering is NOT applied here — distance_to_plant_units is stored as a raw
+    fact and thresholded later, same facts-vs-rules split as reaction_time_seconds itself."""
     rows = []
     target = str(target_steam_id64)
     try:
@@ -373,6 +456,20 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
                     "_planter_y": float(planter_row.iloc[0]["Y"]),
                 }))
 
+        try:
+            round_end_df = parser.parse_event("round_end")
+        except Exception:
+            round_end_df = pd.DataFrame()
+        if not round_end_df.empty and "round" in round_end_df.columns:
+            round_bounds = {}
+            for round_number, start_tick in enumerate(freeze_ticks, start=1):
+                end_rows = round_end_df[round_end_df["round"] == round_number]
+                if not end_rows.empty:
+                    round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]))
+            for tick, extra in _find_enemy_audible_triggers(parser, target, round_bounds):
+                if target_alive_at(tick):
+                    triggers.append(("enemy_audible_movement", tick, extra))
+
         if not triggers:
             return rows
 
@@ -419,6 +516,9 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
                 "teammate_steamid": extra.get("teammate_steamid"),
                 "bomb_site": extra.get("bomb_site"),
                 "distance_to_plant_units": distance_to_plant_units,
+                "source_enemy_steamid": extra.get("source_enemy_steamid"),
+                "enemy_movement_state": extra.get("enemy_movement_state"),
+                "enemy_distance_units": extra.get("enemy_distance_units"),
                 "player_x": float(baseline["X"]),
                 "player_y": float(baseline["Y"]),
                 "player_z": float(baseline["Z"]),
@@ -1101,7 +1201,8 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         }
 
         supabase_client.table("matches").update({
-            "match_data": real_payload
+            "match_data": real_payload,
+            "map": map_name
         }).eq("match_id", match_code).execute()
 
         print(f"✅ Successfully saved telemetry for match {match_code}!")
