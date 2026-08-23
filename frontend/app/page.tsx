@@ -535,7 +535,9 @@ export default function Home() {
   const chartData = parsedMatches.map(m => ({
     name: m.match_data.telemetry.map ? formatMapName(m.match_data.telemetry.map) : m.match_id.substring(5, 12),
     kd: m.match_data.telemetry.kd_ratio,
-    adr: m.match_data.telemetry.adr
+    adr: m.match_data.telemetry.adr,
+    hs: m.match_data.telemetry.headshot_pct,
+    perf: performanceIndex(m.match_data.telemetry),
   })).reverse();
 
   const isLive = isOnboarded === true;
@@ -806,15 +808,50 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-                  <h2 className="font-display text-xl font-bold">Trends</h2>
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-display text-xl font-bold">Trends</h2>
+                    <span className="text-[10px] text-[var(--text-dim)]">Hover any chart for match details</span>
+                  </div>
+
+                  {/* Recent form — last 5 games vs. the 5 before that, so a trend actually
+                      reads as a trend instead of making you eyeball a jagged line yourself. */}
+                  {chartData.length >= 6 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {([
+                        { key: 'kd', label: 'K/D', color: 'var(--series-cyan)', decimals: 2 },
+                        { key: 'adr', label: 'ADR', color: 'var(--series-amber)', decimals: 0 },
+                        { key: 'hs', label: 'Headshot %', color: 'var(--series-violet)', decimals: 0 },
+                        { key: 'perf', label: 'Performance', color: 'var(--series-rose)', decimals: 0 },
+                      ] as const).map(({ key, label, color, decimals }) => {
+                        const recent = chartData.slice(-5);
+                        const prior = chartData.slice(-10, -5);
+                        const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
+                        const recentAvg = avg(recent);
+                        const priorAvg = prior.length > 0 ? avg(prior) : recentAvg;
+                        const delta = recentAvg - priorAvg;
+                        const isUp = delta > 0.001;
+                        const isDown = delta < -0.001;
+                        return (
+                          <div key={key} className="bg-[var(--panel-raised)] border border-[var(--edge)] rounded-xl p-3.5">
+                            <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">{label} (last 5)</p>
+                            <div className="flex items-baseline gap-2">
+                              <span className="font-tel text-lg font-bold" style={{ color }}>{recentAvg.toFixed(decimals)}</span>
+                              {prior.length > 0 && (isUp || isDown) && (
+                                <span className={`text-xs font-semibold ${isUp ? 'text-[var(--cyan)]' : 'text-[var(--danger)]'}`}>
+                                  {isUp ? '▲' : '▼'} {Math.abs(delta).toFixed(decimals)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-display font-bold text-lg">K/D Ratio Progression</h3>
-                        <span className="text-[10px] text-[var(--text-dim)]">Hover a point for match details</span>
-                      </div>
-                      <div className="h-64">
+                      <h3 className="font-display font-bold text-lg mb-4">K/D Ratio Progression</h3>
+                      <div className="h-56">
                         <ResponsiveContainer width="100%" height="100%">
                           <LineChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
@@ -828,11 +865,8 @@ export default function Home() {
                     </div>
 
                     <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-display font-bold text-lg">Average Damage per Round (ADR)</h3>
-                        <span className="text-[10px] text-[var(--text-dim)]">Hover a bar for match details</span>
-                      </div>
-                      <div className="h-64">
+                      <h3 className="font-display font-bold text-lg mb-4">Average Damage per Round (ADR)</h3>
+                      <div className="h-56">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
@@ -840,6 +874,36 @@ export default function Home() {
                             <YAxis stroke="#8592a1" />
                             <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
                             <Bar dataKey="adr" fill="#fb923c" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
+                      <h3 className="font-display font-bold text-lg mb-4">Headshot % Progression</h3>
+                      <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
+                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                            <YAxis stroke="#8592a1" />
+                            <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                            <Line type="monotone" dataKey="hs" stroke="#8b5cf6" strokeWidth={3} activeDot={{ r: 8 }} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
+                      <h3 className="font-display font-bold text-lg mb-4">Performance Index Progression</h3>
+                      <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
+                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                            <YAxis stroke="#8592a1" domain={[0, 100]} />
+                            <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                            <Bar dataKey="perf" fill="#e11d48" radius={[4, 4, 0, 0]} />
                           </BarChart>
                         </ResponsiveContainer>
                       </div>

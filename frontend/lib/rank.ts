@@ -1,16 +1,17 @@
-// Real CS2 Premier CS Rating bands, corrected against an actual in-game reference
-// screenshot the user provided (an earlier web-research-sourced 7-band guess was wrong
-// on both the thresholds AND the count — it's 6 real bands, not 7). Same bands the AI
-// Coach's tone and the Insights dashboard use server-side — keep services/api/server.js's
-// rankTierInstruction() in sync if these ever change again.
+// Real CS2 Premier CS Rating bands — corrected against a clear, exact in-game reference
+// screenshot of the full rank-up ladder (1,000-4,999 / 5,000-9,999 / 10,000-14,999 /
+// 15,000-19,999 / 20,000-24,999 / 25,000-29,999 / 30,000+). An earlier "fix" based on a
+// blurrier screenshot got this wrong a second time — this is the ground-truth version.
+// Same bands the AI Coach's tone and the Insights dashboard use server-side — keep
+// services/api/server.js's rankTierInstruction() in sync if these ever change again.
 export const RANK_BANDS = [
-  { max: 1999, label: 'Grey', color: '#9ca3af' },
-  { max: 5999, label: 'White', color: '#e5e7eb' },
-  { max: 8999, label: 'Light Blue', color: '#7dd3fc' },
-  { max: 12999, label: 'Blue', color: '#60a5fa' },
-  { max: 14999, label: 'Violet', color: '#a78bfa' },
-  { max: 29999, label: 'Purple', color: '#c084fc' },
-  { max: Infinity, label: 'Gold', color: '#fbbf24' },
+  { max: 4999, label: 'Grey', color: '#d1d5db' },
+  { max: 9999, label: 'Light Blue', color: '#7dd3fc' },
+  { max: 14999, label: 'Blue', color: '#818cf8' },
+  { max: 19999, label: 'Purple', color: '#a855f7' },
+  { max: 24999, label: 'Pink', color: '#d946ef' },
+  { max: 29999, label: 'Red', color: '#ef4444' },
+  { max: Infinity, label: 'Gold', color: '#eab308' },
 ] as const;
 
 export function rankBand(rankNew: number | null | undefined) {

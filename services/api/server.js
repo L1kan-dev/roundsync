@@ -264,27 +264,31 @@ const round1 = (n) => Math.round(n * 10) / 10;
 // screenshot the user provided (an earlier web-research-sourced 7-band guess was wrong
 // on both the thresholds AND the count — it's 6 real bands, not 7). Keep in sync with
 // frontend/lib/rank.ts's RANK_BANDS if these ever change again.
+// Real CS2 Premier CS Rating bands — corrected against a clear, exact in-game reference
+// screenshot of the full rank-up ladder. An earlier "fix" based on a blurrier screenshot
+// got this wrong a second time — this is the ground-truth version. Keep in sync with
+// frontend/lib/rank.ts's RANK_BANDS if these ever change again.
 function rankTierInstruction(rankNew) {
   if (rankNew === null || rankNew === undefined) {
     return "The player's current rank is unknown. Use clear, plain language and briefly explain any CS2-specific term the first time you use it.";
   }
-  if (rankNew < 2000) {
+  if (rankNew < 5000) {
     return `The player's CS Rating is ${rankNew} (Grey band, a newer/lower-experience player). Use simple, plain language, avoid unexplained jargon, and briefly explain any tactical term (e.g. "trade", "pre-aim", "eco round") the first time you use it.`;
   }
-  if (rankNew < 6000) {
-    return `The player's CS Rating is ${rankNew} (White band). Use mostly plain language and briefly explain any tactical term the first time you use it.`;
-  }
-  if (rankNew < 9000) {
+  if (rankNew < 10000) {
     return `The player's CS Rating is ${rankNew} (Light Blue band). Common CS terms (peek, trade, eco) are fine without heavy explanation, but still briefly explain more advanced tactical concepts.`;
   }
-  if (rankNew < 13000) {
+  if (rankNew < 15000) {
     return `The player's CS Rating is ${rankNew} (Blue band, an average-experience player). Standard CS coaching vocabulary is fine without extra explanation.`;
   }
-  if (rankNew < 15000) {
-    return `The player's CS Rating is ${rankNew} (Violet band, an experienced player). Use full tactical CS vocabulary and go deeper into the "why" behind advice without over-explaining basics.`;
+  if (rankNew < 20000) {
+    return `The player's CS Rating is ${rankNew} (Purple band, an experienced player). Use full tactical CS vocabulary and go deeper into the "why" behind advice without over-explaining basics.`;
+  }
+  if (rankNew < 25000) {
+    return `The player's CS Rating is ${rankNew} (Pink band, a highly skilled player). Talk like a coach addressing a strong competitive player — assume solid game sense, use precise tactical terminology, focus on nuance over fundamentals.`;
   }
   if (rankNew < 30000) {
-    return `The player's CS Rating is ${rankNew} (Purple band, a highly skilled player). Talk like a coach addressing a strong competitive player — assume solid game sense, use precise tactical terminology, focus on nuance over fundamentals.`;
+    return `The player's CS Rating is ${rankNew} (Red band, a highly skilled player). Talk like a coach addressing a strong competitive player — assume solid game sense, use precise tactical terminology, focus on nuance over fundamentals.`;
   }
   return `The player's CS Rating is ${rankNew} (Gold band, an elite-level player). Talk like a coach addressing a near-professional — assume deep game knowledge, focus on high-level nuance and marginal gains rather than fundamentals.`;
 }
