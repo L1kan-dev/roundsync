@@ -1,6 +1,6 @@
 import './globals.css'
 import { Rajdhani, JetBrains_Mono, Inter } from 'next/font/google'
-import { Mascot } from '@/components/Mascot'
+import { Operator } from '@/components/Operator'
 
 const display = Rajdhani({ subsets: ['latin'], weight: ['600', '700'], variable: '--font-display' })
 const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['500', '600'], variable: '--font-mono' })
@@ -22,7 +22,18 @@ export default function RootLayout({
         <div className="app-backdrop">
           <div className="hero-mesh" />
           <div className="hero-grid" />
-          <Mascot className="absolute bottom-[-8%] right-[-6%] w-[560px] h-[640px] opacity-[0.05]" />
+          {/* CT (left, M4) / T (right, AK47) — original filled silhouettes, see Operator.tsx */}
+          <Operator
+            color="#22d3ee"
+            weapon="straight"
+            className="operator-idle-a absolute bottom-[-6%] left-[-2%] w-[26vw] max-w-[420px] h-[95vh] opacity-[0.09]"
+          />
+          <Operator
+            color="#fb923c"
+            weapon="curved"
+            flip
+            className="operator-idle-b absolute bottom-[-6%] right-[-2%] w-[26vw] max-w-[420px] h-[95vh] opacity-[0.09]"
+          />
         </div>
         {children}
       </body>

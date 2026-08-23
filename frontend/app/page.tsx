@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, CSSProperties } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Brain, BarChart2, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus } from 'lucide-react';
+import { Brain, BarChart2, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus, TrendingUp, Zap } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
 import ReactMarkdown from 'react-markdown';
 import { Toast } from '@/components/Toast';
@@ -674,73 +674,80 @@ export default function Home() {
             </div>
           </div>
         ) : (
-          <div>
+          <div className="h-[calc(100vh-4rem)] overflow-hidden flex flex-col">
             {rankChangeEvent && rankChangeEvent.crossedBand && (
               <RankBandTakeover event={rankChangeEvent} onDone={() => setRankChangeEvent(null)} />
             )}
 
-            {/* Hero band — the featured KD ring, secondary stats. Atmosphere comes from the global app backdrop. */}
-            <div className="relative">
-              <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12 pb-10">
-                <p className="text-xs text-[var(--text-dim)] mb-8">
+            {/* Hero band — one full-width grid so every card carries equal visual weight
+                instead of a cluster of small cards on the left with dead space on the right.
+                Deliberately compact (shrink-0): the charts below get whatever's left. */}
+            <div className="relative shrink-0">
+              <div className="relative z-10 max-w-7xl mx-auto px-6 pt-6 pb-4 w-full">
+                <p className="text-xs text-[var(--text-dim)] mb-3">
                   Stats based on your last {parsedMatches.length} recent games
                 </p>
 
-                <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-stretch">
-                  {/* Profile block: picture + name, rating below */}
-                  <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 gap-4 min-w-[190px]">
-                    <div className="flex flex-col items-center gap-3">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                  {/* Identity + rank */}
+                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col items-center justify-center gap-2 col-span-2 lg:col-span-1">
+                    <div className="flex items-center gap-2.5 w-full">
                       {avatarUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={avatarUrl} alt="" className="w-16 h-16 rounded-full border-2 border-[var(--edge-bright)]" />
+                        <img src={avatarUrl} alt="" className="w-9 h-9 rounded-full border-2 border-[var(--edge-bright)] shrink-0" />
                       ) : (
-                        <div className="w-16 h-16 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)]" />
+                        <div className="w-9 h-9 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)] shrink-0" />
                       )}
-                      <p className="font-display text-lg font-bold truncate max-w-[170px]">{personaName || 'Player'}</p>
+                      <p className="font-display text-sm font-bold truncate">{personaName || 'Player'}</p>
                     </div>
                     {rankBand(rankNew) && (
-                      <div className="flex flex-col items-center gap-1.5 pt-3 border-t border-[var(--edge)] w-full">
+                      <div className="flex flex-col items-center gap-1 w-full">
                         <RankPill color={rankBand(rankNew)!.color} rankNew={rankNew!} />
-                        <p className="text-[9px] uppercase tracking-wider text-[var(--text-dim)]">CS Premier Rating</p>
                         {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
                       </div>
                     )}
                   </div>
 
-                  <div className="glass border border-[var(--edge)] rounded-3xl p-6 flex flex-col items-center justify-center shrink-0 relative">
-                    <div
-                      className="relative w-32 h-32 stat-ring"
-                      style={{ '--pct': kdRingPct } as CSSProperties}
-                    >
-                      <div className="absolute inset-2 rounded-full bg-[var(--panel)] flex flex-col items-center justify-center">
-                        <span className="font-tel text-3xl font-extrabold text-[var(--cyan)]">{avgKd}</span>
-                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mt-1">K/D Ratio</span>
+                  {/* K/D ring */}
+                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col items-center justify-center">
+                    <div className="relative w-16 h-16 stat-ring" style={{ '--pct': kdRingPct } as CSSProperties}>
+                      <div className="absolute inset-1.5 rounded-full bg-[var(--panel)] flex flex-col items-center justify-center">
+                        <span className="font-tel text-lg font-extrabold text-[var(--cyan)]">{avgKd}</span>
                       </div>
                     </div>
+                    <span className="text-[9px] uppercase tracking-wider text-[var(--text-dim)] mt-1.5">K/D Ratio</span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1 lg:self-center">
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col justify-center">
-                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg ADR</p>
-                      <p className="font-tel text-2xl font-bold">{avgAdr}</p>
+                  {/* Secondary stats — equal-weight tiles filling the same row */}
+                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Zap className="w-3 h-3 text-[var(--amber)]" />
+                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
                     </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col justify-center">
-                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Headshot %</p>
-                      <p className="font-tel text-2xl font-bold">{avgHs}%</p>
+                    <p className="font-tel text-lg font-bold">{avgAdr}</p>
+                  </div>
+                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Crosshair className="w-3 h-3 text-[var(--cyan)]" />
+                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
                     </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col justify-center">
-                      <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-2">Avg Performance</p>
-                      <p className="font-tel text-2xl font-bold text-[var(--amber)]">{avgPerformanceIndex}<span className="text-[var(--text-dim)] text-sm">/100</span></p>
+                    <p className="font-tel text-lg font-bold">{avgHs}%</p>
+                  </div>
+                  <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center col-span-2 lg:col-span-1">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <TrendingUp className="w-3 h-3 text-[var(--amber)]" />
+                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Avg Performance</p>
                     </div>
+                    <p className="font-tel text-lg font-bold text-[var(--amber)]">{avgPerformanceIndex}<span className="text-[var(--text-dim)] text-xs">/100</span></p>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="max-w-7xl mx-auto px-6 py-10 space-y-8">
+            <div className="max-w-7xl mx-auto px-6 pb-4 w-full flex-1 min-h-0 flex flex-col">
               {hasActiveSync && (
-                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-6">
-                  <div className="flex items-center justify-between mb-3">
+                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-4 shrink-0 mb-3">
+                  <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2 text-sm font-semibold">
                       <Download className="w-4 h-4 text-[var(--cyan)]" />
                       Syncing your matches
@@ -752,7 +759,7 @@ export default function Home() {
                     </span>
                   </div>
 
-                  <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden mb-4 flex">
+                  <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden mb-2 flex">
                     <div
                       className="h-full bg-[var(--cyan)] transition-all duration-500"
                       style={{ width: `${totalTracked > 0 ? (readyCount / totalTracked) * 100 : 0}%` }}
@@ -788,14 +795,14 @@ export default function Home() {
               )}
 
               {isLoadingMatches && matches.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 gap-3 text-[var(--text-dim)]">
+                <div className="flex flex-col items-center justify-center flex-1 gap-3 text-[var(--text-dim)]">
                   <Loader2 className="w-10 h-10 animate-spin text-[var(--cyan)]" />
                   <p>Loading match history...</p>
                 </div>
               ) : parsedMatches.length === 0 ? (
-                <div className="hud-corners relative overflow-hidden bg-[var(--panel)] border border-[var(--edge)] rounded-2xl text-center text-[var(--text-dim)] py-24 px-8">
+                <div className="hud-corners relative overflow-hidden bg-[var(--panel)] border border-[var(--edge)] rounded-2xl text-center text-[var(--text-dim)] flex-1 flex items-center justify-center">
                   <div className="radar-backdrop opacity-60" />
-                  <div className="relative z-10">
+                  <div className="relative z-10 px-8">
                     <div className="w-20 h-20 mx-auto mb-5 rounded-full border-2 border-[var(--cyan-dim)] flex items-center justify-center">
                       <Radar className="w-9 h-9 text-[var(--cyan)]" />
                     </div>
@@ -804,109 +811,63 @@ export default function Home() {
                   </div>
                 </div>
               ) : (
-                <>
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-display text-xl font-bold">Trends</h2>
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className="flex items-center justify-between shrink-0 mb-2">
+                    <h2 className="font-display text-lg font-bold">Trends</h2>
                     <span className="text-[10px] text-[var(--text-dim)]">Hover any chart for match details</span>
                   </div>
 
-                  {/* Recent form — last 5 games vs. the 5 before that, so a trend actually
-                      reads as a trend instead of making you eyeball a jagged line yourself. */}
-                  {chartData.length >= 6 && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      {([
-                        { key: 'kd', label: 'K/D', color: 'var(--series-cyan)', decimals: 2 },
-                        { key: 'adr', label: 'ADR', color: 'var(--series-amber)', decimals: 0 },
-                        { key: 'hs', label: 'Headshot %', color: 'var(--series-violet)', decimals: 0 },
-                        { key: 'perf', label: 'Performance', color: 'var(--series-rose)', decimals: 0 },
-                      ] as const).map(({ key, label, color, decimals }) => {
-                        const recent = chartData.slice(-5);
-                        const prior = chartData.slice(-10, -5);
-                        const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
-                        const recentAvg = avg(recent);
-                        const priorAvg = prior.length > 0 ? avg(prior) : recentAvg;
-                        const delta = recentAvg - priorAvg;
-                        const isUp = delta > 0.001;
-                        const isDown = delta < -0.001;
-                        return (
-                          <div key={key} className="bg-[var(--panel-raised)] border border-[var(--edge)] rounded-xl p-3.5">
-                            <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">{label} (last 5)</p>
-                            <div className="flex items-baseline gap-2">
-                              <span className="font-tel text-lg font-bold" style={{ color }}>{recentAvg.toFixed(decimals)}</span>
-                              {prior.length > 0 && (isUp || isDown) && (
-                                <span className={`text-xs font-semibold ${isUp ? 'text-[var(--cyan)]' : 'text-[var(--danger)]'}`}>
-                                  {isUp ? '▲' : '▼'} {Math.abs(delta).toFixed(decimals)}
-                                </span>
-                              )}
-                            </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 grid-rows-2 gap-3 flex-1 min-h-0">
+                    {([
+                      { key: 'kd' as const, title: 'K/D Ratio', color: '#22d3ee', type: 'line' as const, decimals: 2 },
+                      { key: 'adr' as const, title: 'Average Damage per Round', color: '#fb923c', type: 'bar' as const, decimals: 0 },
+                      { key: 'hs' as const, title: 'Headshot %', color: '#8b5cf6', type: 'line' as const, decimals: 0 },
+                      { key: 'perf' as const, title: 'Performance Index', color: '#e11d48', type: 'bar' as const, decimals: 0 },
+                    ]).map(({ key, title, color, type, decimals }) => {
+                      const recent = chartData.slice(-5);
+                      const prior = chartData.slice(-10, -5);
+                      const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
+                      const recentAvg = chartData.length > 0 ? avg(recent) : 0;
+                      const priorAvg = prior.length > 0 ? avg(prior) : recentAvg;
+                      const delta = recentAvg - priorAvg;
+                      const isUp = delta > 0.001;
+                      const isDown = delta < -0.001;
+                      return (
+                        <div key={key} className="hud-corners bg-[var(--panel)] p-4 rounded-2xl border border-[var(--edge)] flex flex-col min-h-0">
+                          <div className="flex items-center justify-between shrink-0 mb-2">
+                            <h3 className="font-display font-bold text-sm">{title}</h3>
+                            {chartData.length >= 6 && (isUp || isDown) && (
+                              <span className={`text-xs font-tel font-semibold flex items-center gap-1 ${isUp ? 'text-[var(--cyan)]' : 'text-[var(--danger)]'}`}>
+                                {recentAvg.toFixed(decimals)} {isUp ? '▲' : '▼'} {Math.abs(delta).toFixed(decimals)}
+                              </span>
+                            )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <h3 className="font-display font-bold text-lg mb-4">K/D Ratio Progression</h3>
-                      <div className="h-56">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
-                            <YAxis stroke="#8592a1" />
-                            <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                            <Line type="monotone" dataKey="kd" stroke="#22d3ee" strokeWidth={3} activeDot={{ r: 8 }} />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <h3 className="font-display font-bold text-lg mb-4">Average Damage per Round (ADR)</h3>
-                      <div className="h-56">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
-                            <YAxis stroke="#8592a1" />
-                            <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                            <Bar dataKey="adr" fill="#fb923c" radius={[4, 4, 0, 0]} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <h3 className="font-display font-bold text-lg mb-4">Headshot % Progression</h3>
-                      <div className="h-56">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
-                            <YAxis stroke="#8592a1" />
-                            <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                            <Line type="monotone" dataKey="hs" stroke="#8b5cf6" strokeWidth={3} activeDot={{ r: 8 }} />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-
-                    <div className="hud-corners bg-[var(--panel)] p-6 rounded-2xl border border-[var(--edge)]">
-                      <h3 className="font-display font-bold text-lg mb-4">Performance Index Progression</h3>
-                      <div className="h-56">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                            <XAxis dataKey="name" stroke="#8592a1" tick={false} />
-                            <YAxis stroke="#8592a1" domain={[0, 100]} />
-                            <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                            <Bar dataKey="perf" fill="#e11d48" radius={[4, 4, 0, 0]} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
+                          <div className="flex-1 min-h-0">
+                            <ResponsiveContainer width="100%" height="100%">
+                              {type === 'line' ? (
+                                <LineChart data={chartData}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
+                                  <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                                  <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} />
+                                  <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                                  <Line type="monotone" dataKey={key} stroke={color} strokeWidth={2.5} dot={{ r: 2 }} activeDot={{ r: 6 }} />
+                                </LineChart>
+                              ) : (
+                                <BarChart data={chartData}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
+                                  <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                                  <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} domain={key === 'perf' ? [0, 100] : undefined} />
+                                  <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                                  <Bar dataKey={key} fill={color} radius={[3, 3, 0, 0]} />
+                                </BarChart>
+                              )}
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                </>
+                </div>
               )}
             </div>
           </div>

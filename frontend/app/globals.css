@@ -217,6 +217,20 @@ body {
 }
 .dropdown-enter { animation: dropdown-in 0.15s ease-out forwards; transform-origin: top right; }
 
+/* Ambient CT/T operator silhouettes in the global backdrop — a slow idle sway so
+   they read as "standing there," not a static poster. Two variants with different
+   timing so the left and right figures don't move in lockstep. */
+@keyframes operator-idle-a {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-10px) rotate(0.6deg); }
+}
+@keyframes operator-idle-b {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-14px) rotate(-0.6deg); }
+}
+.operator-idle-a { animation: operator-idle-a 7s ease-in-out infinite; }
+.operator-idle-b { animation: operator-idle-b 8s ease-in-out infinite 0.5s; }
+
 /* Insights dashboard — staggered card entrance (delay set per-card via inline style) */
 @keyframes card-in {
   from { opacity: 0; transform: translateY(10px); }
