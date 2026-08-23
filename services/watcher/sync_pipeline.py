@@ -723,6 +723,134 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
     return rows
 
 
+def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
+    """One row per moment target_steam_id64's team first becomes outnumbered while target is
+    still alive (not exclusive to true 1-vs-N clutches, per category 7's design). Deliberately
+    does NOT compute a weighted HLTV-style Impact Score — those coefficients are undisclosed
+    even for HLTV's own real formula and need real calibration (see project memory). Instead
+    stores the raw running components (kills/deaths/damage/rounds, for target AND every
+    remaining enemy) so any weighting scheme can be applied later without re-parsing."""
+    rows = []
+    target = str(target_steam_id64)
+    try:
+        freeze_end_df = parser.parse_event("round_freeze_end")
+        round_end_df = parser.parse_event("round_end")
+        if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
+            return rows
+        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
+
+        round_bounds = {}
+        for round_number, start_tick in enumerate(freeze_ticks, start=1):
+            end_rows = round_end_df[round_end_df["round"] == round_number]
+            if not end_rows.empty:
+                round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]), str(end_rows.iloc[0]["winner"]))
+        if not round_bounds:
+            return rows
+
+        death_df = parser.parse_event("player_death")
+        hurt_df = parser.parse_event("player_hurt")
+        fire_df = parser.parse_event("weapon_fire")
+        if death_df.empty:
+            return rows
+        target_death_events = death_df[death_df["user_steamid"].astype(str) == target]
+
+        sample_ticks = set()
+        for start_tick, end_tick, _ in round_bounds.values():
+            t = start_tick
+            while t <= end_tick:
+                sample_ticks.add(t)
+                t += POSITIONING_SAMPLE_INTERVAL_TICKS
+        snap = parser.parse_ticks(["team_num", "is_alive"], ticks=sorted(sample_ticks))
+        player_rank_new, player_rank_type_id = _get_player_rank(parser, target)
+
+        def running_stats(steamid, cutoff_tick):
+            kills = len(death_df[(death_df["attacker_steamid"].astype(str) == steamid) & (death_df["tick"] < cutoff_tick)])
+            deaths = len(death_df[(death_df["user_steamid"].astype(str) == steamid) & (death_df["tick"] < cutoff_tick)])
+            damage = 0.0
+            if not hurt_df.empty:
+                mine = hurt_df[(hurt_df["attacker_steamid"].astype(str) == steamid) & (hurt_df["tick"] < cutoff_tick)]
+                damage = float(mine["dmg_health"].sum()) if not mine.empty else 0.0
+            return kills, deaths, damage
+
+        for round_number, (start_tick, end_tick, winner) in round_bounds.items():
+            round_snap = snap[(snap["tick"] >= start_tick) & (snap["tick"] <= end_tick)]
+            if round_snap.empty:
+                continue
+            round_ticks_sorted = sorted(round_snap["tick"].unique())
+            rounds_so_far = round_number - 1
+
+            target_team_num = None
+            for tick in round_ticks_sorted:
+                trow = round_snap[(round_snap["tick"] == tick) & (round_snap["steamid"].astype(str) == target)]
+                if not trow.empty:
+                    target_team_num = int(trow.iloc[0]["team_num"])
+                    break
+            if target_team_num is None:
+                continue
+
+            state = "even_or_favorable"
+            for tick in round_ticks_sorted:
+                tick_rows = round_snap[round_snap["tick"] == tick]
+                trow = tick_rows[tick_rows["steamid"].astype(str) == target]
+                if trow.empty or not bool(trow.iloc[0]["is_alive"]):
+                    continue
+
+                teammates_alive = len(tick_rows[(tick_rows["team_num"] == target_team_num) & (tick_rows["is_alive"])])
+                enemy_rows = tick_rows[(tick_rows["team_num"] != target_team_num) & (tick_rows["is_alive"])]
+                enemies_alive = len(enemy_rows)
+                is_outnumbered = enemies_alive > teammates_alive
+
+                if is_outnumbered and state == "even_or_favorable":
+                    state = "outnumbered"
+                    decision_tick = int(tick)
+                    target_kills, target_deaths, target_damage = running_stats(target, decision_tick)
+
+                    enemies_components = [
+                        dict(zip(
+                            ["steam_id64", "kills_so_far", "deaths_so_far", "damage_so_far"],
+                            (str(erow["steamid"]), *running_stats(str(erow["steamid"]), decision_tick)),
+                        ))
+                        for _, erow in enemy_rows.iterrows()
+                    ]
+
+                    player_engaged = False
+                    if not fire_df.empty:
+                        after = fire_df[
+                            (fire_df["user_steamid"].astype(str) == target)
+                            & (fire_df["tick"] >= decision_tick) & (fire_df["tick"] <= end_tick)
+                            & (~fire_df["weapon"].astype(str).str.contains(NON_GUN_WEAPON_KEYWORDS, case=False, na=False))
+                        ]
+                        player_engaged = not after.empty
+
+                    target_died = not target_death_events[
+                        (target_death_events["tick"] >= decision_tick) & (target_death_events["tick"] <= end_tick)
+                    ].empty
+                    round_won = winner == ("CT" if target_team_num == 3 else "T")
+
+                    rows.append({
+                        "round_number": round_number,
+                        "steam_id64": target,
+                        "decision_tick": decision_tick,
+                        "teammates_alive": teammates_alive,
+                        "enemies_alive": enemies_alive,
+                        "target_kills_so_far": target_kills,
+                        "target_deaths_so_far": target_deaths,
+                        "target_damage_so_far": target_damage,
+                        "target_rounds_so_far": rounds_so_far,
+                        "enemies_raw_components": enemies_components,
+                        "player_engaged": player_engaged,
+                        "target_died": target_died,
+                        "round_won": round_won,
+                        "player_rank_new": player_rank_new,
+                        "player_rank_type_id": player_rank_type_id,
+                    })
+                elif not is_outnumbered and state == "outnumbered":
+                    state = "even_or_favorable"
+    except Exception as e:
+        print(f"⚠️ Warning parsing fact_engage_decision: {e}")
+    return rows
+
+
 def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retries: int = 3) -> dict:
     """Queries Valve API using VALVE_API_KEY or STEAM_API_KEY from env to validate a match code."""
     api_key = os.getenv("VALVE_API_KEY") or os.getenv("STEAM_API_KEY")
@@ -939,6 +1067,18 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 print(f"✅ Saved {len(fact_duel_rows)} fact_duel_placement rows for {match_code}")
             except Exception as e:
                 print(f"⚠️ Failed to save fact_duel_placement: {e}")
+
+        fact_engage_rows = extract_fact_engage_decision(parser, target_steam_id64)
+        if fact_engage_rows:
+            try:
+                for r in fact_engage_rows:
+                    r["match_id"] = match_code
+                supabase_client.table("fact_engage_decision").upsert(
+                    fact_engage_rows, on_conflict="match_id,round_number,steam_id64,decision_tick"
+                ).execute()
+                print(f"✅ Saved {len(fact_engage_rows)} fact_engage_decision rows for {match_code}")
+            except Exception as e:
+                print(f"⚠️ Failed to save fact_engage_decision: {e}")
 
         real_payload = {
             "match_id": match_code,
