@@ -76,6 +76,22 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
+    start_time = time.time()
+    try:
+        supabase_client.table("matches").update({
+            "match_data": {
+                "match_id": match_code,
+                "telemetry": {
+                    "match_id": match_code,
+                    "match_url": cdn_url,
+                    "status": "downloading",
+                    "started_at": start_time
+                }
+            }
+        }).eq("match_id", match_code).execute()
+    except Exception as e:
+        print(f"⚠️ Failed to mark match as downloading: {e}")
+
     try:
         download_success = False
         max_retries = 3
@@ -147,7 +163,8 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "adr": calculated_adr,
                 "kills": total_kills,
                 "deaths": total_deaths,
-                "headshot_pct": headshot_pct
+                "headshot_pct": headshot_pct,
+                "processing_seconds": round(time.time() - start_time, 1)
             }
         }
 

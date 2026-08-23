@@ -146,6 +146,48 @@ app.get('/api/matches', authenticateToken, async (req, res) => {
   }
 });
 
+// 2b. Sync Progress Endpoint
+app.get('/api/matches/sync-status', authenticateToken, async (req, res) => {
+  const steamId = req.user.steamId;
+
+  try {
+    const { data: matches, error } = await supabase
+      .from('matches')
+      .select('match_id, match_data')
+      .eq('steam_id64', steamId);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    const counts = { pending_url: 0, pending_download: 0, downloading: 0, fully_parsed: 0, parse_failed: 0 };
+    const completedDurations = [];
+    let current = null;
+
+    for (const m of matches || []) {
+      const t = m.match_data?.telemetry || {};
+      const status = t.status || 'pending_url';
+      if (counts[status] !== undefined) counts[status] += 1;
+
+      if (status === 'downloading' && t.started_at) {
+        current = { matchId: m.match_id, startedAt: t.started_at };
+      }
+      if (status === 'fully_parsed' && typeof t.processing_seconds === 'number') {
+        completedDurations.push(t.processing_seconds);
+      }
+    }
+
+    const recentDurations = completedDurations.slice(-10);
+    const avgSeconds = recentDurations.length > 0
+      ? Math.round(recentDurations.reduce((a, b) => a + b, 0) / recentDurations.length)
+      : null;
+
+    res.json({ counts, current, avgSeconds });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch sync status.' });
+  }
+});
+
 // 3b. User Profile / Onboarding Status Endpoint
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
   const steamId = req.user.steamId;

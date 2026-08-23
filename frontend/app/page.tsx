@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Brain, BarChart2, ShieldAlert, LogOut, CheckCircle2, ChevronRight, Loader2, Settings, Target, Crosshair, Radar } from 'lucide-react';
+import { Brain, BarChart2, ShieldAlert, LogOut, CheckCircle2, ChevronRight, Loader2, Settings, Target, Crosshair, Radar, Download } from 'lucide-react';
 import { LogoMark, LogoLockup } from '@/components/Logo';
 import { Toast } from '@/components/Toast';
 
@@ -38,6 +38,15 @@ export default function Home() {
 
   const [showWelcomeToast, setShowWelcomeToast] = useState(false);
 
+  // Sync progress — how many matches are queued/downloading/done, and how long the current one has taken
+  interface SyncStatus {
+    counts: { pending_url: number; pending_download: number; downloading: number; fully_parsed: number; parse_failed: number };
+    current: { matchId: string; startedAt: number } | null;
+    avgSeconds: number | null;
+  }
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
+
   // Chat State
   const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
@@ -54,6 +63,19 @@ export default function Home() {
       setIsOnboarded(Boolean(data.onboarded));
     } catch (err) {
       console.error('Error fetching profile:', err);
+    }
+  }, []);
+
+  const fetchSyncStatus = useCallback(async (token: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/matches/sync-status`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.status === 401 || response.status === 403) return;
+      const data = await response.json();
+      if (data.counts) setSyncStatus(data);
+    } catch (err) {
+      console.error('Error fetching sync status:', err);
     }
   }, []);
 
@@ -94,10 +116,22 @@ export default function Home() {
     if (jwtToken) {
       fetchProfile(jwtToken);
       fetchMatches();
-      const interval = setInterval(fetchMatches, 10000);
+      fetchSyncStatus(jwtToken);
+      const interval = setInterval(() => {
+        fetchMatches();
+        fetchSyncStatus(jwtToken);
+      }, 10000);
       return () => clearInterval(interval);
     }
-  }, [jwtToken, fetchProfile, fetchMatches]);
+  }, [jwtToken, fetchProfile, fetchMatches, fetchSyncStatus]);
+
+  // Tick every second so the "elapsed" timer on the currently-downloading match moves smoothly
+  // between the 10-second polls, instead of jumping.
+  useEffect(() => {
+    if (!syncStatus?.current) return;
+    const tick = setInterval(() => setNowSeconds(Date.now() / 1000), 1000);
+    return () => clearInterval(tick);
+  }, [syncStatus?.current]);
 
   // Scroll Chat to Bottom
   useEffect(() => {
@@ -230,6 +264,20 @@ export default function Home() {
   })).reverse();
 
   const isLive = isOnboarded === true;
+
+  // Sync progress math
+  const syncCounts = syncStatus?.counts;
+  const totalTracked = syncCounts
+    ? syncCounts.pending_url + syncCounts.pending_download + syncCounts.downloading + syncCounts.fully_parsed + syncCounts.parse_failed
+    : 0;
+  const readyCount = syncCounts?.fully_parsed ?? 0;
+  const failedCount = syncCounts?.parse_failed ?? 0;
+  const queuedCount = syncCounts ? syncCounts.pending_url + syncCounts.pending_download : 0;
+  const hasActiveSync = queuedCount > 0 || (syncCounts?.downloading ?? 0) > 0 || failedCount > 0;
+  const currentElapsed = syncStatus?.current ? Math.max(0, nowSeconds - syncStatus.current.startedAt) : 0;
+  const currentPct = syncStatus?.avgSeconds
+    ? Math.min(96, Math.round((currentElapsed / syncStatus.avgSeconds) * 100))
+    : null;
 
   // ---------- LOGGED-OUT LANDING ----------
   if (!steamId) {
@@ -402,6 +450,55 @@ export default function Home() {
           ) : (
             <div>
               <h1 className="font-display text-3xl font-bold mb-8">Performance Overview</h1>
+
+              {hasActiveSync && (
+                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-6 mb-8">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <Download className="w-4 h-4 text-[var(--cyan)]" />
+                      Syncing your matches
+                    </div>
+                    <span className="text-xs font-tel text-[var(--text-dim)]">
+                      {readyCount} ready
+                      {failedCount > 0 && <span className="text-[var(--danger)]"> · {failedCount} failed</span>}
+                      {' '}· {queuedCount + (syncCounts?.downloading ?? 0)} remaining
+                    </span>
+                  </div>
+
+                  <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden mb-4 flex">
+                    <div
+                      className="h-full bg-[var(--cyan)] transition-all duration-500"
+                      style={{ width: `${totalTracked > 0 ? (readyCount / totalTracked) * 100 : 0}%` }}
+                    />
+                    <div
+                      className="h-full bg-[var(--danger)] transition-all duration-500"
+                      style={{ width: `${totalTracked > 0 ? (failedCount / totalTracked) * 100 : 0}%` }}
+                    />
+                  </div>
+
+                  {syncStatus?.current ? (
+                    <div>
+                      <div className="flex items-center justify-between text-xs text-[var(--text-dim)] mb-1.5">
+                        <span className="font-tel">{syncStatus.current.matchId}</span>
+                        <span className="font-tel">
+                          {Math.floor(currentElapsed)}s elapsed
+                          {syncStatus.avgSeconds ? ` · ~${syncStatus.avgSeconds}s avg` : ''}
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 bg-[var(--void)] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[var(--amber)] transition-all duration-1000"
+                          style={{ width: `${currentPct ?? 30}%`, ...(currentPct === null ? { animation: 'pulse-dot 1.6s ease-in-out infinite' } : {}) }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[var(--text-dim)]">
+                      {queuedCount} match{queuedCount === 1 ? '' : 'es'} queued — downloading and parsing one at a time.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {isLoadingMatches && matches.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 gap-3 text-[var(--text-dim)]">
