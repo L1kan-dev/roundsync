@@ -133,9 +133,10 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         total_kills = 0
         total_deaths = 0
         headshots = 0
+        rounds_played = 0
 
         try:
-            deaths_df = parser.parse_event("player_death")
+            deaths_df = parser.parse_event("player_death", other=["total_rounds_played"])
             if not deaths_df.empty:
                 if "attacker_steamid" in deaths_df.columns:
                     user_kills = deaths_df[deaths_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
@@ -145,6 +146,8 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 if "user_steamid" in deaths_df.columns:
                     user_deaths = deaths_df[deaths_df["user_steamid"].astype(str) == str(target_steam_id64)]
                     total_deaths = len(user_deaths)
+                if "total_rounds_played" in deaths_df.columns:
+                    rounds_played = int(deaths_df["total_rounds_played"].max())
         except Exception as e:
             print(f"⚠️ Warning parsing deaths: {e}")
 
@@ -159,7 +162,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
 
         calculated_kd = round(total_kills / max(1, total_deaths), 2)
         headshot_pct = round((headshots / max(1, total_kills)) * 100, 1) if total_kills > 0 else 0.0
-        calculated_adr = round(total_damage / 24, 1)
+        calculated_adr = round(total_damage / max(1, rounds_played), 1) if rounds_played > 0 else 0.0
 
         real_payload = {
             "match_id": match_code,
@@ -174,6 +177,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "kills": total_kills,
                 "deaths": total_deaths,
                 "headshot_pct": headshot_pct,
+                "total_damage": total_damage,
+                "headshots": headshots,
+                "rounds_played": rounds_played,
                 "processing_seconds": round(time.time() - start_time, 1)
             }
         }

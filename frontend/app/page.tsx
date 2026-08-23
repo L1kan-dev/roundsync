@@ -23,6 +23,9 @@ interface Match {
       headshot_pct: number;
       map?: string | null;
       match_time?: number | null;
+      total_damage?: number | null;
+      headshots?: number | null;
+      rounds_played?: number | null;
     };
   };
 }
@@ -299,12 +302,28 @@ export default function Home() {
         Math.max(1, parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.deaths, 0))
       ).toFixed(2)
     : '0.00';
-  const avgAdr = parsedMatches.length > 0
-    ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.adr, 0) / parsedMatches.length).toFixed(1)
-    : '0.0';
-  const avgHs = parsedMatches.length > 0
-    ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.headshot_pct, 0) / parsedMatches.length).toFixed(1)
-    : '0.0';
+  // Prefer a true weighted average (sum of raw damage / sum of real rounds played) using
+  // matches that captured those raw components — only matches parsed after the /24
+  // hardcoded-rounds bug was fixed have them. Falls back to the old average-of-rates
+  // method when none of the recent matches have raw data yet, so the tile never goes blank.
+  const matchesWithRawAdr = parsedMatches.filter(m => m.match_data.telemetry.rounds_played);
+  const avgAdr = matchesWithRawAdr.length > 0
+    ? (
+        matchesWithRawAdr.reduce((acc, m) => acc + (m.match_data.telemetry.total_damage || 0), 0) /
+        Math.max(1, matchesWithRawAdr.reduce((acc, m) => acc + (m.match_data.telemetry.rounds_played || 0), 0))
+      ).toFixed(1)
+    : parsedMatches.length > 0
+      ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.adr, 0) / parsedMatches.length).toFixed(1)
+      : '0.0';
+  const matchesWithRawHs = parsedMatches.filter(m => typeof m.match_data.telemetry.headshots === 'number');
+  const avgHs = matchesWithRawHs.length > 0
+    ? (
+        (matchesWithRawHs.reduce((acc, m) => acc + (m.match_data.telemetry.headshots || 0), 0) /
+        Math.max(1, matchesWithRawHs.reduce((acc, m) => acc + m.match_data.telemetry.kills, 0))) * 100
+      ).toFixed(1)
+    : parsedMatches.length > 0
+      ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.headshot_pct, 0) / parsedMatches.length).toFixed(1)
+      : '0.0';
   const avgPerformanceIndex = parsedMatches.length > 0
     ? Math.round(parsedMatches.reduce((acc, m) => acc + performanceIndex(m.match_data.telemetry), 0) / parsedMatches.length)
     : 0;
