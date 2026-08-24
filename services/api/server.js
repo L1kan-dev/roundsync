@@ -26,6 +26,9 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !JWT_SECRET) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// Trust Railway's proxy so express-rate-limit can read the real client IP
+app.set('trust proxy', 1);
+
 // Middleware Setup
 app.use(express.json());
 app.use(cors({
