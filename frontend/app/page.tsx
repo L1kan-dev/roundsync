@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback, CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { ResponsiveContainer, LineChart, Line, Area, AreaChart, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
-import { Brain, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus, TrendingUp, Zap, LogIn, Flame, Users, Repeat } from 'lucide-react';
+import { Brain, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus, TrendingUp, Zap, LogIn, Flame, Users, Repeat, MapPinned, Coins, Clock, Trash2, X, Info } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
 import ReactMarkdown from 'react-markdown';
 import { Toast } from '@/components/Toast';
@@ -156,15 +157,6 @@ const markdownComponents = {
 const TYPEWRITER_CHARS_PER_TICK = 3;
 const TYPEWRITER_TICK_MS = 15;
 
-// Shown as clickable starting points in the empty chat state — teaches good question
-// shape by example (specific, tied to a real decision) instead of a wall of instructions.
-const EXAMPLE_COACH_PROMPTS = [
-  'Why do I keep dying early in rounds?',
-  'Am I throwing away rounds by buying when the team is on an eco?',
-  'Are my flashes helping my team or blinding them?',
-  'How is my reaction time to information compared to my rank?',
-];
-
 // Reveals a finished AI reply a few characters at a time instead of it appearing all at
 // once ("teleporting" onto screen). skipAnimation lets an already-seen message render
 // instantly on re-render, so the effect only ever plays once per message.
@@ -189,8 +181,478 @@ function TypedAssistantMessage({ content, skipAnimation, onDone }: { content: st
   return <ReactMarkdown components={markdownComponents}>{content.slice(0, visibleChars)}</ReactMarkdown>;
 }
 
+// Renders an icon twice, each half clipped away, so it reads as one icon split CT-cyan
+// (left) / T-amber (right) instead of one flat color — same duel motif as everything
+// else, applied to a single glyph. The wrapper needs an explicit size AND its own
+// `position` (pass e.g. "w-8 h-8 absolute top-1/2 left-1/2 -translate-x-1/2
+// -translate-y-1/2" as className) since the two clipped copies are positioned
+// absolutely inside it — this deliberately does NOT default to `relative` itself:
+// an earlier version did, and a caller centering the whole icon via `absolute` +
+// `top/left/translate` fought that default (two `position` values on one element,
+// whichever wins the cascade), which silently broke the centering math entirely
+// rather than erroring — that's the bug that put the empty-state badge's icon
+// visibly off-center. `inline-block` alone is a safe default; it doesn't compete.
+function DuelIcon({ icon: Icon, className }: { icon: React.ElementType; className?: string }) {
+  return (
+    <span className={`inline-block shrink-0 ${className || ''}`}>
+      <Icon className="absolute inset-0 w-full h-full text-[var(--cyan)]" style={{ clipPath: 'inset(0 50% 0 0)' }} />
+      <Icon className="absolute inset-0 w-full h-full text-[var(--amber)]" style={{ clipPath: 'inset(0 0 0 50%)' }} />
+    </span>
+  );
+}
+
+// Half-transparent radial popup — the CS2-buymenu-style replacement for the old row of
+// pill-shaped example prompts. Segments are laid out on a circle around a center hub
+// with basic trig instead of hardcoded per-segment positions, so the count/spacing stay
+// easy to change. Clicking a segment (or its spoke) fills the chat input and closes;
+// clicking the dimmed backdrop closes without picking anything.
+function TopicWheel({ segments, onPick }: { segments: { id: string; label: string; icon: React.ElementType; prompt: string | null }[]; onPick: (prompt: string | null) => void }) {
+  // A takeover-sized wheel, not a small popup — radius is expressed in vmin so it scales
+  // with the actual screen instead of a small fixed pixel size that read as "unreadable"
+  // on a real monitor. `calc(<number> * Xvmin)` is valid CSS: a plain-number × length.
+  const radiusVmin = 27;
+
+  // Opens like a white hole spewing the segments outward from a point, closes like a
+  // black hole sucking them back in — 'opening' starts everything collapsed at the
+  // center, flips to 'open' one frame later so the CSS transition actually plays, and
+  // any pick/close request goes through 'closing' (collapsing back to center, hub
+  // showing a spinning event-horizon ring) BEFORE `onPick` actually fires — so the
+  // parent only unmounts this once the implode animation has actually finished.
+  const [phase, setPhase] = useState<'opening' | 'open' | 'closing'>('opening');
+  const pickedRef = useRef<string | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setPhase('open'));
+    return () => {
+      cancelAnimationFrame(id);
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    };
+  }, []);
+
+  const requestClose = (prompt: string | null) => {
+    if (phase === 'closing') return;
+    pickedRef.current = prompt;
+    setPhase('closing');
+    closeTimer.current = setTimeout(() => onPick(pickedRef.current), 480);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') requestClose(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  const collapsed = phase !== 'open';
+
+  // Rendered via a portal straight to <body>, fixed to the viewport — not nested inside
+  // the chat panel, whose own `overflow-hidden` (needed for its rounded corners) was
+  // silently clipping any wheel segment that extended past the panel's edges.
+  return createPortal(
+    <div className="fixed inset-0 z-50" onClick={() => requestClose(null)}>
+      {/* No `backdrop-filter` here — same root cause as the chat panel's earlier fix, but
+          worse: this scrim covers the FULL viewport and stays mounted the entire time the
+          wheel is open (not just during a transition), continuously re-blurring the
+          always-animating background behind it on every frame while the user's hovering
+          segments — that's what read as "200ms behind what I'm doing." A darker flat
+          scrim reads close enough to dimmed-and-blurred without the resample cost. */}
+      <div
+        className="absolute inset-0 transition-opacity duration-500"
+        style={{ background: 'rgba(5,7,10,0.9)', opacity: phase === 'opening' ? 0 : 1 }}
+      />
+
+      {/* the "white hole" flash on open / afterglow on close. Deliberately NO
+          `-translate-x-1/2 -translate-y-1/2` classes here — Tailwind v4 compiles those to
+          the standalone CSS `translate` property, not `transform`, so they don't get
+          overridden by an inline/keyframe `transform` the way earlier Tailwind versions'
+          translate utilities did. Having both applies BOTH shifts (they compose instead of
+          one replacing the other), which is exactly what put this hub/flash off-center by
+          a consistent half-its-own-size offset before this was caught. When a translate is
+          already baked into an inline `transform` or a `@keyframes` rule, leave these
+          utility classes off entirely. */}
+      <div
+        key={phase === 'closing' ? 'closing-flash' : 'opening-flash'}
+        className="absolute top-1/2 left-1/2 rounded-full pointer-events-none wheel-flash"
+        style={{ width: '15vmin', height: '15vmin', minWidth: 120, minHeight: 120, border: '2px solid var(--cyan)', animationDirection: phase === 'closing' ? 'reverse' : 'normal' }}
+      />
+
+      <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+        {segments.map((seg, i) => {
+          const angle = (i / segments.length) * 2 * Math.PI - Math.PI / 2;
+          const x2 = `calc(50% + calc(${Math.cos(angle)} * ${radiusVmin}vmin))`;
+          const y2 = `calc(50% + calc(${Math.sin(angle)} * ${radiusVmin}vmin))`;
+          return (
+            <line
+              key={seg.id}
+              x1="50%"
+              y1="50%"
+              x2={collapsed ? '50%' : x2}
+              y2={collapsed ? '50%' : y2}
+              stroke="rgba(34,211,238,0.25)"
+              strokeWidth={2}
+              style={{
+                transition: (() => {
+                  const dur = phase === 'closing' ? 340 : 380;
+                  const delay = phase === 'open' ? i * 22 : 0;
+                  return `x2 ${dur}ms ease-in-out ${delay}ms, y2 ${dur}ms ease-in-out ${delay}ms`;
+                })(),
+              }}
+            />
+          );
+        })}
+      </svg>
+
+      {/* center hub — spins up a bright event-horizon ring while sucking everything back
+          in on close, same idea in reverse (a quick outward flash) on open. The icon sits
+          alone, truly centered in the circle — the "ASK COACH" label used to be stacked
+          inside the same circle underneath it, which pulled the icon itself off-center
+          (visually above the circle's real middle, since the label's row claimed space
+          below it). Moved the label outside the circle instead, same pattern the
+          empty-state badge already uses correctly. */}
+      <div
+        className="absolute top-1/2 left-1/2 rounded-full flex items-center justify-center transition-transform duration-[350ms]"
+        style={{
+          width: '15vmin',
+          height: '15vmin',
+          minWidth: 120,
+          minHeight: 120,
+          background: 'radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--cyan) 35%, #0c1015) 0%, #0c1015 70%)',
+          border: '2px solid var(--cyan)',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 8px 28px rgba(0,0,0,0.6)',
+          transform: `translate(-50%,-50%) scale(${phase === 'open' ? 1 : phase === 'closing' ? 0.4 : 0.15})`,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {phase === 'closing' && (
+          <div
+            className="absolute -inset-2 rounded-full animate-spin pointer-events-none"
+            style={{ borderWidth: 3, borderStyle: 'solid', borderColor: 'var(--cyan) var(--amber) var(--cyan) var(--amber)', animationDuration: '0.5s' }}
+          />
+        )}
+        <Brain className="w-8 h-8 text-[var(--cyan)]" />
+        <span
+          className="absolute left-1/2 -translate-x-1/2 top-full mt-2 font-display text-xs font-bold tracking-wider text-[var(--cyan)] whitespace-nowrap"
+          style={{ opacity: phase === 'open' ? 1 : 0, transition: 'opacity 200ms ease-in-out' }}
+        >
+          ASK COACH
+        </span>
+      </div>
+
+      {segments.map((seg, i) => {
+        const angle = (i / segments.length) * 2 * Math.PI - Math.PI / 2;
+        const x = collapsed ? '0px' : `calc(${Math.cos(angle)} * ${radiusVmin}vmin)`;
+        const y = collapsed ? '0px' : `calc(${Math.sin(angle)} * ${radiusVmin}vmin)`;
+        const Icon = seg.icon;
+        // Same duel read as the rest of the app: left side of the wheel reads CT cyan,
+        // right side T amber, top/bottom (dead center horizontally) neutral grey —
+        // driven by the segment's actual horizontal position (cos of its angle), not
+        // just its index, so it's really "which side of the page" and not just order.
+        const glow = duelLerp((Math.cos(angle) + 1) / 2);
+        return (
+          <button
+            key={seg.id}
+            type="button"
+            onClick={(e) => { e.stopPropagation(); requestClose(seg.prompt); }}
+            className={`group absolute top-1/2 left-1/2 flex items-center gap-3 px-6 py-4 rounded-full whitespace-nowrap hover:[--hover-scale:1.05] cursor-pointer border-[1.5px] shadow-[0_6px_20px_rgba(0,0,0,0.5)] hover:shadow-[0_0_30px_var(--glow)] hover:border-[color:var(--glow)] ${
+              seg.id === 'custom' ? 'border-dashed border-white/20' : 'border-solid border-white/10'
+            }`}
+            style={{
+              '--glow': glow,
+              '--hover-scale': 1,
+              // The base transform (position + collapse-scale) is fully dynamic/inline, so
+              // a plain `hover:scale-105` utility class can never win against it (inline
+              // styles always beat stylesheet rules, hover or not) — folding the hover bump
+              // in as its own var, set only by the `hover:` class above, sidesteps that.
+              transform: `translate(calc(-50% + ${x}), calc(-50% + ${y})) scale(${collapsed ? 0.1 : 1}) scale(var(--hover-scale))`,
+              opacity: collapsed ? 0 : 1,
+              // No per-segment `backdrop-filter` — 8 of them each re-sampling a blurred
+              // background WHILE animating transform every frame was the real source of
+              // the lag (backdrop-filter is expensive to recompute on a moving/resizing
+              // element; doing it 8x at once compounds badly). A slightly more opaque flat
+              // background reads almost the same without the per-frame blur cost — only
+              // the one big scrim behind everything still blurs, and it isn't moving.
+              background: 'rgba(16,21,28,0.88)',
+              transition: (() => {
+                const dur = phase === 'closing' ? 340 : 380;
+                const delay = phase === 'open' ? i * 22 : 0;
+                return `transform ${dur}ms cubic-bezier(0.2,0.8,0.3,1) ${delay}ms, opacity 280ms ease-in-out ${delay}ms, box-shadow 0.2s, border-color 0.2s`;
+              })(),
+            } as CSSProperties}
+          >
+            <Icon className="w-6 h-6 shrink-0 text-[var(--cyan)] transition-colors group-hover:text-[var(--glow)]" />
+            <span className="font-display text-base font-bold text-[var(--text)] transition-colors group-hover:text-[var(--glow)]">{seg.label}</span>
+          </button>
+        );
+      })}
+
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); requestClose(null); }}
+        title="Close"
+        className="absolute top-6 right-6 w-11 h-11 rounded-full flex items-center justify-center bg-[var(--panel-raised)] border border-[var(--edge)] text-[var(--text-dim)] hover:text-[var(--text)] cursor-pointer transition-opacity duration-300"
+        style={{ opacity: phase === 'opening' ? 0 : 1 }}
+      >
+        <X className="w-5 h-5" />
+      </button>
+    </div>,
+    document.body
+  );
+}
+
+// A themed bubble that follows the cursor instead of the browser's plain native `title`
+// tooltip (unstyled, positioned wherever the OS wants, easily clipped) — fades in over
+// ~1s on hover and fades back out over ~1s after the cursor leaves, staying mounted
+// through the fade-out instead of vanishing instantly so the transition actually plays.
+function useHoverTooltip(text: string) {
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [mounted, setMounted] = useState(false);
+  const [shown, setShown] = useState(false);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onMouseEnter = (e: React.MouseEvent) => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    setPos({ x: e.clientX, y: e.clientY });
+    setMounted(true);
+    requestAnimationFrame(() => setShown(true));
+  };
+  const onMouseMove = (e: React.MouseEvent) => setPos({ x: e.clientX, y: e.clientY });
+  const onMouseLeave = () => {
+    setShown(false);
+    hideTimer.current = setTimeout(() => setMounted(false), 1000);
+  };
+
+  useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
+
+  const tooltip = mounted ? createPortal(
+    <div
+      className="fixed z-50 pointer-events-none px-3.5 py-2.5 rounded-xl text-xs leading-snug font-medium text-[var(--text)] transition-opacity"
+      style={{
+        left: Math.min(pos.x + 18, (typeof window !== 'undefined' ? window.innerWidth : 1920) - 280),
+        top: pos.y + 18,
+        maxWidth: 260,
+        background: 'rgba(12,16,21,0.95)',
+        backdropFilter: 'blur(6px)',
+        border: '1px solid var(--edge-bright)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+        opacity: shown ? 1 : 0,
+        transitionDuration: '1000ms',
+      }}
+    >
+      {text}
+    </div>,
+    document.body
+  ) : null;
+
+  return { handlers: { onMouseEnter, onMouseMove, onMouseLeave }, tooltip };
+}
+
+const CAROUSEL_AUTO_MS = 4500;
+const CAROUSEL_PER_PAGE = 5;
+const CAROUSEL_GAP = 12;
+const CAROUSEL_PANEL_PADDING = 32; // p-4 on both sides
+
+// Replaces the old separate "Recent Form" win/loss dot strip AND the old static
+// 5-card "Recent Matches" row with one merged, cycleable section — every match card
+// clickable (routes to Coach with a match-specific prompt), paged through most-recent
+// to oldest. Auto-advances on a timer AND has manual arrows/dots ("both", per the
+// user's explicit choice) — auto-cycling pauses the moment you hover the carousel, so
+// it never fights a viewer who's actually trying to read or click something.
+function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }: { matches: Match[]; recentWins: number; recentLosses: number; onAskMatch: (m: Match) => void }) {
+  const [page, setPage] = useState(0);
+  const [paused, setPaused] = useState(false);
+  // Always exactly 5 cards per page — but their WIDTH is measured, not fixed, so the 5
+  // cards fill the panel edge to edge with no leftover gap on the right (a fixed 200px
+  // card left empty space whenever the real panel was wider than exactly 5*212px).
+  const outerRef = useRef<HTMLDivElement>(null);
+  const [cardWidth, setCardWidth] = useState(200);
+
+  useEffect(() => {
+    const el = outerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const usable = el.clientWidth - CAROUSEL_PANEL_PADDING;
+      const gapTotal = (CAROUSEL_PER_PAGE - 1) * CAROUSEL_GAP;
+      setCardWidth(Math.max(120, (usable - gapTotal) / CAROUSEL_PER_PAGE));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const slideWidth = CAROUSEL_PER_PAGE * (cardWidth + CAROUSEL_GAP);
+  const viewportWidth = slideWidth - CAROUSEL_GAP;
+  const totalPages = Math.max(1, Math.ceil(matches.length / CAROUSEL_PER_PAGE));
+
+  useEffect(() => {
+    if (paused || totalPages <= 1) return;
+    const id = setInterval(() => setPage((p) => (p + 1) % totalPages), CAROUSEL_AUTO_MS);
+    return () => clearInterval(id);
+  }, [paused, totalPages]);
+
+  // Matches (or perPage, on resize) can change between renders — keep the current page in bounds.
+  useEffect(() => {
+    if (page >= totalPages) setPage(0);
+  }, [totalPages, page]);
+
+  return (
+    <div
+      ref={outerRef}
+      className="glass tile3d border border-[var(--edge)] rounded-2xl p-4 mb-3.5"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-3">
+          <h2 className="font-display text-lg font-bold">Recent Matches</h2>
+          <p className="font-tel text-sm font-bold">
+            <span className="text-[var(--cyan)]">{recentWins}W</span>
+            <span className="text-[var(--text-dim)]">–</span>
+            <span className="text-[var(--danger)]">{recentLosses}L</span>
+          </p>
+        </div>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => (p - 1 + totalPages) % totalPages)}
+              className="w-7 h-7 rounded-full flex items-center justify-center bg-[var(--panel-raised)] border border-[var(--edge)] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[var(--cyan-dim)] transition-colors cursor-pointer"
+              title="Previous"
+            >
+              <ChevronRight className="w-3.5 h-3.5 rotate-180" />
+            </button>
+            <div className="flex items-center gap-1.5">
+              {Array.from({ length: totalPages }).map((_, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setPage(i)}
+                  className="rounded-full transition-all cursor-pointer"
+                  style={{ width: i === page ? 16 : 6, height: 6, background: i === page ? 'var(--cyan)' : 'var(--edge-bright)' }}
+                  title={`Page ${i + 1}`}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPage((p) => (p + 1) % totalPages)}
+              className="w-7 h-7 rounded-full flex items-center justify-center bg-[var(--panel-raised)] border border-[var(--edge)] text-[var(--text-dim)] hover:text-[var(--text)] hover:border-[var(--cyan-dim)] transition-colors cursor-pointer"
+              title="Next"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* A single continuous track that slides via `transform`, not a remounted page per
+          click — remounting (the old `key={page}` approach) just replayed a fade-in,
+          which read as an instant "blink" instead of movement. One real slide animation
+          instead. Cards keep a fixed width so a partially-filled last page never stretches
+          a lone card to fill the row. Viewport is sized to exactly `perPage` cards, never
+          the panel's full width, so a partial card can never peek in at the edge either. */}
+      <div className="overflow-hidden" style={{ width: viewportWidth }}>
+        <div
+          className="flex gap-3 transition-transform duration-500 ease-in-out"
+          style={{ transform: `translateX(-${page * slideWidth}px)` }}
+        >
+        {matches.map((m, i) => {
+          const t = m.match_data.telemetry;
+          // Colored by position WITHIN its own page (not the whole match list) so every
+          // page sweeps its own CT-cyan-to-T-amber gradient across its visible cards,
+          // same as before — keying off the full list's length instead made most of a
+          // long history read as flat cyan with only the very last couple of cards amber.
+          const accent = ctTAccent(i % CAROUSEL_PER_PAGE, CAROUSEL_PER_PAGE);
+          const bg = mapScreenshotUrl(t.map);
+          const matchRankBand = rankBand(t.rank_at_match_start);
+          return (
+            <div
+              key={m.match_id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onAskMatch(m)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAskMatch(m); } }}
+              style={{ width: cardWidth }}
+              className="relative flex-none h-48 rounded-2xl overflow-hidden border border-[var(--edge)] flex flex-col cursor-pointer transition-transform hover:-translate-y-0.5"
+            >
+              <div className="relative" style={{ flex: 3 }}>
+                {bg ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={bg} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                ) : (
+                  <div className="absolute inset-0 bg-gradient-to-br from-[var(--panel-raised)] to-[var(--void)]" />
+                )}
+                {matchRankBand && typeof t.rank_at_match_start === 'number' && (
+                  <div
+                    className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/50 rounded-full px-2 py-1"
+                    title={`Premier rank at kickoff: ${t.rank_at_match_start} (${matchRankBand.label})`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: matchRankBand.color }} />
+                    <span className="font-tel text-[10px] font-bold text-[var(--text)]">{t.rank_at_match_start}</span>
+                  </div>
+                )}
+              </div>
+              <div
+                className="flex items-center justify-between gap-2 px-3.5 chip3d"
+                style={{ flex: 1, borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}
+              >
+                <div className="min-w-0">
+                  <p className="font-display font-bold text-sm leading-none truncate">{formatMapName(t.map)}</p>
+                  <p className="text-[10px] text-[var(--text-dim)] mt-1.5">{formatMatchDate(t)}</p>
+                </div>
+                <div className="shrink-0 text-right" title="Kills-to-deaths ratio">
+                  <p className="font-tel text-base font-extrabold leading-none" style={{ color: accent }}>{t.kd_ratio}</p>
+                  <p className="text-[9px] uppercase tracking-wider text-[var(--text-dim)] mt-1.5">K/D</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type TabId = 'home' | 'matches' | 'insights' | 'coach' | 'settings';
+const TAB_IDS: TabId[] = ['home', 'matches', 'insights', 'coach', 'settings'];
+
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'home' | 'matches' | 'insights' | 'coach' | 'settings'>('home');
+  const [activeTab, setActiveTabState] = useState<TabId>('home');
+
+  // Tab switches used to be pure React state with zero browser-history entries, so
+  // pressing Back (or a mouse "Back" side button, which the browser treats identically)
+  // had nothing of ours to return to and fell straight through to whatever page was open
+  // before RoundSync — closing/leaving the app entirely instead of just switching tabs.
+  // Pushing a real history entry per tab, and listening for the browser's own back/forward
+  // navigation, makes Back move between RoundSync's tabs first, same as any real multi-page site.
+  const setActiveTab = useCallback((tab: TabId) => {
+    setActiveTabState(tab);
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    window.history.pushState({ tab }, '', url.toString());
+  }, []);
+
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get('tab');
+    if (fromUrl && (TAB_IDS as string[]).includes(fromUrl)) {
+      setActiveTabState(fromUrl as TabId);
+    } else {
+      // Establish a baseline history entry so the very first Back press has an in-app
+      // state to land on, instead of immediately leaving.
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', 'home');
+      window.history.replaceState({ tab: 'home' }, '', url.toString());
+    }
+
+    const onPopState = (e: PopStateEvent) => {
+      const tab = (e.state?.tab as TabId | undefined) || (new URLSearchParams(window.location.search).get('tab') as TabId | null) || 'home';
+      setActiveTabState(tab);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
   const [steamId, setSteamId] = useState<string | null>(null);
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
@@ -232,6 +694,14 @@ export default function Home() {
   // merging into the previous one because they happened to be close in time.
   const [conversations, setConversations] = useState<ConversationGroup[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [showTopicWheel, setShowTopicWheel] = useState(false);
+
+  const performanceTooltip = useHoverTooltip(
+    'Performance Index: a single 0-100 score blending your K/D ratio, damage per round, and headshot percentage. Click to ask the coach about it.'
+  );
+  const matchPerformanceTooltip = useHoverTooltip(
+    'Performance: a single 0-100 score blending K/D ratio, damage per round, and headshot percentage for this match.'
+  );
 
   const fetchProfile = useCallback(async (token: string) => {
     try {
@@ -457,12 +927,20 @@ export default function Home() {
     }
   };
 
-  // Lets the Insights dashboard's "Ask the coach about this" chips route a contextual
-  // question straight into the chat tab, prefilled — the same bridge as the example-prompt
-  // chips already use, just triggered from a different tab instead of the empty chat state.
-  const askCoachFromInsights = (question: string) => {
+  // The one bridge every clickable tile in the app (Home tiles, chart points, match cards,
+  // Insights stat tiles, map-breakdown cells) routes through: fill the chat input with a
+  // question specific to whatever was clicked and jump to the Coach tab — never auto-send,
+  // so the player can edit or add context before asking.
+  const promptCoach = (question: string) => {
     setChatInput(question);
     setActiveTab('coach');
+  };
+
+  // Fills the chat input from the topic wheel without navigating (we're already on
+  // Coach) and closes the popup — still never auto-sends.
+  const fillFromWheel = (question: string | null) => {
+    if (question) setChatInput(question);
+    setShowTopicWheel(false);
   };
 
   const askCoach = async (e: React.FormEvent) => {
@@ -525,6 +1003,18 @@ export default function Home() {
     setActiveConversationId(null);
   };
 
+  // Front-end only — removes a conversation from this browser's sidebar list. The
+  // underlying coaching_history rows aren't touched, so it comes back on next login;
+  // that's fine, this is a "declutter my view" control, not real deletion.
+  const deleteConversation = (e: React.MouseEvent, groupId: string) => {
+    e.stopPropagation();
+    setConversations((prev) => prev.filter((g) => g.id !== groupId));
+    if (activeConversationId === groupId) {
+      setMessages([]);
+      setActiveConversationId(null);
+    }
+  };
+
   // Compute Dashboard Metrics
   const parsedMatches = matches
     .filter(m => m.match_data.telemetry?.status === 'fully_parsed')
@@ -578,8 +1068,14 @@ export default function Home() {
   const recentWins = recentForm.filter((m) => m.match_data.telemetry.kd_ratio >= 1).length;
   const recentLosses = recentForm.length - recentWins;
 
-  const chartData = parsedMatches.map(m => ({
+  // `uid` (a plain index) is the chart's x-axis key instead of `name` — two matches on the
+  // same map share a `name`, and Recharts resolves hover/click position by matching the
+  // x-axis category value, so a non-unique key made it snap to the first match with that
+  // name instead of the one actually under the cursor.
+  const chartData = parsedMatches.map((m, i) => ({
+    uid: i,
     name: m.match_data.telemetry.map ? formatMapName(m.match_data.telemetry.map) : m.match_id.substring(5, 12),
+    date: formatMatchDate(m.match_data.telemetry),
     kd: m.match_data.telemetry.kd_ratio,
     adr: m.match_data.telemetry.adr,
     hs: m.match_data.telemetry.headshot_pct,
@@ -587,6 +1083,31 @@ export default function Home() {
   })).reverse();
 
   const isLive = isOnboarded === true;
+
+  // The Coach tab's "Choose a Topic" radial wheel — one spoke per category. These are
+  // deliberately NOT the same questions as the Home/Insights/Matches tile prompts (which
+  // each ask about one exact stat's exact number) — the wheel is a broader, open-ended
+  // conversation starter per area of the game, so its wording stays genuinely distinct
+  // even where the topic overlaps a tile elsewhere. A dynamic "Last Match" spoke and a
+  // "type my own" spoke (null prompt = doesn't send anything) round it out.
+  const lastParsedMatch = parsedMatches[0];
+  const wheelSegments: { id: string; label: string; icon: React.ElementType; prompt: string | null }[] = [
+    { id: 'aim', label: 'Aim & Reaction', icon: Crosshair, prompt: 'Where is my aim actually costing me rounds — not just in general, but in specific moments?' },
+    { id: 'positioning', label: 'Positioning', icon: MapPinned, prompt: 'Walk me through my worst positioning habit right now.' },
+    { id: 'engage', label: 'Engage vs. Save', icon: Users, prompt: 'Give me a rule of thumb for when I should fight outnumbered versus back off.' },
+    { id: 'economy', label: 'Buy Decisions', icon: Coins, prompt: 'Is my buy pattern actually hurting my team, or does it just feel that way?' },
+    { id: 'utility', label: 'Utility', icon: Flame, prompt: "What's the single biggest upgrade I could make to how I use my grenades?" },
+    {
+      id: 'last-match',
+      label: 'Last Match',
+      icon: Clock,
+      prompt: lastParsedMatch
+        ? `Break down my last match on ${formatMapName(lastParsedMatch.match_data.telemetry.map)} (${formatMatchDate(lastParsedMatch.match_data.telemetry)}) like you were coaching me live.`
+        : 'Break down my last match like you were coaching me live.',
+    },
+    { id: 'trade', label: 'Trade Discipline', icon: Repeat, prompt: 'Am I actually bad at trading kills, or just unlucky with timing?' },
+    { id: 'custom', label: 'Type my own', icon: Plus, prompt: null },
+  ];
 
   // Sync progress math
   const syncCounts = syncStatus?.counts;
@@ -728,7 +1249,7 @@ export default function Home() {
             </div>
           </div>
         ) : (
-          <div className="h-[calc(100vh-4rem)] overflow-y-auto">
+          <div>
             {rankChangeEvent && rankChangeEvent.crossedBand && (
               <RankBandTakeover event={rankChangeEvent} onDone={() => setRankChangeEvent(null)} />
             )}
@@ -753,9 +1274,21 @@ export default function Home() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-display text-base font-bold truncate">{personaName || 'Player'}</p>
-                      <span className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] shrink-0">
+                      {/* The Profile tile's identity (avatar/name/rank) stays a non-clickable
+                          block, but the Performance metric embedded in it is its own click
+                          target — plus an Info icon + a custom cursor-following tooltip
+                          (not the browser's plain native `title` popup) since "Performance"
+                          alone doesn't explain what's being measured. */}
+                      <button
+                        type="button"
+                        onClick={() => promptCoach(`My performance index is ${avgPerformanceIndex}/100 — a blended score from my K/D ratio, ADR, and headshot percentage. What's dragging it down the most?`)}
+                        className="group flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--text-dim)] shrink-0 cursor-pointer hover:text-[var(--text)] transition-colors"
+                        {...performanceTooltip.handlers}
+                      >
                         Performance <span className="font-tel font-bold text-[var(--amber)]">{avgPerformanceIndex}</span>
-                      </span>
+                        <Info className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                      </button>
+                      {performanceTooltip.tooltip}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1.5">
                       <RankBadge color={rankBand(rankNew)?.color ?? '#9ca3af'} rankNew={rankNew} size={26} />
@@ -769,85 +1302,94 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-                <div className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center" style={{ '--c': ctTAccent(1, 4) } as CSSProperties}>
+                <button
+                  type="button"
+                  onClick={() => promptCoach(`My average K/D over my last ${parsedMatches.length} games is ${avgKd}. Is that good for my rank, and what's dragging it down?`)}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
+                >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Target className="w-4 h-4 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">K/D Ratio</p>
                   </div>
                   <p className="font-tel text-3xl font-bold text-[var(--cyan)]">{avgKd}</p>
-                </div>
-                <div className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center" style={{ '--c': ctTAccent(2, 4) } as CSSProperties}>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => promptCoach(`My average ADR over my last ${parsedMatches.length} games is ${avgAdr}. What's the biggest thing holding my damage output back?`)}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
+                >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Zap className="w-4 h-4 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
                   </div>
                   <p className="font-tel text-3xl font-bold">{avgAdr}</p>
-                </div>
-                <div className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center" style={{ '--c': ctTAccent(3, 4) } as CSSProperties}>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => promptCoach(`My headshot percentage is ${avgHs}%. How can I improve it?`)}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
+                >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Crosshair className="w-4 h-4 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
                   </div>
                   <p className="font-tel text-3xl font-bold">{avgHs}%</p>
-                </div>
-              </div>
-
-              {/* Recent Form strip — spans the full row alone, so it stays neutral (win/loss
-                  dots already carry meaningful color) rather than taking a duel tint. */}
-              <div className="glass tile3d border border-[var(--edge)] rounded-2xl px-5 py-4 flex items-center justify-between mb-3.5">
-                <div className="flex items-center gap-3.5">
-                  <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] shrink-0">Recent Form</p>
-                  <div className="flex items-center gap-2">
-                    {recentForm.map((m) => {
-                      const won = m.match_data.telemetry.kd_ratio >= 1;
-                      return (
-                        <span
-                          key={m.match_id}
-                          className="w-3 h-3 rounded-full sphere3d"
-                          style={{ '--c': won ? 'var(--cyan)' : 'var(--danger)' } as CSSProperties}
-                          title={won ? 'Win' : 'Loss'}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-                <p className="font-tel text-base font-bold">
-                  <span className="text-[var(--cyan)]">{recentWins}W</span>
-                  <span className="text-[var(--text-dim)]">–</span>
-                  <span className="text-[var(--danger)]">{recentLosses}L</span>
-                </p>
+                </button>
               </div>
 
               {/* Secondary metrics — real per-match fields from the demo parser */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 mb-3.5">
-                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(0, 4) } as CSSProperties}>
+                <button
+                  type="button"
+                  onClick={() => promptCoach('How is my entry success rate — am I trading my life for enough value when I open a site?')}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(0, 4) } as CSSProperties}
+                >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <LogIn className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Entry Success</p>
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgEntrySuccessPct !== null ? `${avgEntrySuccessPct.toFixed(0)}%` : '—'}</p>
-                </div>
-                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(1, 4) } as CSSProperties}>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => promptCoach('Is my utility damage per round low? What am I doing wrong with my grenades?')}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
+                >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Flame className="w-3.5 h-3.5 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Utility Dmg/Rd</p>
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgUtilityDmgPerRound !== null ? avgUtilityDmgPerRound.toFixed(1) : '—'}</p>
-                </div>
-                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(2, 4) } as CSSProperties}>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => promptCoach("Walk me through my clutch rounds — what am I doing right or wrong when I'm the last one alive?")}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
+                >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Users className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Clutches Won</p>
                   </div>
                   <p className="font-tel text-2xl font-bold">{totalClutchesWon !== null ? totalClutchesWon : '—'}</p>
-                </div>
-                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(3, 4) } as CSSProperties}>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => promptCoach("My trade kill percentage feels low — which of my deaths had a teammate nearby who could have traded but didn't?")}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
+                >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Repeat className="w-3.5 h-3.5 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Trade Kill %</p>
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(0)}%` : '—'}</p>
-                </div>
+                </button>
               </div>
 
               {hasActiveSync && (
@@ -917,56 +1459,15 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-                  {/* Recent Matches — map-screenshot cards with rank-at-match-start pill */}
-                  <div className="mb-4">
-                    <h2 className="font-display text-lg font-bold mb-2">Recent Matches</h2>
-                    <div className="flex flex-wrap gap-3">
-                      {parsedMatches.slice(0, 5).map((m, i, arr) => {
-                        const t = m.match_data.telemetry;
-                        const accent = ctTAccent(i, arr.length);
-                        const bg = mapScreenshotUrl(t.map);
-                        const matchRankBand = rankBand(t.rank_at_match_start);
-                        return (
-                          <div key={m.match_id} className="relative flex-1 min-w-[168px] h-48 rounded-2xl overflow-hidden border border-[var(--edge)] flex flex-col">
-                            {/* picture — 3/4 of the card */}
-                            <div className="relative" style={{ flex: 3 }}>
-                              {bg ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={bg} alt="" className="absolute inset-0 w-full h-full object-cover" />
-                              ) : (
-                                <div className="absolute inset-0 bg-gradient-to-br from-[var(--panel-raised)] to-[var(--void)]" />
-                              )}
-                              {matchRankBand && typeof t.rank_at_match_start === 'number' && (
-                                <div
-                                  className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/50 rounded-full px-2 py-1"
-                                  title={`Premier rank at kickoff: ${t.rank_at_match_start} (${matchRankBand.label})`}
-                                >
-                                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: matchRankBand.color }} />
-                                  <span className="font-tel text-[10px] font-bold text-[var(--text)]">{t.rank_at_match_start}</span>
-                                </div>
-                              )}
-                            </div>
-                            {/* info — 1/4 of the card, accent fades CT cyan (left) to T amber (right) across the strip.
-                                Two matching stacked columns (name+date / K·D+label) side by side, so the two halves
-                                sit symmetrically instead of the number's stack fighting the single-line name for space. */}
-                            <div
-                              className="flex items-center justify-between gap-2 px-3.5 chip3d"
-                              style={{ flex: 1, borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}
-                            >
-                              <div className="min-w-0">
-                                <p className="font-display font-bold text-sm leading-none truncate">{formatMapName(t.map)}</p>
-                                <p className="text-[10px] text-[var(--text-dim)] mt-1.5">{formatMatchDate(t)}</p>
-                              </div>
-                              <div className="shrink-0 text-right" title="Kills-to-deaths ratio">
-                                <p className="font-tel text-base font-extrabold leading-none" style={{ color: accent }}>{t.kd_ratio}</p>
-                                <p className="text-[9px] uppercase tracking-wider text-[var(--text-dim)] mt-1.5">K/D</p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <RecentMatchesCarousel
+                    matches={parsedMatches}
+                    recentWins={recentWins}
+                    recentLosses={recentLosses}
+                    onAskMatch={(m) => {
+                      const t = m.match_data.telemetry;
+                      promptCoach(`What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS.`);
+                    }}
+                  />
 
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
@@ -976,11 +1477,11 @@ export default function Home() {
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                       {([
-                        { key: 'kd' as const, title: 'K/D Ratio', type: 'line' as const, decimals: 2 },
-                        { key: 'adr' as const, title: 'Average Damage per Round', type: 'bar' as const, decimals: 0 },
-                        { key: 'hs' as const, title: 'Headshot %', type: 'line' as const, decimals: 0 },
-                        { key: 'perf' as const, title: 'Performance Index', type: 'bar' as const, decimals: 0 },
-                      ]).map(({ key, title, type, decimals }, chartIndex) => {
+                        { key: 'kd' as const, title: 'K/D Ratio', type: 'line' as const, decimals: 2, metricLabel: 'K/D ratio' },
+                        { key: 'adr' as const, title: 'Average Damage per Round', type: 'bar' as const, decimals: 0, metricLabel: 'ADR' },
+                        { key: 'hs' as const, title: 'Headshot %', type: 'line' as const, decimals: 0, metricLabel: 'headshot percentage' },
+                        { key: 'perf' as const, title: 'Performance Index', type: 'bar' as const, decimals: 0, metricLabel: 'performance index' },
+                      ]).map(({ key, title, type, decimals, metricLabel }, chartIndex) => {
                         const recent = chartData.slice(-5);
                         const prior = chartData.slice(-10, -5);
                         const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
@@ -998,6 +1499,7 @@ export default function Home() {
                         // grey center instead of blending into it.
                         const col = chartIndex % 2;
                         const colorAt = (t: number) => duelLerp(col === 0 ? t * 0.5 : 0.5 + t * 0.5);
+                        const askAboutPoint = (d: any) => promptCoach(`Why was my ${metricLabel} ${d[key]} on ${d.name} (${d.date})?`);
                         return (
                           <div key={key} className="hud-corners bg-[var(--panel)] tile3d p-4.5 rounded-2xl border border-[var(--edge)] flex flex-col" style={{ height: 236 }}>
                             <div className="flex items-center justify-between shrink-0 mb-2">
@@ -1028,9 +1530,15 @@ export default function Home() {
                                       </filter>
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                                    <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                                    <XAxis dataKey="uid" stroke="#8592a1" tick={false} />
                                     <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} />
-                                    <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                                    <Tooltip
+                                      cursor={false}
+                                      contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }}
+                                      labelStyle={{ color: '#e7edf3' }}
+                                      itemStyle={{ color: '#e7edf3' }}
+                                      labelFormatter={(_, payload) => payload?.[0]?.payload ? `${payload[0].payload.name} · ${payload[0].payload.date}` : ''}
+                                    />
                                     <Area
                                       type="monotone"
                                       dataKey={key}
@@ -1040,9 +1548,21 @@ export default function Home() {
                                       fill={`url(#${gradId})`}
                                       dot={(dotProps: any) => {
                                         const c = colorAt(chartData.length > 1 ? dotProps.index / (chartData.length - 1) : 0.5);
-                                        return <circle key={dotProps.index} cx={dotProps.cx} cy={dotProps.cy} r={3} fill="#fff" stroke={c} strokeWidth={2} />;
+                                        return (
+                                          <circle
+                                            key={dotProps.index}
+                                            cx={dotProps.cx}
+                                            cy={dotProps.cy}
+                                            r={3}
+                                            fill="#fff"
+                                            stroke={c}
+                                            strokeWidth={2}
+                                            style={{ cursor: 'pointer' }}
+                                            onClick={() => askAboutPoint(dotProps.payload)}
+                                          />
+                                        );
                                       }}
-                                      activeDot={{ r: 7 }}
+                                      activeDot={{ r: 7, style: { cursor: 'pointer' }, onClick: (_: any, e: any) => askAboutPoint(e.payload) }}
                                     />
                                   </AreaChart>
                                 ) : (
@@ -1053,16 +1573,23 @@ export default function Home() {
                                       </filter>
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-                                    <XAxis dataKey="name" stroke="#8592a1" tick={false} />
+                                    <XAxis dataKey="uid" stroke="#8592a1" tick={false} />
                                     <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} domain={key === 'perf' ? [0, 100] : undefined} />
-                                    <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
+                                    <Tooltip
+                                      cursor={false}
+                                      contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }}
+                                      labelStyle={{ color: '#e7edf3' }}
+                                      itemStyle={{ color: '#e7edf3' }}
+                                      labelFormatter={(_, payload) => payload?.[0]?.payload ? `${payload[0].payload.name} · ${payload[0].payload.date}` : ''}
+                                    />
                                     <Bar
                                       dataKey={key}
-                                      style={{ filter: `url(#bar-shadow-${key})` }}
+                                      style={{ filter: `url(#bar-shadow-${key})`, cursor: 'pointer' }}
                                       shape={(p: any) => <Bar3DShape {...p} baseColor={p.fill} />}
+                                      onClick={(d: any) => askAboutPoint(d)}
                                     >
-                                      {chartData.map((_, i) => (
-                                        <Cell key={i} fill={colorAt(chartData.length > 1 ? i / (chartData.length - 1) : 0.5)} />
+                                      {chartData.map((d, i) => (
+                                        <Cell key={i} fill={colorAt(chartData.length > 1 ? i / (chartData.length - 1) : 0.5)} style={{ cursor: 'pointer' }} onClick={() => askAboutPoint(d)} />
                                       ))}
                                     </Bar>
                                   </BarChart>
@@ -1091,6 +1618,10 @@ export default function Home() {
       {activeTab === 'matches' && (
         <div className="max-w-7xl mx-auto px-6 py-10">
           <h1 className="font-display text-3xl font-bold mb-8">Match History</h1>
+          {/* One shared tooltip instance for every card's Performance stat (rendered once
+              here, not per-card in the map below — it's the same portal-mounted node
+              either way, and mounting it 30 times would stack 30 duplicate bubbles). */}
+          {matchPerformanceTooltip.tooltip}
 
           {isLoadingMatches && matches.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 gap-3 text-[var(--text-dim)]">
@@ -1116,8 +1647,16 @@ export default function Home() {
                 const bg = mapScreenshotUrl(t.map);
                 const matchRankBand = rankBand(t.rank_at_match_start);
                 const index = performanceIndex(t);
+                const matchPrompt = `What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS, with a performance index of ${index}/100.`;
                 return (
-                  <div key={m.match_id} className="hud-corners border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col">
+                  <div
+                    key={m.match_id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => promptCoach(matchPrompt)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); promptCoach(matchPrompt); } }}
+                    className="hud-corners border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col cursor-pointer transition-transform hover:-translate-y-0.5"
+                  >
                     <div className="relative h-44">
                       {bg ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -1163,7 +1702,10 @@ export default function Home() {
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">HS</p>
                         </div>
                       </div>
-                      <div className="flex items-center justify-between bg-[var(--void)] rounded-xl px-3.5 py-2.5">
+                      <div
+                        className="flex items-center justify-between bg-[var(--void)] rounded-xl px-3.5 py-2.5"
+                        {...matchPerformanceTooltip.handlers}
+                      >
                         <span className="text-[10px] uppercase tracking-wide text-[var(--text-dim)]">Performance</span>
                         <span className="font-tel font-bold text-[var(--amber)]">{index}<span className="text-[var(--text-dim)] text-xs">/100</span></span>
                       </div>
@@ -1179,7 +1721,7 @@ export default function Home() {
       {/* INSIGHTS DASHBOARD */}
       {activeTab === 'insights' && (
         isOnboarded ? (
-          jwtToken && <InsightsDashboard jwtToken={jwtToken} onAskCoach={askCoachFromInsights} />
+          jwtToken && <InsightsDashboard jwtToken={jwtToken} onAskCoach={promptCoach} />
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-16">
             <div className="bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl flex items-center gap-4 text-[var(--amber)] justify-center">
@@ -1207,7 +1749,10 @@ export default function Home() {
             ) : (
               <div className="flex-1 min-h-0 flex gap-4">
               {/* Recent chats sidebar */}
-              <div className="w-64 shrink-0 hud-corners chip3d border border-[var(--edge)] rounded-2xl flex flex-col overflow-hidden" style={{ '--c': ctTAccent(0, 2) } as CSSProperties}>
+              <div
+                className="w-64 shrink-0 hud-corners chip3d border rounded-2xl flex flex-col overflow-hidden"
+                style={{ '--c': ctTAccent(0, 2), borderColor: 'color-mix(in srgb, var(--c) 45%, var(--edge))' } as CSSProperties}
+              >
                 <div className="p-3 border-b border-[var(--edge)]">
                   <button
                     onClick={startNewChat}
@@ -1221,10 +1766,13 @@ export default function Home() {
                     <p className="text-xs text-[var(--text-dim)] text-center py-6 px-3">Your past conversations will show up here.</p>
                   ) : (
                     [...conversations].reverse().map((group) => (
-                      <button
+                      <div
                         key={group.id}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => switchConversation(group)}
-                        className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-colors border ${
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchConversation(group); } }}
+                        className={`group relative w-full text-left pl-3 pr-8 py-2.5 rounded-xl text-xs transition-colors border cursor-pointer ${
                           activeConversationId === group.id
                             ? 'bg-[var(--panel-raised)] border-[var(--cyan-dim)]'
                             : 'border-transparent hover:bg-[var(--panel-raised)]'
@@ -1232,50 +1780,108 @@ export default function Home() {
                       >
                         <p className="font-medium text-[var(--text)] truncate">{conversationPreview(group)}</p>
                         <p className="text-[10px] text-[var(--text-dim)] mt-0.5">{conversationDateLabel(group.lastAt)}</p>
-                      </button>
+                        <button
+                          type="button"
+                          title="Remove from this list"
+                          onClick={(e) => deleteConversation(e, group.id)}
+                          className="absolute top-1/2 right-2 -translate-y-1/2 p-1 rounded-md text-[var(--text-dim)] opacity-0 group-hover:opacity-100 hover:text-[var(--danger)] hover:bg-[var(--void)] transition-opacity"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     ))
                   )}
                 </div>
               </div>
 
-              <div className="hud-corners glass chip3d flex-1 border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col min-h-0" style={{ '--c': ctTAccent(1, 2) } as CSSProperties}>
+              <div
+                className="hud-corners chip3d flex-1 border rounded-2xl overflow-hidden flex flex-col min-h-0 relative"
+                style={{
+                  '--c': ctTAccent(1, 2),
+                  // A plain flat rgba() here (the earlier "make it more transparent" fix)
+                  // silently threw away the amber duel-accent `chip3d` would otherwise mix
+                  // in via `--c` — this panel sits on the right (`ctTAccent(1, 2)` = pure
+                  // T-amber), so it should read as an amber-tinted glass panel next to the
+                  // sidebar's cyan one, matching the app's own cyan-left/amber-right
+                  // background glow, not read as flat blue-tinted glass.
+                  // Slightly less transparent (was 0.35) with NO `backdrop-filter` at all —
+                  // measured directly: this panel's blur, sitting in front of the app's
+                  // always-animating background mesh/operators, was THE cause of "the whole
+                  // page is slow" on Coach (proved via a frame-time trace — with just this
+                  // one blur forcibly disabled, an otherwise-idle Coach page went from
+                  // ~22ms/frame with ~30 dropped frames per 90 to a clean 16.5ms/frame with
+                  // zero drops, even with those background animations left running
+                  // untouched). A plain semi-opaque gradient reads close enough to "glass"
+                  // without ever needing to resample what's moving behind it.
+                  background: 'linear-gradient(180deg, color-mix(in srgb, var(--c) 18%, rgba(12,16,21,0.55)) 0%, rgba(12,16,21,0.55) 60%)',
+                  borderColor: 'color-mix(in srgb, var(--c) 45%, var(--edge))',
+                } as CSSProperties}
+              >
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center text-center h-full text-[var(--text-dim)] py-12">
-                      <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-[var(--cyan-dim)] flex items-center justify-center">
-                        <Brain className="w-8 h-8 text-[var(--cyan)]" />
+                      <div className="relative w-[84px] h-[84px] mx-auto mb-5">
+                        <div
+                          className="absolute inset-0 rounded-full"
+                          style={{
+                            border: '1.5px solid transparent',
+                            backgroundImage:
+                              'radial-gradient(circle at 34% 30%, color-mix(in srgb, #6b7280 35%, #0c1015) 0%, #0c1015 70%), linear-gradient(90deg, var(--cyan) 0%, var(--amber) 100%)',
+                            backgroundOrigin: 'border-box',
+                            backgroundClip: 'padding-box, border-box',
+                            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 4px 16px rgba(0,0,0,0.5)',
+                          }}
+                        />
+                        <DuelIcon icon={Brain} className="w-8 h-8 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                       </div>
                       <p className="font-display font-bold text-lg text-[var(--text)]">Your AI Coach is ready</p>
-                      <p className="text-sm max-w-md mb-4">
-                        Specific questions get specific answers — vague ones like "am I good?" just waste a question. Try one of these, or ask your own the same way:
+                      <p className="text-sm max-w-md mb-6">
+                        Specific questions get specific answers — vague ones like "am I good?" just waste a question.
                       </p>
-                      <div className="flex flex-wrap gap-2 justify-center max-w-lg">
-                        {EXAMPLE_COACH_PROMPTS.map((example) => (
-                          <button
-                            key={example}
-                            type="button"
-                            onClick={() => setChatInput(example)}
-                            className="text-xs px-3 py-1.5 rounded-full border border-[var(--edge)] bg-[var(--panel-raised)] text-[var(--text)] hover:border-[var(--cyan-dim)] hover:text-[var(--cyan)] transition-colors"
-                          >
-                            {example}
-                          </button>
-                        ))}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowTopicWheel(true)}
+                        className="inline-flex items-center gap-2.5 px-6 py-3 rounded-full cursor-pointer transition-transform hover:-translate-y-0.5"
+                        style={{
+                          background: 'linear-gradient(180deg, color-mix(in srgb, #6b7280 22%, var(--panel-raised)) 0%, var(--panel-raised) 65%)',
+                          border: '1px solid transparent',
+                          backgroundImage:
+                            'linear-gradient(180deg, color-mix(in srgb, #6b7280 22%, var(--panel-raised)) 0%, var(--panel-raised) 65%), linear-gradient(90deg, var(--cyan-dim) 0%, var(--amber-dim) 100%)',
+                          backgroundOrigin: 'border-box',
+                          backgroundClip: 'padding-box, border-box',
+                          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 3px 8px rgba(0,0,0,0.4)',
+                        }}
+                      >
+                        <DuelIcon icon={Radar} className="w-4 h-4 relative" />
+                        <span
+                          className="font-display font-bold text-sm tracking-wide"
+                          style={{ background: 'linear-gradient(90deg, var(--cyan) 0%, var(--amber) 100%)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}
+                        >
+                          CHOOSE A TOPIC
+                        </span>
+                      </button>
+                      <p className="mt-3.5 text-[11px] text-[var(--text-dim)]">or type your own question below</p>
                     </div>
                   ) : (
                     messages.map((m, idx) => (
                       <div key={idx} className={`flex items-end gap-2.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         {m.role === 'assistant' && (
-                          <div className="w-7 h-7 rounded-full bg-[var(--panel-raised)] border border-[var(--cyan-dim)] flex items-center justify-center shrink-0">
-                            <Brain className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                          <div
+                            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
+                            style={{ background: 'radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--cyan) 40%, white) 0%, var(--cyan) 48%, color-mix(in srgb, var(--cyan) 75%, black) 100%)', boxShadow: '0 2px 3px rgba(0,0,0,0.5)' }}
+                          >
+                            <Brain className="w-3.5 h-3.5 text-[#03141a]" />
                           </div>
                         )}
                         <div
                           className={`max-w-[75%] rounded-2xl px-5 py-3 text-sm leading-relaxed ${
-                            m.role === 'user'
-                              ? 'bg-[var(--cyan)] text-[#03141a] rounded-br-none font-medium'
-                              : 'bg-[var(--panel-raised)] text-[var(--text)] rounded-bl-none border border-[var(--edge)] border-l-[3px] border-l-[var(--cyan)]'
+                            m.role === 'user' ? 'text-[#03141a] rounded-br-none font-medium' : 'text-[var(--text)] rounded-bl-none border border-[var(--edge)] border-l-[3px] border-l-[var(--cyan)]'
                           }`}
+                          style={
+                            m.role === 'user'
+                              ? { background: 'linear-gradient(180deg, color-mix(in srgb, var(--cyan) 45%, white) 0%, var(--cyan) 48%, color-mix(in srgb, var(--cyan) 68%, black) 100%)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -2px 4px rgba(0,0,0,0.22), 0 3px 8px rgba(0,0,0,0.4)' }
+                              : { background: 'linear-gradient(180deg, color-mix(in srgb, var(--cyan-dim) 22%, var(--panel-raised)) 0%, var(--panel-raised) 55%)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -6px 10px -6px rgba(0,0,0,0.5), 0 4px 8px rgba(0,0,0,0.35)' }
+                          }
                         >
                           {m.role === 'assistant' ? (
                             <TypedAssistantMessage
@@ -1299,18 +1905,27 @@ export default function Home() {
                     ))
                   )}
                   {isSendingMessage && (
-                    <div className="flex items-end gap-2.5 justify-start">
-                      <div className="w-7 h-7 rounded-full bg-[var(--panel-raised)] border border-[var(--cyan-dim)] flex items-center justify-center shrink-0">
-                        <Brain className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                    <div className="flex items-center gap-2.5 justify-start">
+                      <div
+                        className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
+                        style={{ background: 'radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--cyan) 40%, white) 0%, var(--cyan) 48%, color-mix(in srgb, var(--cyan) 75%, black) 100%)', boxShadow: '0 2px 3px rgba(0,0,0,0.5)' }}
+                      >
+                        <Brain className="w-3.5 h-3.5 text-[#03141a]" />
                       </div>
-                      <div className="bg-[var(--panel-raised)] text-[var(--text-dim)] rounded-2xl rounded-bl-none border border-[var(--edge)] border-l-[3px] border-l-[var(--cyan)] px-5 py-3 text-sm flex items-center gap-2">
-                        <Loader2 className="w-4 h-4 animate-spin text-[var(--cyan)]" />
-                        AI Coach is studying your match telemetry...
+                      <div
+                        className="flex items-center gap-1.5 px-5 py-3.5 rounded-2xl rounded-bl-none border border-[var(--edge)] border-l-[3px] border-l-[var(--cyan)]"
+                        style={{ background: 'linear-gradient(180deg, color-mix(in srgb, var(--cyan-dim) 22%, var(--panel-raised)) 0%, var(--panel-raised) 55%)' }}
+                      >
+                        <span className="live-dot w-1.5 h-1.5 rounded-full bg-[var(--cyan)]" />
+                        <span className="live-dot w-1.5 h-1.5 rounded-full bg-[var(--cyan)]" style={{ animationDelay: '0.15s' }} />
+                        <span className="live-dot w-1.5 h-1.5 rounded-full bg-[var(--cyan)]" style={{ animationDelay: '0.3s' }} />
                       </div>
                     </div>
                   )}
                   <div ref={messagesEndRef} />
                 </div>
+
+                {showTopicWheel && <TopicWheel segments={wheelSegments} onPick={fillFromWheel} />}
 
                 <form onSubmit={askCoach} className="bg-[var(--void)]/60 p-4 border-t border-[var(--edge)] flex gap-3 shrink-0">
                   <input

@@ -89,21 +89,19 @@ function EmptyCard({ label }: { label: string }) {
   );
 }
 
-function AskCoachChip({ onClick }: { onClick: () => void }) {
+// A small caption, not a button — the tiles themselves are the click targets now,
+// this just tells a first-time viewer that they're interactive.
+function AskCoachHint() {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="mt-3 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-[var(--edge)] bg-[var(--panel-raised)] text-[var(--text-dim)] hover:border-[var(--cyan-dim)] hover:text-[var(--cyan)] transition-colors"
-    >
-      <MessageCircleQuestion className="w-3.5 h-3.5" /> Ask the coach about this
-    </button>
+    <p className="mt-3 flex items-center gap-1.5 text-[10px] text-[var(--text-dim)]">
+      <MessageCircleQuestion className="w-3 h-3" /> Click a stat to ask the coach about it
+    </p>
   );
 }
 
-function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color }: { goodLabel: string; goodValue: number; badLabel: string; badValue: number; color: string }) {
+function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color, onAsk }: { goodLabel: string; goodValue: number; badLabel: string; badValue: number; color: string; onAsk: () => void }) {
   return (
-    <div>
+    <button type="button" onClick={onAsk} className="w-full text-left cursor-pointer transition-transform hover:-translate-y-0.5">
       <div className="flex justify-between text-xs text-[var(--text-dim)] mb-1.5">
         <span>{goodLabel}</span><span>{badLabel}</span>
       </div>
@@ -114,22 +112,38 @@ function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color }: { good
       <div className="flex justify-between font-tel text-sm font-bold mt-1.5">
         <span style={{ color }}>{goodValue}%</span><span className="text-[var(--text-dim)]">{badValue}%</span>
       </div>
-    </div>
+    </button>
   );
 }
 
 // Every stat tile is a bold embossed "chip" colored by whichever side of the page its
-// panel sits on — same treatment as the Home dashboard's KPI tiles.
-function StatTile({ label, value, color }: { label: string; value: string; color: string }) {
+// panel sits on — same treatment as the Home dashboard's KPI tiles. Each one is its own
+// click target now, firing a prompt specific to that exact stat (not the card it lives
+// in) — e.g. "Time to damage (won)" asks a different question than "Engagements" right
+// next to it, even though both live inside the same Crosshair Placement card.
+function StatTile({ label, value, color, onAsk }: { label: string; value: string; color: string; onAsk: () => void }) {
   return (
-    <div className="chip3d border border-[var(--edge)] rounded-xl p-4 text-center" style={{ '--c': color } as CSSProperties}>
+    <button
+      type="button"
+      onClick={onAsk}
+      className="chip3d border border-[var(--edge)] rounded-xl p-4 text-center cursor-pointer transition-transform hover:-translate-y-0.5"
+      style={{ '--c': color } as CSSProperties}
+    >
       <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">{label}</p>
       <p className="font-tel text-xl font-bold" style={{ color }}>{value}</p>
-    </div>
+    </button>
   );
 }
 
-function LoadoutMixBar({ mix, color }: { mix: Record<string, number>; color: string }) {
+const LOADOUT_QUESTION: Record<string, (count: number) => string> = {
+  full_buy: (n) => `I've had ${n} full-buy rounds. Am I making the most of them, or wasting the equipment advantage?`,
+  half_buy: (n) => `I've had ${n} half-buy rounds. Am I choosing the right gear for a half-buy, or should these be full buys or ecos instead?`,
+  force_buy: (n) => `I've force-bought ${n} times. Were those force buys worth it, or costing my team more than they won?`,
+  eco: (n) => `I've had ${n} eco rounds. Am I ecoing at the right times, or costing my team by not saving enough?`,
+  carried_over: (n) => `I've carried over gear from a previous round ${n} times. Is that working out for me?`,
+};
+
+function LoadoutMixBar({ mix, color, onAsk }: { mix: Record<string, number>; color: string; onAsk: (question: string) => void }) {
   const total = Object.values(mix).reduce((a, b) => a + b, 0);
   if (total === 0) return <EmptyCard label="economy" />;
   const entries = LOADOUT_ORDER.filter((k) => mix[k]).map((k) => [k, mix[k]] as const);
@@ -142,9 +156,11 @@ function LoadoutMixBar({ mix, color }: { mix: Record<string, number>; color: str
     <div>
       <div className="flex h-5 rounded-full overflow-hidden border border-[var(--edge)] mb-3 shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)]">
         {entries.map(([key, count], i) => (
-          <div
+          <button
+            type="button"
             key={key}
-            className="bar3d-h"
+            onClick={() => onAsk(LOADOUT_QUESTION[key](count))}
+            className="bar3d-h cursor-pointer transition-opacity hover:opacity-80"
             style={{
               '--c': shadeHex(color, shades[i % shades.length]),
               width: `${(count / total) * 100}%`,
@@ -156,18 +172,23 @@ function LoadoutMixBar({ mix, color }: { mix: Record<string, number>; color: str
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
         {entries.map(([key, count], i) => (
-          <div key={key} className="flex items-center gap-1.5">
+          <button
+            type="button"
+            key={key}
+            onClick={() => onAsk(LOADOUT_QUESTION[key](count))}
+            className="flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+          >
             <span className="sphere3d w-2.5 h-2.5 rounded-full shrink-0" style={{ '--c': shadeHex(color, shades[i % shades.length]) } as CSSProperties} />
             <span className="text-[var(--text-dim)]">{LOADOUT_LABELS[key]}</span>
             <span className="font-tel font-semibold">{count}</span>
-          </div>
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-function ReactionByTriggerChart({ adaptation, color }: { adaptation: Record<string, AdaptationDetail>; color: string }) {
+function ReactionByTriggerChart({ adaptation, color, onAsk }: { adaptation: Record<string, AdaptationDetail>; color: string; onAsk: (triggerLabel: string, reactedPct: number) => void }) {
   const data = Object.entries(adaptation).map(([type, d]) => ({
     name: TRIGGER_LABELS[type] || type,
     reacted_pct: Math.round(100 - d.no_visible_reaction_within_3s_pct),
@@ -187,9 +208,20 @@ function ReactionByTriggerChart({ adaptation, color }: { adaptation: Record<stri
           <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" horizontal={false} />
           <XAxis type="number" domain={[0, 100]} stroke="#8592a1" tick={{ fontSize: 11 }} />
           <YAxis type="category" dataKey="name" stroke="#8592a1" width={110} tick={{ fontSize: 11 }} />
-          <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} formatter={(v: any) => [`${v}%`, 'Reacted within 3s']} />
-          <Bar dataKey="reacted_pct" style={{ filter: 'url(#reaction-bar-shadow)' }} shape={(p: any) => <Bar3DShape {...p} baseColor={p.fill} />}>
-            {data.map((_, i) => <Cell key={i} fill={shadeHex(color, shades[i % shades.length])} />)}
+          <Tooltip
+            cursor={false}
+            contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }}
+            labelStyle={{ color: '#e7edf3' }}
+            itemStyle={{ color: '#e7edf3' }}
+            formatter={(v: any) => [`${v}%`, 'Reacted within 3s']}
+          />
+          <Bar
+            dataKey="reacted_pct"
+            style={{ filter: 'url(#reaction-bar-shadow)', cursor: 'pointer' }}
+            shape={(p: any) => <Bar3DShape {...p} baseColor={p.fill} />}
+            onClick={(d: any) => onAsk(d.name, d.reacted_pct)}
+          >
+            {data.map((d, i) => <Cell key={i} fill={shadeHex(color, shades[i % shades.length])} style={{ cursor: 'pointer' }} onClick={() => onAsk(d.name, d.reacted_pct)} />)}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
@@ -200,7 +232,7 @@ function ReactionByTriggerChart({ adaptation, color }: { adaptation: Record<stri
 // These two trend charts always live in a full-width, both-columns panel, so — like the
 // Home dashboard's own trend charts — they sweep the full CT cyan → grey → T amber range
 // across their own width rather than sitting at one flat "side" color.
-function TrendChart({ data, dataKey, label }: { data: TrendPoint[]; dataKey: 'reaction_pct' | 'good_decision_pct'; label: string }) {
+function TrendChart({ data, dataKey, label, onAsk }: { data: TrendPoint[]; dataKey: 'reaction_pct' | 'good_decision_pct'; label: string; onAsk: (point: TrendPoint) => void }) {
   if (data.length < 2) return <EmptyCard label="trend" />;
   return (
     <div className="h-48">
@@ -217,10 +249,16 @@ function TrendChart({ data, dataKey, label }: { data: TrendPoint[]; dataKey: 're
             </filter>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
-          <XAxis dataKey="map" stroke="#8592a1" tick={false} />
+          {/* match_id, not map — several points can share the same map, and a non-unique
+              x-axis key made Recharts' hover/click resolve to the first match with that
+              map instead of the one actually under the cursor. */}
+          <XAxis dataKey="match_id" stroke="#8592a1" tick={false} />
           <YAxis stroke="#8592a1" domain={[0, 100]} tick={{ fontSize: 11 }} />
           <Tooltip
+            cursor={false}
             contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }}
+            labelStyle={{ color: '#e7edf3' }}
+            itemStyle={{ color: '#e7edf3' }}
             formatter={(v: any) => [`${v}%`, label]}
             labelFormatter={(_, payload) => (payload?.[0]?.payload?.map ? formatMapName(payload[0].payload.map) : '')}
           />
@@ -232,9 +270,21 @@ function TrendChart({ data, dataKey, label }: { data: TrendPoint[]; dataKey: 're
             style={{ filter: `url(#trend-glow-${dataKey})` }}
             dot={(dotProps: any) => {
               const c = duelLerp(data.length > 1 ? dotProps.index / (data.length - 1) : 0.5);
-              return <circle key={dotProps.index} cx={dotProps.cx} cy={dotProps.cy} r={3} fill="#fff" stroke={c} strokeWidth={2} />;
+              return (
+                <circle
+                  key={dotProps.index}
+                  cx={dotProps.cx}
+                  cy={dotProps.cy}
+                  r={3}
+                  fill="#fff"
+                  stroke={c}
+                  strokeWidth={2}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => onAsk(dotProps.payload)}
+                />
+              );
             }}
-            activeDot={{ r: 7 }}
+            activeDot={{ r: 7, style: { cursor: 'pointer' }, onClick: (_: any, e: any) => onAsk(e.payload) }}
           />
         </LineChart>
       </ResponsiveContainer>
@@ -250,7 +300,17 @@ const MAP_ROW_COLUMNS = '84px 1fr repeat(4, 88px)';
 // <table> here let cell padding drift row-to-row so the metric columns never quite lined
 // up with the map name; a single shared CSS Grid template guarantees every row's columns
 // share the exact same edges.
-function MapHeatmap({ rows }: { rows: MapBreakdownRow[] }) {
+// One phrase per metric column so a clicked cell asks about that stat specifically,
+// not a generic "how am I doing on this map" — same K/D metric asks a different
+// question here (map-scoped) than the Home tile or the Aim & Reaction tiles do.
+const MAP_METRIC_QUESTION: Record<string, (map: string, val: number, games: number) => string> = {
+  avg_kd: (map, val, games) => `My K/D on ${map} is ${val} across ${games} game${games === 1 ? '' : 's'} — how can I improve it specifically on this map?`,
+  avg_adr: (map, val, games) => `My ADR on ${map} is ${val} across ${games} game${games === 1 ? '' : 's'} — what's limiting my damage output on this map?`,
+  avg_hs_pct: (map, val, games) => `My headshot percentage on ${map} is ${val}% across ${games} game${games === 1 ? '' : 's'} — is that low for this map's engagement distances?`,
+  avg_performance: (map, val, games) => `My performance index on ${map} is ${val}/100 across ${games} game${games === 1 ? '' : 's'} — what's holding it back on this specific map?`,
+};
+
+function MapHeatmap({ rows, onAsk }: { rows: MapBreakdownRow[]; onAsk: (question: string) => void }) {
   if (rows.length === 0) return <EmptyCard label="map" />;
   const metrics: { key: keyof MapBreakdownRow; label: string; suffix?: string }[] = [
     { key: 'avg_kd', label: 'K/D' },
@@ -311,16 +371,18 @@ function MapHeatmap({ rows }: { rows: MapBreakdownRow[] }) {
                   const val = Number(r[m.key]) || 0;
                   const intensity = Math.min(1, val / maxByMetric[m.key]);
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={m.key}
-                      className="text-center rounded-lg font-tel text-sm font-semibold py-2.5"
+                      onClick={() => onAsk(MAP_METRIC_QUESTION[m.key](formatMapName(r.map), val, r.games))}
+                      className="text-center rounded-lg font-tel text-sm font-semibold py-2.5 cursor-pointer transition-transform hover:-translate-y-0.5"
                       style={{
                         background: hexToRgba(columnColors[colIndex], 0.12 + intensity * 0.55),
                         boxShadow: `inset 0 1px 0 rgba(255,255,255,${0.06 + intensity * 0.1}), inset 0 -3px 6px rgba(0,0,0,0.35), 0 2px 4px rgba(0,0,0,0.3)`,
                       }}
                     >
                       {val}{m.suffix || ''}
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -444,7 +506,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
           }}
         >
           <h3 className="font-display font-bold text-2xl mb-6">Performance by Map</h3>
-          <MapHeatmap rows={data.mapBreakdown} />
+          <MapHeatmap rows={data.mapBreakdown} onAsk={onAskCoach} />
         </div>
       )}
 
@@ -458,13 +520,33 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
             {factSummary.duels ? (
               <>
                 <div className="grid grid-cols-2 gap-3 mb-4">
-                  <StatTile label="Avg. deviation (won)" value={`${factSummary.duels.avg_angle_deviation_deg_when_won ?? '—'}°`} color={SIDE_LEFT} />
-                  <StatTile label="Avg. deviation (lost)" value={`${factSummary.duels.avg_angle_deviation_deg_when_lost ?? '—'}°`} color={SIDE_LEFT} />
-                  <StatTile label="Engagements" value={`${factSummary.duels.engagements_tracked}`} color={SIDE_LEFT} />
-                  <StatTile label="Time to damage (won)" value={factSummary.duels.avg_time_to_damage_seconds_when_won !== null ? `${factSummary.duels.avg_time_to_damage_seconds_when_won}s` : '—'} color={SIDE_LEFT} />
+                  <StatTile
+                    label="Avg. deviation (won)"
+                    value={`${factSummary.duels.avg_angle_deviation_deg_when_won ?? '—'}°`}
+                    color={SIDE_LEFT}
+                    onAsk={() => onAskCoach(`My average crosshair deviation when I win a duel is ${factSummary.duels?.avg_angle_deviation_deg_when_won ?? '—'}°. Is that good, and how do I get it lower?`)}
+                  />
+                  <StatTile
+                    label="Avg. deviation (lost)"
+                    value={`${factSummary.duels.avg_angle_deviation_deg_when_lost ?? '—'}°`}
+                    color={SIDE_LEFT}
+                    onAsk={() => onAskCoach(`Why is my crosshair deviation ${factSummary.duels?.avg_angle_deviation_deg_when_lost ?? '—'}° when I lose a duel — what am I doing differently than when I win?`)}
+                  />
+                  <StatTile
+                    label="Engagements"
+                    value={`${factSummary.duels.engagements_tracked}`}
+                    color={SIDE_LEFT}
+                    onAsk={() => onAskCoach(`I've had ${factSummary.duels?.engagements_tracked} tracked duel engagements. Which ones did I lose that I should have won?`)}
+                  />
+                  <StatTile
+                    label="Time to damage (won)"
+                    value={factSummary.duels.avg_time_to_damage_seconds_when_won !== null ? `${factSummary.duels.avg_time_to_damage_seconds_when_won}s` : '—'}
+                    color={SIDE_LEFT}
+                    onAsk={() => onAskCoach(`It takes me ${factSummary.duels?.avg_time_to_damage_seconds_when_won ?? '—'}s to land damage after winning a duel. Is that fast or slow for my rank?`)}
+                  />
                 </div>
                 <p className="text-xs text-[var(--text-dim)]">Smaller deviation = your crosshair was already closer to the enemy the instant you fired.</p>
-                <AskCoachChip onClick={() => onAskCoach('Why is my crosshair placement worse when I lose a duel?')} />
+                <AskCoachHint />
               </>
             ) : <EmptyCard label="aim" />}
           </div>
@@ -476,15 +558,24 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
             </div>
             {factSummary.adaptation ? (
               <>
-                <ReactionByTriggerChart adaptation={factSummary.adaptation} color={SIDE_RIGHT} />
-                <AskCoachChip onClick={() => onAskCoach('Which trigger type do I react to slowest — deaths, plants, or footsteps?')} />
+                <ReactionByTriggerChart
+                  adaptation={factSummary.adaptation}
+                  color={SIDE_RIGHT}
+                  onAsk={(triggerLabel, reactedPct) => onAskCoach(`I only react within 3 seconds ${reactedPct}% of the time after "${triggerLabel}". Why am I slow to react to this specifically?`)}
+                />
+                <AskCoachHint />
               </>
             ) : <EmptyCard label="reaction" />}
           </div>
 
           <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 lg:col-span-2 card-in" style={{ '--c': SIDE_CENTER, animationDelay: '160ms' } as CSSProperties}>
             <h3 className="font-display font-bold text-lg mb-4">Reaction Rate Over Time</h3>
-            <TrendChart data={data.trends.reaction} dataKey="reaction_pct" label="Reacted within 3s" />
+            <TrendChart
+              data={data.trends.reaction}
+              dataKey="reaction_pct"
+              label="Reacted within 3s"
+              onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, my reaction rate was ${point.reaction_pct}%. What happened in that match that affected it?`)}
+            />
           </div>
         </div>
       )}
@@ -498,12 +589,29 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
             </div>
             {factSummary.positioning ? (
               <>
-                <EmphasisBar goodLabel="Survived" goodValue={factSummary.positioning.survived_pct} badLabel="Died" badValue={factSummary.positioning.died_pct} color={SIDE_LEFT} />
+                <EmphasisBar
+                  goodLabel="Survived"
+                  goodValue={factSummary.positioning.survived_pct}
+                  badLabel="Died"
+                  badValue={factSummary.positioning.died_pct}
+                  color={SIDE_LEFT}
+                  onAsk={() => onAskCoach(`I died ${factSummary.positioning?.died_pct}% of the time on isolated pushes. Which of those pushes had no teammate nearby to trade?`)}
+                />
                 <div className="grid grid-cols-2 gap-3 mt-4">
-                  <StatTile label="Isolated pushes" value={`${factSummary.positioning.isolated_commitments}`} color={SIDE_LEFT} />
-                  <StatTile label="Deaths that were tradeable" value={factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct !== null ? `${factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct}%` : '—'} color={SIDE_LEFT} />
+                  <StatTile
+                    label="Isolated pushes"
+                    value={`${factSummary.positioning.isolated_commitments}`}
+                    color={SIDE_LEFT}
+                    onAsk={() => onAskCoach(`I've made ${factSummary.positioning?.isolated_commitments} isolated pushes. Am I pushing alone too often?`)}
+                  />
+                  <StatTile
+                    label="Deaths that were tradeable"
+                    value={factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct !== null ? `${factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct}%` : '—'}
+                    color={SIDE_LEFT}
+                    onAsk={() => onAskCoach(`${factSummary.positioning?.of_deaths_teammate_was_in_trade_range_pct ?? '—'}% of my deaths had a teammate in trade range. Why didn't more of those turn into actual trades?`)}
+                  />
                 </div>
-                <AskCoachChip onClick={() => onAskCoach('Which of my isolated pushes had no teammate nearby to trade?')} />
+                <AskCoachHint />
               </>
             ) : <EmptyCard label="positioning" />}
           </div>
@@ -516,19 +624,44 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
             {factSummary.engage ? (
               <>
                 <div className="grid grid-cols-2 gap-3 mb-4">
-                  <StatTile label="Outnumbered moments" value={`${factSummary.engage.outnumbered_moments}`} color={SIDE_RIGHT} />
-                  <StatTile label="Chose to engage" value={`${factSummary.engage.chose_to_engage_pct}%`} color={SIDE_RIGHT} />
-                  <StatTile label="Round win % (engaged)" value={factSummary.engage.round_win_pct_when_engaged !== null ? `${factSummary.engage.round_win_pct_when_engaged}%` : '—'} color={SIDE_RIGHT} />
-                  <StatTile label="Survived (disengaged)" value={factSummary.engage.survived_pct_when_disengaged !== null ? `${factSummary.engage.survived_pct_when_disengaged}%` : '—'} color={SIDE_RIGHT} />
+                  <StatTile
+                    label="Outnumbered moments"
+                    value={`${factSummary.engage.outnumbered_moments}`}
+                    color={SIDE_RIGHT}
+                    onAsk={() => onAskCoach(`I've been outnumbered ${factSummary.engage?.outnumbered_moments} times. What should I generally do in that situation?`)}
+                  />
+                  <StatTile
+                    label="Chose to engage"
+                    value={`${factSummary.engage.chose_to_engage_pct}%`}
+                    color={SIDE_RIGHT}
+                    onAsk={() => onAskCoach(`I choose to engage when outnumbered ${factSummary.engage?.chose_to_engage_pct}% of the time. Is that too aggressive?`)}
+                  />
+                  <StatTile
+                    label="Round win % (engaged)"
+                    value={factSummary.engage.round_win_pct_when_engaged !== null ? `${factSummary.engage.round_win_pct_when_engaged}%` : '—'}
+                    color={SIDE_RIGHT}
+                    onAsk={() => onAskCoach(`When I engage while outnumbered, my round win rate is ${factSummary.engage?.round_win_pct_when_engaged ?? '—'}%. Is that worth the risk?`)}
+                  />
+                  <StatTile
+                    label="Survived (disengaged)"
+                    value={factSummary.engage.survived_pct_when_disengaged !== null ? `${factSummary.engage.survived_pct_when_disengaged}%` : '—'}
+                    color={SIDE_RIGHT}
+                    onAsk={() => onAskCoach(`When I disengage instead of fighting outnumbered, I survive ${factSummary.engage?.survived_pct_when_disengaged ?? '—'}% of the time. Should I be disengaging more often?`)}
+                  />
                 </div>
-                <AskCoachChip onClick={() => onAskCoach('Should I have engaged or saved when I was last outnumbered?')} />
+                <AskCoachHint />
               </>
             ) : <EmptyCard label="engage-decision" />}
           </div>
 
           <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 lg:col-span-2 card-in" style={{ '--c': SIDE_CENTER, animationDelay: '160ms' } as CSSProperties}>
             <h3 className="font-display font-bold text-lg mb-4">Positioning Decisions Over Time</h3>
-            <TrendChart data={data.trends.positioning} dataKey="good_decision_pct" label="Survived or tradeable" />
+            <TrendChart
+              data={data.trends.positioning}
+              dataKey="good_decision_pct"
+              label="Survived or tradeable"
+              onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, my "survived or tradeable" rate was ${point.good_decision_pct}%. What happened in that match?`)}
+            />
           </div>
         </div>
       )}
@@ -540,14 +673,24 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
               <Coins className="w-4 h-4" style={{ color: SIDE_LEFT }} />
               <h3 className="font-display font-bold text-lg">Buy Decisions</h3>
             </div>
-            <LoadoutMixBar mix={data.loadoutMix} color={SIDE_LEFT} />
+            <LoadoutMixBar mix={data.loadoutMix} color={SIDE_LEFT} onAsk={onAskCoach} />
             {factSummary.economy && (
               <div className="grid grid-cols-2 gap-3 mt-4">
-                <StatTile label="Rounds tracked" value={`${factSummary.economy.rounds_tracked}`} color={SIDE_LEFT} />
-                <StatTile label="Against team economy" value={`${factSummary.economy.buy_decisions_against_team_economy_pct}%`} color={SIDE_LEFT} />
+                <StatTile
+                  label="Rounds tracked"
+                  value={`${factSummary.economy.rounds_tracked}`}
+                  color={SIDE_LEFT}
+                  onAsk={() => onAskCoach(`You've tracked ${factSummary.economy?.rounds_tracked} of my rounds' buy decisions. What patterns do you see in how I spend?`)}
+                />
+                <StatTile
+                  label="Against team economy"
+                  value={`${factSummary.economy.buy_decisions_against_team_economy_pct}%`}
+                  color={SIDE_LEFT}
+                  onAsk={() => onAskCoach(`I bought against my team's economy ${factSummary.economy?.buy_decisions_against_team_economy_pct}% of the time. Which rounds were those, and did it cost us?`)}
+                />
               </div>
             )}
-            <AskCoachChip onClick={() => onAskCoach('Which rounds did I buy against my team\'s economy?')} />
+            <AskCoachHint />
           </div>
 
           <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_RIGHT, animationDelay: '80ms' } as CSSProperties}>
@@ -563,12 +706,23 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   badLabel="Team-flashes"
                   badValue={Math.round(factSummary.utility.team_flash_pct || 0)}
                   color={SIDE_RIGHT}
+                  onAsk={() => onAskCoach(`${Math.round(factSummary.utility?.team_flash_pct || 0)}% of my flashes are team-flashes. Which of my flashbangs blinded my own team?`)}
                 />
                 <div className="grid grid-cols-2 gap-3 mt-4">
-                  <StatTile label="Flash assists" value={`${factSummary.utility.flash_assist_count}`} color={SIDE_RIGHT} />
-                  <StatTile label="Avg. HE/molotov dmg" value={factSummary.utility.avg_damage_per_he_or_molotov !== null ? `${factSummary.utility.avg_damage_per_he_or_molotov}` : '—'} color={SIDE_RIGHT} />
+                  <StatTile
+                    label="Flash assists"
+                    value={`${factSummary.utility.flash_assist_count}`}
+                    color={SIDE_RIGHT}
+                    onAsk={() => onAskCoach(`I have ${factSummary.utility?.flash_assist_count} flash assists. How can I set up more of these?`)}
+                  />
+                  <StatTile
+                    label="Avg. HE/molotov dmg"
+                    value={factSummary.utility.avg_damage_per_he_or_molotov !== null ? `${factSummary.utility.avg_damage_per_he_or_molotov}` : '—'}
+                    color={SIDE_RIGHT}
+                    onAsk={() => onAskCoach(`My average HE/molotov damage is ${factSummary.utility?.avg_damage_per_he_or_molotov ?? '—'}. Am I throwing my grenades effectively?`)}
+                  />
                 </div>
-                <AskCoachChip onClick={() => onAskCoach('Which of my flashbangs blinded my own team?')} />
+                <AskCoachHint />
               </>
             ) : <EmptyCard label="utility" />}
           </div>

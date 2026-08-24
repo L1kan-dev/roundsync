@@ -150,6 +150,27 @@ body {
   animation: pulse-dot 1.6s ease-in-out infinite;
 }
 
+/* The AI Coach topic wheel's opening/closing "white hole / black hole" flash — a ring
+   that expands and fades on open, and (played with `animation-direction: reverse`)
+   contracts back in on close. */
+@keyframes wheel-flash {
+  0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(3.2); opacity: 0; }
+}
+.wheel-flash {
+  animation: wheel-flash 0.6s ease-out forwards;
+}
+
+/* Themed scrollbar — the earlier version of this rule got removed because it was showing
+   up ALONGSIDE the browser's own scrollbar (a real double-scroll-container bug on Home,
+   fixed separately). With only one scroll container per area now, a themed scrollbar is
+   safe again — and necessary, since the unstyled OS-default scrollbar is light/white and
+   clashes hard with this dark UI. `scrollbar-color`/`scrollbar-width` cover Firefox and
+   newer Chromium; `::-webkit-scrollbar` covers the rest. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge-bright) var(--void);
+}
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--void); }
 ::-webkit-scrollbar-thumb { background: var(--edge-bright); border-radius: 8px; }
@@ -167,13 +188,19 @@ body {
 
 /* Gradient-mesh hero backdrop — soft blurred color blobs + a fine grid,
    giving the hero real depth instead of a flat panel color. */
+/* translate-only, no `scale()` — a scaling transform can force the browser to
+   re-rasterize the layer at each new size instead of just repositioning the existing
+   composited bitmap, which is real added cost on a continuous infinite-loop animation
+   (measured, not assumed: this stacked with the operator idle-sway animations to a
+   real, repeatable drop to sub-40fps on an otherwise-idle page). Pure translate is the
+   cheapest transform there is — the compositor can just move the existing layer. */
 @keyframes drift-a {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(4%, -6%) scale(1.08); }
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(4%, -6%); }
 }
 @keyframes drift-b {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(-5%, 5%) scale(1.05); }
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-5%, 5%); }
 }
 
 .hero-mesh {
@@ -190,8 +217,16 @@ body {
   height: 140%;
   top: -20%;
   border-radius: 50%;
-  filter: blur(90px);
+  /* No `filter: blur()` — the radial-gradient below already fades to transparent on its
+     own, so the soft-blob look doesn't need it. This ran forever, on every page, animating
+     `transform` on a heavily blurred large element — the browser has to recompute the blur
+     from scratch every frame a blurred element's geometry changes, which is one of the
+     most expensive things a continuous CSS animation can do. Combined with any large
+     `backdrop-filter` panel sitting in front of it (like the AI Coach chat panel), that
+     panel then ALSO has to keep re-resampling a background that never stops changing —
+     this pairing was the real source of "the whole page is slow," not any one component. */
   opacity: 0.35;
+  will-change: transform;
 }
 .hero-mesh::before {
   left: -10%;
@@ -247,8 +282,13 @@ body {
   0%, 100% { transform: translateY(0) rotate(0deg); }
   50% { transform: translateY(-14px) rotate(-0.6deg); }
 }
-.operator-idle-a { animation: operator-idle-a 7s ease-in-out infinite; }
-.operator-idle-b { animation: operator-idle-b 8s ease-in-out infinite 0.5s; }
+/* `will-change: transform` hints the browser to promote these onto their own compositor
+   layer up front, instead of (re-)promoting them on the fly or falling back to repainting
+   the layer under them each frame — measured this as a real, not just theoretical, source
+   of dropped frames on top of the plain animation cost, even though rotate/translate are
+   otherwise compositor-only properties. */
+.operator-idle-a { animation: operator-idle-a 7s ease-in-out infinite; will-change: transform; }
+.operator-idle-b { animation: operator-idle-b 8s ease-in-out infinite 0.5s; will-change: transform; }
 
 /* Insights dashboard — staggered card entrance (delay set per-card via inline style) */
 @keyframes card-in {
