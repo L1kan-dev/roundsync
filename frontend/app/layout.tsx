@@ -26,13 +26,13 @@ export default function RootLayout({
           <img
             src="/operators/ct.png"
             alt=""
-            className="operator-idle-a absolute bottom-[-6%] left-[-2%] w-[26vw] max-w-[420px] h-[95vh] object-contain object-bottom opacity-[0.09]"
+            className="operator-idle-a absolute bottom-[-2%] left-[0%] w-[30vw] max-w-[580px] h-[100vh] object-contain object-bottom opacity-[0.6]"
           />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/operators/t.png"
             alt=""
-            className="operator-idle-b absolute bottom-[-6%] right-[-2%] w-[26vw] max-w-[420px] h-[95vh] object-contain object-bottom opacity-[0.09]"
+            className="operator-idle-b absolute bottom-[-2%] right-[0%] w-[30vw] max-w-[580px] h-[100vh] object-contain object-bottom opacity-[0.6]"
           />
         </div>
         {children}

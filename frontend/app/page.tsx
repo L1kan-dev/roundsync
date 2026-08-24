@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback, CSSProperties } from 'react';
-import { ResponsiveContainer, LineChart, Line, Area, AreaChart, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, LineChart, Line, Area, AreaChart, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
 import { Brain, ShieldAlert, CheckCircle2, ChevronRight, Loader2, Target, Crosshair, Radar, Download, Plus, TrendingUp, Zap, LogIn, Flame, Users, Repeat } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
 import ReactMarkdown from 'react-markdown';
@@ -11,6 +11,7 @@ import { InsightsDashboard } from '@/components/InsightsDashboard';
 import { RankBadge } from '@/components/RankBadge';
 import { RankBandTakeover, RankDeltaBadge, type RankChangeEvent } from '@/components/RankChangeOverlay';
 import { rankBand, rankBandIndex, RANK_BANDS, LAST_KNOWN_RANK_KEY } from '@/lib/rank';
+import { ctTAccent, shadeHex, Bar3DShape, duelLerp } from '@/lib/duelColors';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -67,26 +68,14 @@ export function formatMapName(map?: string | null): string {
   return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// Only these 5 maps have a real in-game screenshot saved locally (see
-// frontend/public/maps/screens/) — every other map falls back to a plain gradient panel
-// instead of a broken <img>.
-const MAPS_WITH_SCREENSHOTS = new Set(['de_mirage', 'de_inferno', 'de_ancient', 'de_nuke', 'de_overpass']);
-function mapScreenshotUrl(map?: string | null): string | null {
+// No maps currently have a real in-game screenshot saved locally (see
+// frontend/public/maps/screens/) — every map falls back to a plain gradient panel
+// instead of a broken <img>. Add an entry here (and the matching file) once a
+// verified real screenshot is available for that map.
+const MAPS_WITH_SCREENSHOTS = new Set<string>([]);
+export function mapScreenshotUrl(map?: string | null): string | null {
   if (!map || !MAPS_WITH_SCREENSHOTS.has(map)) return null;
   return `/maps/screens/${map}.png`;
-}
-
-// Recent Matches card accent — not win/loss, but the card's position in the strip: leftmost
-// reads CT cyan, rightmost reads T amber, fading between them across the row (the same
-// CT=left/cyan, T=right/amber pairing the landing hero's operators already use).
-function ctTAccent(index: number, total: number): string {
-  const t = total > 1 ? index / (total - 1) : 0;
-  const ct = { r: 0x22, g: 0xd3, b: 0xee };
-  const tt = { r: 0xfb, g: 0x92, b: 0x3c };
-  const r = Math.round(ct.r + (tt.r - ct.r) * t);
-  const g = Math.round(ct.g + (tt.g - ct.g) * t);
-  const b = Math.round(ct.b + (tt.b - ct.b) * t);
-  return `#${[r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
 }
 
 // Averages an optional telemetry field across matches that actually have it, same
@@ -323,6 +312,7 @@ export default function Home() {
       setJwtToken(savedToken);
     }
   }, []);
+
 
   // Fetch match history + onboarding status whenever the token changes, then poll matches
   useEffect(() => {
@@ -616,22 +606,6 @@ export default function Home() {
   if (!steamId) {
     return (
       <div className="relative min-h-screen overflow-hidden text-[var(--text)] flex flex-col items-center justify-center px-6">
-        {/* CT / T operators, deliberately part of THIS page's composition — bigger and
-            closer to the edges than the faint ambient pair in layout.tsx, aiming inward
-            toward the centered wordmark. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/operators/ct.png"
-          alt=""
-          className="pointer-events-none select-none absolute bottom-[-4%] left-[-4%] w-[34vw] max-w-[520px] h-[92vh] object-contain object-bottom opacity-30 z-0"
-        />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/operators/t.png"
-          alt=""
-          className="pointer-events-none select-none absolute bottom-[-4%] right-[-4%] w-[34vw] max-w-[520px] h-[92vh] object-contain object-bottom opacity-30 z-0"
-        />
-
         <div className="relative z-10 max-w-2xl w-full text-center">
           <div className="flex justify-center mb-8">
             <LogoMark className="w-20 h-20" />
@@ -764,120 +738,115 @@ export default function Home() {
                 Stats based on your last {parsedMatches.length} recent games
               </p>
 
-              {/* Identity/rating card (left) + KPI columns (right) */}
-              <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-3 mb-3">
-                <div className="glass border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center text-center gap-3">
+              {/* Top row: profile tile sits as a peer of K/D, ADR, Headshot % — same height/style.
+                  Each tile gets one flat "duel" color from its position in the row (leftmost =
+                  CT cyan, rightmost = T amber), same bold embossed treatment as the Insights
+                  category tiles — not a gradient within any one tile. */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-3.5">
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-5 flex items-center gap-3.5" style={{ '--c': ctTAccent(0, 4) } as CSSProperties}>
                   {avatarUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={avatarUrl} alt="" className="w-24 h-24 rounded-full border-2 border-[var(--edge-bright)]" />
+                    <img src={avatarUrl} alt="" className="w-14 h-14 rounded-full border-2 border-[var(--edge-bright)] shrink-0" />
                   ) : (
-                    <div className="w-24 h-24 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)]" />
+                    <div className="w-14 h-14 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)] shrink-0" />
                   )}
-                  <p className="font-display text-xl font-bold truncate">{personaName || 'Player'}</p>
-
-                  <div className="flex flex-col items-center">
-                    <RankBadge color={rankBand(rankNew)?.color ?? '#9ca3af'} rankNew={rankNew} size={46} />
-                    {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
-                  </div>
-
-                  <div className="w-full mt-1">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Performance</span>
-                      <span className="font-tel text-sm font-bold text-[var(--amber)]">
-                        {avgPerformanceIndex}<span className="text-[var(--text-dim)]">/100</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-display text-base font-bold truncate">{personaName || 'Player'}</p>
+                      <span className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] shrink-0">
+                        Performance <span className="font-tel font-bold text-[var(--amber)]">{avgPerformanceIndex}</span>
                       </span>
                     </div>
-                    <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden">
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                      <RankBadge color={rankBand(rankNew)?.color ?? '#9ca3af'} rankNew={rankNew} size={26} />
+                      {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
+                    </div>
+                    <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden mt-2 shadow-[inset_0_1px_3px_rgba(0,0,0,0.6)]">
                       <div
-                        className="h-full bg-[var(--amber)] rounded-full transition-all duration-500"
-                        style={{ width: `${Math.max(4, Math.min(100, avgPerformanceIndex))}%` }}
+                        className="h-full bar3d-h rounded-full transition-all duration-500"
+                        style={{ '--c': 'var(--amber)', width: `${Math.max(4, Math.min(100, avgPerformanceIndex))}%` } as CSSProperties}
                       />
                     </div>
                   </div>
                 </div>
-
-                <div className="flex flex-col gap-3">
-                  {/* K/D, ADR, Headshot % */}
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-4">
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <Target className="w-3.5 h-3.5 text-[var(--cyan)]" />
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">K/D Ratio</p>
-                      </div>
-                      <p className="font-tel text-2xl font-bold text-[var(--cyan)]">{avgKd}</p>
-                    </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-4">
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <Zap className="w-3.5 h-3.5 text-[var(--amber)]" />
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
-                      </div>
-                      <p className="font-tel text-2xl font-bold">{avgAdr}</p>
-                    </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-4">
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <Crosshair className="w-3.5 h-3.5 text-[var(--cyan)]" />
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
-                      </div>
-                      <p className="font-tel text-2xl font-bold">{avgHs}%</p>
-                    </div>
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center" style={{ '--c': ctTAccent(1, 4) } as CSSProperties}>
+                  <div className="flex items-center justify-center gap-1.5 mb-2">
+                    <Target className="w-4 h-4 text-[var(--cyan)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">K/D Ratio</p>
                   </div>
-
-                  {/* Recent Form strip */}
-                  <div className="glass border border-[var(--edge)] rounded-2xl px-4 py-3 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] shrink-0">Recent Form</p>
-                      <div className="flex items-center gap-1.5">
-                        {recentForm.map((m) => {
-                          const won = m.match_data.telemetry.kd_ratio >= 1;
-                          return (
-                            <span
-                              key={m.match_id}
-                              className="w-2.5 h-2.5 rounded-full"
-                              style={{ background: won ? 'var(--cyan)' : 'var(--danger)' }}
-                              title={won ? 'Win' : 'Loss'}
-                            />
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <p className="font-tel text-sm font-bold">
-                      <span className="text-[var(--cyan)]">{recentWins}W</span>
-                      <span className="text-[var(--text-dim)]">–</span>
-                      <span className="text-[var(--danger)]">{recentLosses}L</span>
-                    </p>
+                  <p className="font-tel text-3xl font-bold text-[var(--cyan)]">{avgKd}</p>
+                </div>
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center" style={{ '--c': ctTAccent(2, 4) } as CSSProperties}>
+                  <div className="flex items-center justify-center gap-1.5 mb-2">
+                    <Zap className="w-4 h-4 text-[var(--amber)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
                   </div>
-
-                  {/* Secondary metrics — real per-match fields from the demo parser */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <LogIn className="w-3 h-3 text-[var(--cyan)]" />
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Entry Success</p>
-                      </div>
-                      <p className="font-tel text-lg font-bold">{avgEntrySuccessPct !== null ? `${avgEntrySuccessPct.toFixed(0)}%` : '—'}</p>
-                    </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <Flame className="w-3 h-3 text-[var(--amber)]" />
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Utility Dmg/Rd</p>
-                      </div>
-                      <p className="font-tel text-lg font-bold">{avgUtilityDmgPerRound !== null ? avgUtilityDmgPerRound.toFixed(1) : '—'}</p>
-                    </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <Users className="w-3 h-3 text-[var(--cyan)]" />
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Clutches Won</p>
-                      </div>
-                      <p className="font-tel text-lg font-bold">{totalClutchesWon !== null ? totalClutchesWon : '—'}</p>
-                    </div>
-                    <div className="glass border border-[var(--edge)] rounded-2xl p-3 flex flex-col justify-center">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <Repeat className="w-3 h-3 text-[var(--amber)]" />
-                        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Trade Kill %</p>
-                      </div>
-                      <p className="font-tel text-lg font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(0)}%` : '—'}</p>
-                    </div>
+                  <p className="font-tel text-3xl font-bold">{avgAdr}</p>
+                </div>
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center" style={{ '--c': ctTAccent(3, 4) } as CSSProperties}>
+                  <div className="flex items-center justify-center gap-1.5 mb-2">
+                    <Crosshair className="w-4 h-4 text-[var(--cyan)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
                   </div>
+                  <p className="font-tel text-3xl font-bold">{avgHs}%</p>
+                </div>
+              </div>
+
+              {/* Recent Form strip — spans the full row alone, so it stays neutral (win/loss
+                  dots already carry meaningful color) rather than taking a duel tint. */}
+              <div className="glass tile3d border border-[var(--edge)] rounded-2xl px-5 py-4 flex items-center justify-between mb-3.5">
+                <div className="flex items-center gap-3.5">
+                  <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] shrink-0">Recent Form</p>
+                  <div className="flex items-center gap-2">
+                    {recentForm.map((m) => {
+                      const won = m.match_data.telemetry.kd_ratio >= 1;
+                      return (
+                        <span
+                          key={m.match_id}
+                          className="w-3 h-3 rounded-full sphere3d"
+                          style={{ '--c': won ? 'var(--cyan)' : 'var(--danger)' } as CSSProperties}
+                          title={won ? 'Win' : 'Loss'}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+                <p className="font-tel text-base font-bold">
+                  <span className="text-[var(--cyan)]">{recentWins}W</span>
+                  <span className="text-[var(--text-dim)]">–</span>
+                  <span className="text-[var(--danger)]">{recentLosses}L</span>
+                </p>
+              </div>
+
+              {/* Secondary metrics — real per-match fields from the demo parser */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 mb-3.5">
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(0, 4) } as CSSProperties}>
+                  <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                    <LogIn className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Entry Success</p>
+                  </div>
+                  <p className="font-tel text-2xl font-bold">{avgEntrySuccessPct !== null ? `${avgEntrySuccessPct.toFixed(0)}%` : '—'}</p>
+                </div>
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(1, 4) } as CSSProperties}>
+                  <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                    <Flame className="w-3.5 h-3.5 text-[var(--amber)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Utility Dmg/Rd</p>
+                  </div>
+                  <p className="font-tel text-2xl font-bold">{avgUtilityDmgPerRound !== null ? avgUtilityDmgPerRound.toFixed(1) : '—'}</p>
+                </div>
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(2, 4) } as CSSProperties}>
+                  <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                    <Users className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Clutches Won</p>
+                  </div>
+                  <p className="font-tel text-2xl font-bold">{totalClutchesWon !== null ? totalClutchesWon : '—'}</p>
+                </div>
+                <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center" style={{ '--c': ctTAccent(3, 4) } as CSSProperties}>
+                  <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                    <Repeat className="w-3.5 h-3.5 text-[var(--amber)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Trade Kill %</p>
+                  </div>
+                  <p className="font-tel text-2xl font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(0)}%` : '—'}</p>
                 </div>
               </div>
 
@@ -951,14 +920,14 @@ export default function Home() {
                   {/* Recent Matches — map-screenshot cards with rank-at-match-start pill */}
                   <div className="mb-4">
                     <h2 className="font-display text-lg font-bold mb-2">Recent Matches</h2>
-                    <div className="flex gap-3 overflow-x-auto pb-1">
+                    <div className="flex flex-wrap gap-3">
                       {parsedMatches.slice(0, 5).map((m, i, arr) => {
                         const t = m.match_data.telemetry;
                         const accent = ctTAccent(i, arr.length);
                         const bg = mapScreenshotUrl(t.map);
                         const matchRankBand = rankBand(t.rank_at_match_start);
                         return (
-                          <div key={m.match_id} className="relative shrink-0 w-56 h-44 rounded-2xl overflow-hidden border border-[var(--edge)] flex flex-col">
+                          <div key={m.match_id} className="relative flex-1 min-w-[168px] h-48 rounded-2xl overflow-hidden border border-[var(--edge)] flex flex-col">
                             {/* picture — 3/4 of the card */}
                             <div className="relative" style={{ flex: 3 }}>
                               {bg ? (
@@ -968,22 +937,30 @@ export default function Home() {
                                 <div className="absolute inset-0 bg-gradient-to-br from-[var(--panel-raised)] to-[var(--void)]" />
                               )}
                               {matchRankBand && typeof t.rank_at_match_start === 'number' && (
-                                <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/50 rounded-full px-2 py-1">
+                                <div
+                                  className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/50 rounded-full px-2 py-1"
+                                  title={`Premier rank at kickoff: ${t.rank_at_match_start} (${matchRankBand.label})`}
+                                >
                                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: matchRankBand.color }} />
                                   <span className="font-tel text-[10px] font-bold text-[var(--text)]">{t.rank_at_match_start}</span>
                                 </div>
                               )}
                             </div>
-                            {/* info — 1/4 of the card, accent fades CT cyan (left) to T amber (right) across the strip */}
+                            {/* info — 1/4 of the card, accent fades CT cyan (left) to T amber (right) across the strip.
+                                Two matching stacked columns (name+date / K·D+label) side by side, so the two halves
+                                sit symmetrically instead of the number's stack fighting the single-line name for space. */}
                             <div
-                              className="flex flex-col justify-center px-3 bg-[var(--panel)]"
-                              style={{ flex: 1, borderTop: `2px solid ${accent}` }}
+                              className="flex items-center justify-between gap-2 px-3.5 chip3d"
+                              style={{ flex: 1, borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}
                             >
-                              <div className="flex items-center justify-between">
-                                <span className="font-display font-bold text-sm truncate">{formatMapName(t.map)}</span>
-                                <span className="font-tel text-base font-extrabold shrink-0 ml-2" style={{ color: accent }}>{t.kd_ratio}</span>
+                              <div className="min-w-0">
+                                <p className="font-display font-bold text-sm leading-none truncate">{formatMapName(t.map)}</p>
+                                <p className="text-[10px] text-[var(--text-dim)] mt-1.5">{formatMatchDate(t)}</p>
                               </div>
-                              <p className="text-[10px] text-[var(--text-dim)]">{formatMatchDate(t)}</p>
+                              <div className="shrink-0 text-right" title="Kills-to-deaths ratio">
+                                <p className="font-tel text-base font-extrabold leading-none" style={{ color: accent }}>{t.kd_ratio}</p>
+                                <p className="text-[9px] uppercase tracking-wider text-[var(--text-dim)] mt-1.5">K/D</p>
+                              </div>
                             </div>
                           </div>
                         );
@@ -999,11 +976,11 @@ export default function Home() {
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                       {([
-                        { key: 'kd' as const, title: 'K/D Ratio', color: '#22d3ee', type: 'line' as const, decimals: 2 },
-                        { key: 'adr' as const, title: 'Average Damage per Round', color: '#fb923c', type: 'bar' as const, decimals: 0 },
-                        { key: 'hs' as const, title: 'Headshot %', color: '#8b5cf6', type: 'line' as const, decimals: 0 },
-                        { key: 'perf' as const, title: 'Performance Index', color: '#e11d48', type: 'bar' as const, decimals: 0 },
-                      ]).map(({ key, title, color, type, decimals }) => {
+                        { key: 'kd' as const, title: 'K/D Ratio', type: 'line' as const, decimals: 2 },
+                        { key: 'adr' as const, title: 'Average Damage per Round', type: 'bar' as const, decimals: 0 },
+                        { key: 'hs' as const, title: 'Headshot %', type: 'line' as const, decimals: 0 },
+                        { key: 'perf' as const, title: 'Performance Index', type: 'bar' as const, decimals: 0 },
+                      ]).map(({ key, title, type, decimals }, chartIndex) => {
                         const recent = chartData.slice(-5);
                         const prior = chartData.slice(-10, -5);
                         const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
@@ -1013,8 +990,16 @@ export default function Home() {
                         const isUp = delta > 0.001;
                         const isDown = delta < -0.001;
                         const gradId = `grad-${key}`;
+                        // Every chart shares the same "duel" read, but scoped to whichever half of
+                        // the 2-column grid it sits in — the left column only ever sweeps CT cyan
+                        // to neutral grey, the right column only grey to T amber. A chart that swept
+                        // its own full 0%-100% range regardless of column would end in amber on the
+                        // left and start in cyan on the right, clashing right at the page's own
+                        // grey center instead of blending into it.
+                        const col = chartIndex % 2;
+                        const colorAt = (t: number) => duelLerp(col === 0 ? t * 0.5 : 0.5 + t * 0.5);
                         return (
-                          <div key={key} className="hud-corners bg-[var(--panel)] p-4 rounded-2xl border border-[var(--edge)] flex flex-col" style={{ height: 220 }}>
+                          <div key={key} className="hud-corners bg-[var(--panel)] tile3d p-4.5 rounded-2xl border border-[var(--edge)] flex flex-col" style={{ height: 236 }}>
                             <div className="flex items-center justify-between shrink-0 mb-2">
                               <h3 className="font-display font-bold text-sm">{title}</h3>
                               {chartData.length >= 6 && (isUp || isDown) && (
@@ -1028,30 +1013,58 @@ export default function Home() {
                                 {type === 'line' ? (
                                   <AreaChart data={chartData}>
                                     <defs>
-                                      <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor={color} stopOpacity={0.45} />
-                                        <stop offset="100%" stopColor={color} stopOpacity={0} />
+                                      <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
+                                        <stop offset="0%" stopColor={colorAt(0)} stopOpacity={0.55} />
+                                        <stop offset="50%" stopColor={colorAt(0.5)} stopOpacity={0.15} />
+                                        <stop offset="100%" stopColor={colorAt(1)} stopOpacity={0.55} />
                                       </linearGradient>
+                                      <linearGradient id={`line-${key}`} x1="0" y1="0" x2="1" y2="0">
+                                        <stop offset="0%" stopColor={colorAt(0)} />
+                                        <stop offset="50%" stopColor={colorAt(0.5)} />
+                                        <stop offset="100%" stopColor={colorAt(1)} />
+                                      </linearGradient>
+                                      <filter id={`glow-${key}`} x="-30%" y="-60%" width="160%" height="220%">
+                                        <feDropShadow dx="0" dy="2.5" stdDeviation="2.2" floodColor={colorAt(0.5)} floodOpacity="0.4" />
+                                      </filter>
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
                                     <XAxis dataKey="name" stroke="#8592a1" tick={false} />
                                     <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} />
                                     <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                                    <Area type="monotone" dataKey={key} stroke={color} strokeWidth={2.5} fill={`url(#${gradId})`} dot={{ r: 2 }} activeDot={{ r: 6 }} />
+                                    <Area
+                                      type="monotone"
+                                      dataKey={key}
+                                      stroke={`url(#line-${key})`}
+                                      strokeWidth={3}
+                                      style={{ filter: `url(#glow-${key})` }}
+                                      fill={`url(#${gradId})`}
+                                      dot={(dotProps: any) => {
+                                        const c = colorAt(chartData.length > 1 ? dotProps.index / (chartData.length - 1) : 0.5);
+                                        return <circle key={dotProps.index} cx={dotProps.cx} cy={dotProps.cy} r={3} fill="#fff" stroke={c} strokeWidth={2} />;
+                                      }}
+                                      activeDot={{ r: 7 }}
+                                    />
                                   </AreaChart>
                                 ) : (
                                   <BarChart data={chartData}>
                                     <defs>
-                                      <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor={color} stopOpacity={1} />
-                                        <stop offset="100%" stopColor={color} stopOpacity={0.35} />
-                                      </linearGradient>
+                                      <filter id={`bar-shadow-${key}`} x="-40%" y="-10%" width="180%" height="140%">
+                                        <feDropShadow dx="2" dy="3" stdDeviation="2" floodColor="#000000" floodOpacity="0.45" />
+                                      </filter>
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
                                     <XAxis dataKey="name" stroke="#8592a1" tick={false} />
                                     <YAxis stroke="#8592a1" width={32} tick={{ fontSize: 11 }} domain={key === 'perf' ? [0, 100] : undefined} />
                                     <Tooltip contentStyle={{ backgroundColor: '#0c1015', borderColor: '#2a3644' }} />
-                                    <Bar dataKey={key} fill={`url(#${gradId})`} radius={[6, 6, 0, 0]} />
+                                    <Bar
+                                      dataKey={key}
+                                      style={{ filter: `url(#bar-shadow-${key})` }}
+                                      shape={(p: any) => <Bar3DShape {...p} baseColor={p.fill} />}
+                                    >
+                                      {chartData.map((_, i) => (
+                                        <Cell key={i} fill={colorAt(chartData.length > 1 ? i / (chartData.length - 1) : 0.5)} />
+                                      ))}
+                                    </Bar>
                                   </BarChart>
                                 )}
                               </ResponsiveContainer>
@@ -1091,41 +1104,68 @@ export default function Home() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-              {parsedMatches.map((m) => {
+              {parsedMatches.map((m, i, arr) => {
                 const t = m.match_data.telemetry;
-                const accent = t.kd_ratio >= 1 ? 'var(--cyan)' : 'var(--danger)';
+                // Column-scoped, not list-scoped: with a 3-column grid, a card's color comes
+                // from which column it falls in (i % 3), not its index in the full match list —
+                // otherwise the accent drifts out of sync with the page's own left/right theme
+                // every time the grid wraps to a new row (row 2's leftmost card would pick up
+                // whatever color came next in the list instead of the same "left column" cyan).
+                const col = i % 3;
+                const accent = duelLerp(col === 0 ? 1 / 6 : col === 1 ? 0.5 : 5 / 6);
+                const bg = mapScreenshotUrl(t.map);
+                const matchRankBand = rankBand(t.rank_at_match_start);
                 const index = performanceIndex(t);
                 return (
-                  <div
-                    key={m.match_id}
-                    className="match-card bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-5"
-                    style={{ '--accent': accent } as CSSProperties}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-display font-bold text-[var(--text)]">{formatMapName(t.map)}</span>
-                      <span className="font-tel text-xl font-extrabold" style={{ color: accent }}>{t.kd_ratio}</span>
-                    </div>
-                    <div className="mb-4">
-                      <span className="text-xs text-[var(--text-dim)]">{formatMatchDate(t)}</span>
+                  <div key={m.match_id} className="hud-corners border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col">
+                    <div className="relative h-44">
+                      {bg ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={bg} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                      ) : (
+                        <div className="absolute inset-0 bg-gradient-to-br from-[var(--panel-raised)] to-[var(--void)]" />
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-transparent" />
+                      {matchRankBand && typeof t.rank_at_match_start === 'number' && (
+                        <div
+                          className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/55 rounded-full px-2.5 py-1"
+                          title={`Premier rank at kickoff: ${t.rank_at_match_start} (${matchRankBand.label})`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: matchRankBand.color }} />
+                          <span className="font-tel text-[11px] font-bold text-[var(--text)]">{t.rank_at_match_start}</span>
+                        </div>
+                      )}
+                      {/* Map name/date are the only things that live on the image itself —
+                          everything else (K/D included) lives in the footer below so nothing
+                          crowds the image/footer seam. */}
+                      <div className="absolute left-4 bottom-3">
+                        <p className="font-display font-bold text-lg leading-none">{formatMapName(t.map)}</p>
+                        <p className="text-xs text-[var(--text-dim)] mt-1">{formatMatchDate(t)}</p>
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-between mb-4 bg-[var(--void)] rounded-xl px-3 py-2">
-                      <span className="text-[10px] uppercase tracking-wide text-[var(--text-dim)]">Performance Index</span>
-                      <span className="font-tel font-bold text-[var(--amber)]">{index}<span className="text-[var(--text-dim)] text-xs">/100</span></span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div>
-                        <p className="font-tel font-bold text-[var(--text)]">{t.kills}</p>
-                        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Kills</p>
+                    <div className="chip3d p-4.5" style={{ borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}>
+                      <div className="grid grid-cols-4 gap-2 text-center mb-3.5">
+                        <div title="Kills-to-deaths ratio">
+                          <p className="font-tel font-bold text-lg" style={{ color: accent }}>{t.kd_ratio}</p>
+                          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">K/D</p>
+                        </div>
+                        <div>
+                          <p className="font-tel font-bold text-lg text-[var(--text)]">{t.kills}</p>
+                          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Kills</p>
+                        </div>
+                        <div>
+                          <p className="font-tel font-bold text-lg text-[var(--text)]">{t.adr}</p>
+                          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">ADR</p>
+                        </div>
+                        <div>
+                          <p className="font-tel font-bold text-lg text-[var(--text)]">{t.headshot_pct}%</p>
+                          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">HS</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-tel font-bold text-[var(--text)]">{t.adr}</p>
-                        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">ADR</p>
-                      </div>
-                      <div>
-                        <p className="font-tel font-bold text-[var(--text)]">{t.headshot_pct}%</p>
-                        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">HS</p>
+                      <div className="flex items-center justify-between bg-[var(--void)] rounded-xl px-3.5 py-2.5">
+                        <span className="text-[10px] uppercase tracking-wide text-[var(--text-dim)]">Performance</span>
+                        <span className="font-tel font-bold text-[var(--amber)]">{index}<span className="text-[var(--text-dim)] text-xs">/100</span></span>
                       </div>
                     </div>
                   </div>
@@ -1167,7 +1207,7 @@ export default function Home() {
             ) : (
               <div className="flex-1 min-h-0 flex gap-4">
               {/* Recent chats sidebar */}
-              <div className="w-64 shrink-0 hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl flex flex-col overflow-hidden">
+              <div className="w-64 shrink-0 hud-corners chip3d border border-[var(--edge)] rounded-2xl flex flex-col overflow-hidden" style={{ '--c': ctTAccent(0, 2) } as CSSProperties}>
                 <div className="p-3 border-b border-[var(--edge)]">
                   <button
                     onClick={startNewChat}
@@ -1198,7 +1238,7 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="hud-corners glass flex-1 border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col min-h-0">
+              <div className="hud-corners glass chip3d flex-1 border border-[var(--edge)] rounded-2xl overflow-hidden flex flex-col min-h-0" style={{ '--c': ctTAccent(1, 2) } as CSSProperties}>
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center text-center h-full text-[var(--text-dim)] py-12">
@@ -1234,7 +1274,7 @@ export default function Home() {
                           className={`max-w-[75%] rounded-2xl px-5 py-3 text-sm leading-relaxed ${
                             m.role === 'user'
                               ? 'bg-[var(--cyan)] text-[#03141a] rounded-br-none font-medium'
-                              : 'bg-[var(--panel-raised)] text-[var(--text)] rounded-bl-none border border-[var(--edge)]'
+                              : 'bg-[var(--panel-raised)] text-[var(--text)] rounded-bl-none border border-[var(--edge)] border-l-[3px] border-l-[var(--cyan)]'
                           }`}
                         >
                           {m.role === 'assistant' ? (
@@ -1263,7 +1303,7 @@ export default function Home() {
                       <div className="w-7 h-7 rounded-full bg-[var(--panel-raised)] border border-[var(--cyan-dim)] flex items-center justify-center shrink-0">
                         <Brain className="w-3.5 h-3.5 text-[var(--cyan)]" />
                       </div>
-                      <div className="bg-[var(--panel-raised)] text-[var(--text-dim)] rounded-2xl rounded-bl-none border border-[var(--edge)] px-5 py-3 text-sm flex items-center gap-2">
+                      <div className="bg-[var(--panel-raised)] text-[var(--text-dim)] rounded-2xl rounded-bl-none border border-[var(--edge)] border-l-[3px] border-l-[var(--cyan)] px-5 py-3 text-sm flex items-center gap-2">
                         <Loader2 className="w-4 h-4 animate-spin text-[var(--cyan)]" />
                         AI Coach is studying your match telemetry...
                       </div>
@@ -1299,46 +1339,76 @@ export default function Home() {
 
       {/* INTEGRATION SETTINGS — always reachable, pre-fillable re-entry point */}
       {activeTab === 'settings' && (
-        <div className="max-w-xl mx-auto px-6 py-16">
-          <h1 className="font-display text-3xl font-bold mb-8">Integration Settings</h1>
-          <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] p-8 rounded-2xl">
-            {isOnboarded && (
-              <div className="flex items-center gap-3 text-[var(--cyan)] font-medium mb-6 text-sm">
-                <CheckCircle2 className="w-5 h-5" /> Auto-Sync is currently active.
+        <div className="max-w-4xl mx-auto px-6 py-12">
+          <h1 className="font-display text-3xl font-bold mb-6">Account &amp; Integration</h1>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
+            <div className="glass chip3d border border-[var(--edge)] rounded-2xl p-5 flex flex-col items-center text-center gap-2" style={{ '--c': ctTAccent(0, 2) } as CSSProperties}>
+              {avatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={avatarUrl} alt="" className="w-20 h-20 rounded-full border-2 border-[var(--edge-bright)]" />
+              ) : (
+                <div className="w-20 h-20 rounded-full bg-[var(--panel-raised)] border-2 border-[var(--edge-bright)]" />
+              )}
+              <p className="font-display text-base font-bold mt-1">{personaName || 'Player'}</p>
+              <RankBadge color={rankBand(rankNew)?.color ?? '#9ca3af'} rankNew={rankNew} size={36} />
+              <p className="text-[11px] text-[var(--text-dim)] mt-1">Signed in with Steam</p>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="hud-corners chip3d border border-[var(--edge)] p-6 rounded-2xl" style={{ '--c': ctTAccent(1, 2) } as CSSProperties}>
+                {isOnboarded && (
+                  <div className="flex items-center gap-3 text-[var(--cyan)] font-medium mb-5 text-sm">
+                    <CheckCircle2 className="w-5 h-5" /> Auto-Sync is currently active.
+                  </div>
+                )}
+                <form onSubmit={handleOnboarding} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
+                    <input
+                      type="password"
+                      required
+                      value={gameAuthCode}
+                      onChange={(e) => setGameAuthCode(e.target.value)}
+                      placeholder="••••••••••••"
+                      className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code</label>
+                    <input
+                      type="text"
+                      required
+                      value={recentShareCode}
+                      onChange={(e) => setRecentShareCode(e.target.value)}
+                      placeholder="CSGO-abc12-def34-..."
+                      className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isOnboarding}
+                    className="px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center gap-2"
+                  >
+                    {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
+                    {isOnboarded ? 'Update Codes' : 'Activate Auto-Sync'}
+                  </button>
+                </form>
               </div>
-            )}
-            <form onSubmit={handleOnboarding} className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
-                <input
-                  type="password"
-                  required
-                  value={gameAuthCode}
-                  onChange={(e) => setGameAuthCode(e.target.value)}
-                  placeholder="••••••••••••"
-                  className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
-                />
+
+              <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-5 flex items-center justify-between gap-4" style={{ '--c': ctTAccent(1, 2) } as CSSProperties}>
+                <div>
+                  <p className="font-semibold text-sm">Sign out of RoundSync</p>
+                  <p className="text-xs text-[var(--text-dim)] mt-0.5">You'll need to sign in with Steam again to reconnect.</p>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="shrink-0 px-4 py-2.5 bg-transparent text-[var(--danger)] border border-[var(--danger)] rounded-xl text-sm font-semibold hover:bg-[var(--danger)]/10 transition-colors"
+                >
+                  Sign Out
+                </button>
               </div>
-              <div>
-                <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code</label>
-                <input
-                  type="text"
-                  required
-                  value={recentShareCode}
-                  onChange={(e) => setRecentShareCode(e.target.value)}
-                  placeholder="CSGO-abc12-def34-..."
-                  className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={isOnboarding}
-                className="px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center gap-2"
-              >
-                {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
-                {isOnboarded ? 'Update Codes' : 'Activate Auto-Sync'}
-              </button>
-            </form>
+            </div>
           </div>
         </div>
       )}

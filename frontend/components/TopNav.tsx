@@ -33,7 +33,9 @@ export function TopNav({ activeTab, onTabChange, isLive, personaName, avatarUrl,
   return (
     <header className="glass sticky top-0 z-40 border-b border-[var(--edge)]">
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-        <LogoLockup />
+        <button onClick={() => onTabChange('home')} className="cursor-pointer" aria-label="Go to Home">
+          <LogoLockup />
+        </button>
 
         <nav className="hidden sm:flex items-center gap-1 bg-[var(--panel)]/60 border border-[var(--edge)] rounded-full p-1">
           <button
