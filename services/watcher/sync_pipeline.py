@@ -13,6 +13,18 @@ WEAPON_CLASS_BY_WEPTYPE = {1: "pistol", 2: "smg", 3: "rifle", 4: "shotgun", 5: "
 WEAPON_CLASS_RANK = {"pistol": 0, "smg": 1, "shotgun": 1, "sniper": 2, "rifle": 2}
 
 
+def parse_event(parser, event_name, **kwargs):
+    """parser.parse_event() returns a plain [] (not an empty DataFrame) for an event type
+    that never fires in a given demo (e.g. no decoys thrown all match) — every call site in
+    this file immediately checks `.empty`, which crashes on a list and previously took down
+    the entire extraction function for that match, silently losing every already-computed row.
+    Centralizing the call here normalizes that return value once instead of at every site."""
+    result = parser.parse_event(event_name, **kwargs)
+    if not isinstance(result, pd.DataFrame):
+        return pd.DataFrame()
+    return result
+
+
 def classify_team_buy_capacity(start_balance: int, is_ct: bool) -> str:
     """Money-only classification (never spend) to avoid judging a buy decision using itself as the yardstick."""
     if start_balance < 2000:
@@ -38,7 +50,7 @@ def extract_fact_economy(parser, target_steam_id64: str) -> list:
     """One row per round for target_steam_id64 only (see project memory for why not all 10 players)."""
     rows = []
     try:
-        freeze_end_df = parser.parse_event("round_freeze_end")
+        freeze_end_df = parse_event(parser, "round_freeze_end")
         if freeze_end_df.empty:
             return rows
         freeze_ticks = sorted(freeze_end_df["tick"].tolist())
@@ -50,7 +62,7 @@ def extract_fact_economy(parser, target_steam_id64: str) -> list:
         )
         snaps = snaps[snaps["steamid"].astype(str) == str(target_steam_id64)]
 
-        equip_df = parser.parse_event("item_equip")
+        equip_df = parse_event(parser, "item_equip")
         equip_df = equip_df[equip_df["user_steamid"].astype(str) == str(target_steam_id64)]
         equip_df = equip_df[equip_df["weptype"].isin(WEAPON_CLASS_BY_WEPTYPE.keys())]
 
@@ -130,7 +142,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parser.parse_event("round_freeze_end")
+        freeze_end_df = parse_event(parser, "round_freeze_end")
         freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
 
         team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
@@ -149,7 +161,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
         throws = []
         for event_name, label in GRENADE_DETONATE_EVENTS.items():
             try:
-                df = parser.parse_event(event_name)
+                df = parse_event(parser, event_name)
             except Exception:
                 continue
             if df.empty or "user_steamid" not in df.columns:
@@ -166,11 +178,11 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
         # weapon_fire by the same player (weapon_fire's `weapon` field does name the
         # exact grenade).
         try:
-            inferno_df = parser.parse_event("inferno_startburn")
+            inferno_df = parse_event(parser, "inferno_startburn")
         except Exception:
             inferno_df = pd.DataFrame()
         try:
-            fire_df = parser.parse_event("weapon_fire")
+            fire_df = parse_event(parser, "weapon_fire")
         except Exception:
             fire_df = pd.DataFrame()
 
@@ -193,19 +205,19 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
             })
 
         try:
-            blind_df = parser.parse_event("player_blind")
+            blind_df = parse_event(parser, "player_blind")
         except Exception:
             blind_df = pd.DataFrame()
         try:
-            hurt_df = parser.parse_event("player_hurt")
+            hurt_df = parse_event(parser, "player_hurt")
         except Exception:
             hurt_df = pd.DataFrame()
         try:
-            death_df = parser.parse_event("player_death")
+            death_df = parse_event(parser, "player_death")
         except Exception:
             death_df = pd.DataFrame()
         try:
-            inferno_expire_df = parser.parse_event("inferno_expire")
+            inferno_expire_df = parse_event(parser, "inferno_expire")
         except Exception:
             inferno_expire_df = pd.DataFrame()
 
@@ -218,12 +230,19 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
             damage_dealt = None
 
             if t["type"] == "flashbang" and not blind_df.empty and t["entityid"] is not None:
-                matched = blind_df[blind_df["entityid"] == t["entityid"]]
+                # entityid alone isn't enough — CS2 recycles entity slots, so the same
+                # entityid can belong to several unrelated flashbangs over a match (confirmed
+                # against a real demo: one slot was reused by 3 different players' throws).
+                # player_blind rows are logged at the exact same tick as their flash's
+                # detonation, so pinning to t["tick"] isolates only this throw's real victims.
+                matched = blind_df[(blind_df["entityid"] == t["entityid"]) & (blind_df["tick"] == t["tick"])]
                 thrower_team = team_for(target, t["tick"])
                 enemies_blinded, teammates_blinded, total_enemy_blind_duration = 0, 0, 0.0
                 flash_assist = False
                 for _, b in matched.iterrows():
                     victim = str(b["user_steamid"])
+                    if victim == target:
+                        continue  # self-blind, not a teammate flash
                     duration = float(b["blind_duration"])
                     if team_for(victim, t["tick"]) == thrower_team:
                         teammates_blinded += 1
@@ -245,9 +264,15 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
                 keywords = {"hegrenade": "hegrenade", "molotov": "molotov|inferno", "incendiary": "incendiary|inferno"}[t["type"]]
                 window_start, window_end = t["tick"], t["tick"] + int(TICK_RATE * 10)
                 if t["type"] in ("molotov", "incendiary") and not inferno_expire_df.empty and t["entityid"] is not None:
-                    exp = inferno_expire_df[inferno_expire_df["entityid"] == t["entityid"]]
+                    # Same entityid-reuse issue as the flashbang fix above: iloc[0] with no
+                    # tick bound could grab an EARLIER fire's expiry (same entity slot reused),
+                    # putting window_end before window_start and silently zeroing out real
+                    # damage. Only consider expiries at or after this throw, nearest first.
+                    exp = inferno_expire_df[
+                        (inferno_expire_df["entityid"] == t["entityid"]) & (inferno_expire_df["tick"] >= window_start)
+                    ]
                     if not exp.empty:
-                        window_end = int(exp.iloc[0]["tick"])
+                        window_end = int(exp.sort_values("tick").iloc[0]["tick"])
                 relevant = hurt_df[
                     (hurt_df["attacker_steamid"].astype(str) == target)
                     & (hurt_df["tick"] >= window_start) & (hurt_df["tick"] <= window_end)
@@ -303,7 +328,7 @@ def _get_player_rank(parser, target_steam_id64: str):
     Recent Matches card should show as "rank at match start" (see Part 4 of the redesign)."""
     target = str(target_steam_id64)
     try:
-        rank_df = parser.parse_event("rank_update")
+        rank_df = parse_event(parser, "rank_update")
         mine = rank_df[rank_df["user_steamid"].astype(str) == target] if not rank_df.empty else pd.DataFrame()
         if not mine.empty:
             last = mine.sort_values("tick").iloc[-1]
@@ -398,7 +423,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parser.parse_event("round_freeze_end")
+        freeze_end_df = parse_event(parser, "round_freeze_end")
         freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
 
         def round_for(tick):
@@ -412,7 +437,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
             sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
             return None if sub.empty else ("CT" if int(sub.iloc[0]["team_num"]) == 3 else "T")
 
-        death_df = parser.parse_event("player_death")
+        death_df = parse_event(parser, "player_death")
         if death_df.empty or "user_steamid" not in death_df.columns:
             return rows
 
@@ -438,7 +463,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
             triggers.append(("teammate_death", tick, {"teammate_steamid": victim}))
 
         try:
-            plant_df = parser.parse_event("bomb_planted")
+            plant_df = parse_event(parser, "bomb_planted")
         except Exception:
             plant_df = pd.DataFrame()
         if not plant_df.empty and "user_steamid" in plant_df.columns:
@@ -461,7 +486,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
                 }))
 
         try:
-            round_end_df = parser.parse_event("round_end")
+            round_end_df = parse_event(parser, "round_end")
         except Exception:
             round_end_df = pd.DataFrame()
         if not round_end_df.empty and "round" in round_end_df.columns:
@@ -558,8 +583,8 @@ def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parser.parse_event("round_freeze_end")
-        round_end_df = parser.parse_event("round_end")
+        freeze_end_df = parse_event(parser, "round_freeze_end")
+        round_end_df = parse_event(parser, "round_end")
         if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
             return rows
         freeze_ticks = sorted(freeze_end_df["tick"].tolist())
@@ -572,7 +597,7 @@ def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
         if not round_bounds:
             return rows
 
-        death_df = parser.parse_event("player_death")
+        death_df = parse_event(parser, "player_death")
         target_deaths = (
             death_df[death_df["user_steamid"].astype(str) == target]
             if not death_df.empty and "user_steamid" in death_df.columns else pd.DataFrame()
@@ -713,13 +738,13 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parser.parse_event("round_freeze_end")
+        freeze_end_df = parse_event(parser, "round_freeze_end")
         freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
 
         def round_for(tick):
             return max(1, sum(1 for t in freeze_ticks if t <= tick))
 
-        fire_df = parser.parse_event("weapon_fire")
+        fire_df = parse_event(parser, "weapon_fire")
         if fire_df.empty or "user_steamid" not in fire_df.columns:
             return rows
         my_fires = fire_df[fire_df["user_steamid"].astype(str) == target]
@@ -738,8 +763,8 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
         bursts.append(current)
         opening_ticks = [b[0] for b in bursts]
 
-        hurt_df = parser.parse_event("player_hurt")
-        death_df = parser.parse_event("player_death")
+        hurt_df = parse_event(parser, "player_hurt")
+        death_df = parse_event(parser, "player_death")
         pos_df = parser.parse_ticks(["X", "Y", "Z", "yaw", "team_num", "is_alive"], ticks=opening_ticks)
         player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
 
@@ -837,8 +862,8 @@ def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parser.parse_event("round_freeze_end")
-        round_end_df = parser.parse_event("round_end")
+        freeze_end_df = parse_event(parser, "round_freeze_end")
+        round_end_df = parse_event(parser, "round_end")
         if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
             return rows
         freeze_ticks = sorted(freeze_end_df["tick"].tolist())
@@ -851,9 +876,9 @@ def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
         if not round_bounds:
             return rows
 
-        death_df = parser.parse_event("player_death")
-        hurt_df = parser.parse_event("player_hurt")
-        fire_df = parser.parse_event("weapon_fire")
+        death_df = parse_event(parser, "player_death")
+        hurt_df = parse_event(parser, "player_hurt")
+        fire_df = parse_event(parser, "weapon_fire")
         if death_df.empty:
             return rows
         target_death_events = death_df[death_df["user_steamid"].astype(str) == target]
@@ -970,8 +995,8 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
         "trade_kill_pct": None,
     }
     try:
-        freeze_end_df = parser.parse_event("round_freeze_end")
-        round_end_df = parser.parse_event("round_end")
+        freeze_end_df = parse_event(parser, "round_freeze_end")
+        round_end_df = parse_event(parser, "round_end")
         if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
             return metrics
         freeze_ticks = sorted(freeze_end_df["tick"].tolist())
@@ -1229,8 +1254,20 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         rounds_played = 0
         deaths_df = pd.DataFrame()
 
+        # m_totalRoundsPlayed (the previous source for rounds_played) only increments once a
+        # round officially concludes, so a kill in the FINAL round of the match still reports
+        # the round count from before that round finished — undercounting by 1 in whichever
+        # matches happen to end on a kill. round_freeze_end fires at the start of every round
+        # instead, including the last one, and is the same source every fact_* extractor below
+        # already uses to count rounds — confirmed self-consistent across all of them.
         try:
-            deaths_df = parser.parse_event("player_death", other=["total_rounds_played"])
+            freeze_end_df = parse_event(parser, "round_freeze_end")
+            rounds_played = len(freeze_end_df)
+        except Exception as e:
+            print(f"⚠️ Warning parsing round count: {e}")
+
+        try:
+            deaths_df = parse_event(parser, "player_death")
             if not deaths_df.empty:
                 if "attacker_steamid" in deaths_df.columns:
                     user_kills = deaths_df[deaths_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
@@ -1240,14 +1277,12 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 if "user_steamid" in deaths_df.columns:
                     user_deaths = deaths_df[deaths_df["user_steamid"].astype(str) == str(target_steam_id64)]
                     total_deaths = len(user_deaths)
-                if "total_rounds_played" in deaths_df.columns:
-                    rounds_played = int(deaths_df["total_rounds_played"].max())
         except Exception as e:
             print(f"⚠️ Warning parsing deaths: {e}")
 
         total_damage = 0.0
         try:
-            hurt_df = parser.parse_event("player_hurt")
+            hurt_df = parse_event(parser, "player_hurt")
             if not hurt_df.empty and "attacker_steamid" in hurt_df.columns and "dmg_health" in hurt_df.columns:
                 user_damage = hurt_df[hurt_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
                 total_damage = float(user_damage["dmg_health"].sum())

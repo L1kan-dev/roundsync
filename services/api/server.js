@@ -380,7 +380,7 @@ function summarizePositioning(rows) {
   const traded = died.filter((r) => r.was_traded === true);
   const survivedOrTradeable = (rows.length - died.length) + tradeable.length;
   return {
-    isolated_commitments: rows.length,
+    isolated_commitments: new Set(rows.map((r) => `${r.match_id}:${r.round_number}`)).size,
     died_pct: round1(100 * died.length / rows.length),
     survived_pct: round1(100 * (rows.length - died.length) / rows.length),
     of_deaths_teammate_was_in_trade_range_pct: died.length ? round1(100 * tradeable.length / died.length) : null,
@@ -404,7 +404,7 @@ function summarizeDuels(rows) {
     return withTTD.length ? round1(withTTD.reduce((s, r) => s + r.time_to_damage_seconds, 0) / withTTD.length) : null;
   };
   return {
-    engagements_tracked: rows.length,
+    engagements_tracked: real.length,
     won: won.length,
     lost: lost.length,
     avg_angle_deviation_deg_when_won: avgDeviation(won),
@@ -421,7 +421,7 @@ function summarizeEngage(rows) {
   const engagedWon = engaged.filter((r) => r.round_won);
   const disengagedSurvived = disengaged.filter((r) => !r.target_died);
   return {
-    outnumbered_moments: rows.length,
+    outnumbered_moments: new Set(rows.map((r) => `${r.match_id}:${r.round_number}`)).size,
     chose_to_engage_pct: round1(100 * engaged.length / rows.length),
     round_win_pct_when_engaged: engaged.length ? round1(100 * engagedWon.length / engaged.length) : null,
     survived_pct_when_disengaged: disengaged.length ? round1(100 * disengagedSurvived.length / disengaged.length) : null,
@@ -728,13 +728,17 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
     });
 
     const aiReply = response.text;
+    const usage = response.usageMetadata || {};
 
     // Log query in coaching_history table
     await supabase.from('coaching_history').insert({
       steam_id64: steamId,
       question: question,
       response: aiReply,
-      matches_context_count: matchList.length
+      matches_context_count: matchList.length,
+      input_tokens: usage.promptTokenCount || 0,
+      output_tokens: usage.candidatesTokenCount || 0,
+      total_tokens: usage.totalTokenCount || 0
     });
 
     res.json({ response: aiReply });

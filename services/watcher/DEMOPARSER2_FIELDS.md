@@ -5,6 +5,18 @@ so RoundSync doesn't have to re-research field names every time a new coaching
 fact category gets built. Re-check the source if a field below stops working —
 this is a snapshot, not a guarantee it stays accurate forever.
 
+**Sub-tick vs. tick rate (researched 2026-08-25, don't re-derive this):** CS2's
+sub-tick input system gives client-side player *inputs* (fire, move, jump)
+precise sub-tick timestamps for hit-registration purposes, but this does
+**not** change the underlying 64Hz world-simulation tick rate, and it does
+**not** give demo events fractional tick values — every event in a `.dem`
+file (`player_blind`, `flashbang_detonate`, deaths, etc.) is still logged
+against a whole simulation tick. `TICK_RATE = 64.0` in `sync_pipeline.py` is
+correct and unaffected by sub-tick. This was confirmed empirically too: a
+flashbang's `player_blind` rows share the *exact* tick of their
+`flashbang_detonate` event (verified against a live demo, not assumed) — the
+basis for the entity-ID-reuse fix in `extract_fact_utility_throw`.
+
 ## How this parser works (two calling patterns)
 
 ```python
