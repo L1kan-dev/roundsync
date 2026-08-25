@@ -38,6 +38,10 @@ patch_changes.txt
 .DS_Store
 Thumbs.db
 
+# Claude Code local overrides (personal, machine-specific — .claude/settings.json
+# itself IS committed on purpose, this is only the *.local.json personal layer)
+.claude/settings.local.json
+
 # Playwright (used by the run-frontend agent skill's driver)
 playwright-report/
 test-results/
