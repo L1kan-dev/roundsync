@@ -312,6 +312,83 @@ promoted up from the raw field research in the first place.
       production data (Crosshair Placement card, `aim_placement` category
       score), so a rebuild needs sign-off, not a silent swap.
 
+## Tier 9.6 — Full-PROJECT audit using the 5-lens framework (planned 2026-08-26, not started)
+
+Broader than Tier 9 below (which only covered source code): this pass covers
+**every real file in the repo** — config, Docker, deployment, docs, package
+management, not just `.py`/`.js`/`.ts`. Verified complete on 2026-08-26 via an
+unrestricted `find` with no depth limit, after an earlier `maxdepth 3` pass
+silently missed several nested files (`frontend/app/api/auth/steam/route.ts`,
+the whole `frontend/.claude/skills/run-frontend/` tooling folder,
+`frontend/app/globals.css`, `services/watcher/tools/README.md`,
+`.claude/settings.json`). **Don't re-run a depth-limited listing to
+"double-check" — that mistake already cost time once.**
+
+Deliberately excluded, not oversights: `.env` / `frontend/.env.local`
+(secrets), `package-lock.json` files / `tsconfig.tsbuildinfo` /
+`next-env.d.ts` (machine-generated, never hand-edited), the ~20 `.png`
+screenshots under `run-frontend/screenshots/` (images, not code), and
+`node_modules`/`.next`/`venv`/`__pycache__`/`.git`.
+
+**Batches, in order (backend → frontend, since frontend displays what the
+backend computes):**
+0. **Project config & meta layer** — `docker-compose.yml`, `railway.json`,
+   all 4 `Dockerfile`s, `.dockerignore`, all 3 `package.json`s +
+   `requirements.txt`, `next.config.js`/`tsconfig.json`/`postcss.config.js`,
+   `.mcp.json`, `ReadMe.txt`, `.claude/settings.json` +
+   `.claude/settings.local.json`, `.claude/hooks/session-start-required-
+   reading.js`, `frontend/AGENTS.md` + `frontend/CLAUDE.md` (required
+   reading before any frontend batch, per this file's own instructions
+   above), and `frontend/.claude/skills/run-frontend/{driver.mjs,
+   mock-home.mjs,test-interactions.mjs,SKILL.md}`.
+1. **Crypto & auth surface** — `services/api/cryptoUtils.js`,
+   `services/watcher/crypto_utils.py`,
+   `frontend/app/api/auth/steam/route.ts`, `frontend/lib/rank.ts`.
+2. **Background workers + tools** — `services/watcher/watcher.py`,
+   `services/gc-worker/index.js`, `services/watcher/tools/
+   extract_map_callouts.py`, `services/watcher/tools/load_map_callouts.py`,
+   `services/watcher/tools/README.md`.
+3. **`services/watcher/sync_pipeline.py`** (1,596 lines — core math/
+   extraction engine, dedicated pass, likely 2 sub-chunks given size).
+4. **`services/api/server.js`** (800 lines — the actual API surface, heavy
+   on the security lens).
+5. **Small/medium frontend components** — `Logo.tsx`, `Toast.tsx`,
+   `layout.tsx`, `Operator.tsx`, `TopNav.tsx`, `RankChangeOverlay.tsx`,
+   `RankBadge.tsx`, `duelColors.ts`, `globals.css`.
+6. **`frontend/components/InsightsDashboard.tsx`** (733 lines).
+7. **`frontend/app/page.tsx`** (2,032 lines — the single largest file in the
+   project; no record of it ever having had a real audit pass before).
+
+**Method — the 5-lens framework** (full detail lives in Claude's own memory
+as `feedback_five_lens_audit_framework.md`; summarized here so this file
+stays self-contained for any future reader without memory access):
+1. Redundancy & architectural soundness (DRY, dead code, testability).
+2. Security & operational common sense (OWASP-shaped issues, plus code that
+   runs cleanly but is wrong/unsafe at runtime — see the `postMessage(...,
+   '*')` and entity-ID-reuse bugs already fixed in Tier 9 below for the
+   shape of finding this lens targets).
+3. Math/logical validity **+ the "real question" test**: even once a
+   calculation is confirmed to measure what it claims, ask whether that's
+   actually a meaningful, actionable thing to measure — flag technically-
+   correct-but-noisy/misleading/too-small-sample metrics too.
+4. Performance/optimization (redundant parses/queries, missing caching —
+   Tier 9 already found one concrete unfixed case: every `extract_fact_*`
+   independently re-parses the same base demo events, up to 8x per sync).
+5. Proactive original ideas — 1-2 new metrics per batch, buildable from data
+   already present in that file/table, not new extraction.
+
+Output per batch: **Critical Issues / Architectural & Performance / Sanity
+Check / Proactive Ideas**. Check in and stop after each batch (standing
+workflow rule) rather than running all 8 in one pass — this is a multi-
+session effort, not one sitting.
+
+**Status: not started.** Session ended right after scope was finalized and
+verified — the file inventory and batch assignment are locked in above,
+nothing has actually been read/audited yet under this framework. See Tier 9
+below for what a prior, less formal full-codebase pass already covered
+(several of those files will need re-checking under the new security/
+"real question"/proactive-ideas lenses that pass didn't apply).
+
 ## Tier 9 — Full-codebase audit findings (2026-08-25, third session same day)
 
 User requested a full senior-level pass over the whole app before any new
