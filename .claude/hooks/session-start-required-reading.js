@@ -14,6 +14,13 @@
 //     choosing to follow it.
 //   - The same session almost relied on remembering to check .claudeignore/
 //     .gitignore manually rather than it being guaranteed.
+//   - The user then watched a fresh session verify this hook by reading its
+//     OWN persisted output file and grepping it — and in the process
+//     mis-reported the memory file count (said 24, really 23). The user
+//     couldn't SEE the hook actually happen; they only had the model's
+//     word for it, and that word was wrong. `systemMessage` below fixes
+//     that: it's a banner shown directly to the user, with counts computed
+//     by this script itself, not typed or recalled by a model.
 // The user's explicit call after weighing the token cost: force all of it,
 // every session, rather than leave any of these three resting on instruction
 // alone. See feedback_read_all_memory_first.md for the fuller incident record.
@@ -42,15 +49,19 @@ const REQUIRED_FILES = [
 // to check them before reading or displaying a file; see feedback_secrets_handling.
 const IGNORE_FILES = [".gitignore", ".claudeignore"];
 
+const errors = []; // human-readable, for the visible banner
+
 function readOrError(fullPath, label) {
   try {
     return fs.readFileSync(fullPath, "utf8");
   } catch (err) {
+    errors.push(`${label}: ${err.message}`);
     return `[COULD NOT READ ${label}: ${err.message}]`;
   }
 }
 
 let context = "";
+let memoryFileCount = 0;
 
 // --- 1. Memory folder, in full — MEMORY.md (the index) first, then every
 // other .md file alphabetically, so a new file just needs to exist to be
@@ -67,9 +78,11 @@ try {
   for (const name of entries) {
     const body = readOrError(path.join(MEMORY_DIR, name), name);
     context += `--- memory/${name} ---\n${body}\n\n`;
+    memoryFileCount += 1;
   }
 } catch (err) {
   context += `[COULD NOT LIST MEMORY_DIR (${MEMORY_DIR}): ${err.message}]\n\n`;
+  errors.push(`listing ${MEMORY_DIR}: ${err.message}`);
 }
 context += "=== END MEMORY FOLDER ===\n\n";
 
@@ -101,8 +114,27 @@ for (const rel of IGNORE_FILES) {
 }
 context += "=== END IGNORE RULES ===";
 
+// --- Visible banner for the USER, not the model. Every number here is
+// counted live by this script, right now — never hardcoded, never something
+// a model has to recall or re-derive (that's exactly what went wrong before).
+const kb = (context.length / 1024).toFixed(0);
+// Not toLocaleString() — its thousands-separator depends on the machine's locale
+// (this one uses a space, not a comma), which would make the banner's formatting
+// unpredictable across machines. Comma-separate manually instead, always the same.
+const tokenEst = Math.round(context.length / 4)
+  .toString()
+  .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+let systemMessage =
+  `✅ Required-reading hook ran: ${memoryFileCount} memory files + ` +
+  `${REQUIRED_FILES.length} project docs + ${IGNORE_FILES.length} ignore files ` +
+  `injected (~${kb}KB, ~${tokenEst} tokens est.)`;
+if (errors.length > 0) {
+  systemMessage += `\n⚠️ ${errors.length} file(s) failed to read: ${errors.join("; ")}`;
+}
+
 console.log(
   JSON.stringify({
+    systemMessage,
     hookSpecificOutput: {
       hookEventName: "SessionStart",
       additionalContext: context,
