@@ -1,29 +1,29 @@
 #!/usr/bin/env node
-// SessionStart hook: force-injects (1) every file in the ~/.claude memory
-// folder, (2) RoundSync's required-reading docs, and (3) the current
-// .gitignore/.claudeignore rules into context at the start of every session —
-// instead of just instructing a future session to go read/check them. Real
-// incidents this exists to prevent, all from the same session:
-//   - A session read AI_CONTEXT.md's required-reading list, then skipped 2 of
-//     the 4 files on it anyway (CS2_ANALYTICS_STANDARDS.md and
-//     DEMOPARSER2_FIELDS.md) for an entire audit pass, working off a summary
-//     instead of the source.
-//   - The same session read MEMORY.md's index but not every file it points to,
-//     despite an existing hard-rule note saying to — memory alone wasn't
-//     enough to guarantee compliance, since it still depends on a session
-//     choosing to follow it.
-//   - The same session almost relied on remembering to check .claudeignore/
-//     .gitignore manually rather than it being guaranteed.
-//   - The user then watched a fresh session verify this hook by reading its
-//     OWN persisted output file and grepping it — and in the process
-//     mis-reported the memory file count (said 24, really 23). The user
-//     couldn't SEE the hook actually happen; they only had the model's
-//     word for it, and that word was wrong. `systemMessage` below fixes
-//     that: it's a banner shown directly to the user, with counts computed
-//     by this script itself, not typed or recalled by a model.
-// The user's explicit call after weighing the token cost: force all of it,
-// every session, rather than leave any of these three resting on instruction
-// alone. See feedback_read_all_memory_first.md for the fuller incident record.
+// SessionStart hook: guarantees every session reads (1) every file in the
+// ~/.claude memory folder, (2) RoundSync's required-reading docs, and (3) the
+// current .gitignore/.claudeignore rules, before doing anything else.
+//
+// IMPORTANT DESIGN NOTE (2026-08-26, second iteration): the first version of
+// this hook tried to embed all of that content directly into
+// hookSpecificOutput.additionalContext (~167KB / ~42,800 tokens combined).
+// That doesn't work reliably. Confirmed via raw session logs across multiple
+// real sessions: once a hook's output exceeds some size threshold, the
+// harness silently truncates additionalContext to roughly a 2KB preview and
+// persists the rest to a tool-results/*-additionalContext.txt file — meaning
+// the model only reliably sees a couple KB, not the full content, unless it
+// separately chooses to go Read that persisted file itself (inconsistent —
+// some sessions did, most didn't, and none were told to). Every symptom this
+// was built to prevent (skipping memory files, re-reading AI_CONTEXT.md
+// manually, no visible confirmation) traced back to this truncation, not to
+// the model ignoring content it actually had.
+//
+// Fix: additionalContext now stays tiny — just an explicit, ordered list of
+// absolute file paths plus an instruction to Read every one of them, as the
+// first action of the session, via the real Read tool. Real Read calls are
+// the one delivery mechanism that's actually proven reliable in every session
+// checked. This hook's job is to make the instruction to do that
+// unmissable and mechanically generated (never hand-typed, never stale), not
+// to smuggle the content in itself.
 //
 // Memory files are discovered dynamically (fs.readdirSync), not hardcoded, so
 // a new memory file created in a future session is picked up automatically —
@@ -45,91 +45,100 @@ const REQUIRED_FILES = [
 
 // Both small, both safety-critical, both easy to forget to check — same failure
 // class as the required-reading docs above, just for "don't touch/expose this"
-// instead of "use this as context." Injected so a session never has to remember
-// to check them before reading or displaying a file; see feedback_secrets_handling.
+// instead of "use this as context." See feedback_secrets_handling.
 const IGNORE_FILES = [".gitignore", ".claudeignore"];
 
 const errors = []; // human-readable, for the visible banner
+let totalBytes = 0;
 
-function readOrError(fullPath, label) {
+function statOrError(fullPath, label) {
   try {
-    return fs.readFileSync(fullPath, "utf8");
+    const size = fs.statSync(fullPath).size;
+    totalBytes += size;
+    return size;
   } catch (err) {
     errors.push(`${label}: ${err.message}`);
-    return `[COULD NOT READ ${label}: ${err.message}]`;
+    return null;
   }
 }
 
-let context = "";
-let memoryFileCount = 0;
-
-// --- 1. Memory folder, in full — MEMORY.md (the index) first, then every
-// other .md file alphabetically, so a new file just needs to exist to be
-// included next session, no code change required.
-context +=
-  "=== ~/.claude MEMORY FOLDER, AUTO-INJECTED IN FULL BY A SESSIONSTART HOOK ===\n" +
-  "Every file in this folder, actual current content — not the index's one-line\n" +
-  "summaries. Treat all of it as already read before responding to anything.\n\n";
+// --- 1. Memory folder — discover every .md file, MEMORY.md first.
+const memoryPaths = [];
 try {
   const entries = fs
     .readdirSync(MEMORY_DIR)
     .filter((f) => f.endsWith(".md"))
     .sort((a, b) => (a === "MEMORY.md" ? -1 : b === "MEMORY.md" ? 1 : a.localeCompare(b)));
   for (const name of entries) {
-    const body = readOrError(path.join(MEMORY_DIR, name), name);
-    context += `--- memory/${name} ---\n${body}\n\n`;
-    memoryFileCount += 1;
+    const fullPath = path.join(MEMORY_DIR, name);
+    statOrError(fullPath, `memory/${name}`);
+    memoryPaths.push(fullPath);
   }
 } catch (err) {
-  context += `[COULD NOT LIST MEMORY_DIR (${MEMORY_DIR}): ${err.message}]\n\n`;
   errors.push(`listing ${MEMORY_DIR}: ${err.message}`);
 }
-context += "=== END MEMORY FOLDER ===\n\n";
 
-// --- 2. RoundSync's own required-reading docs.
-context +=
-  "=== REQUIRED READING (RoundSync project docs) ===\n" +
-  "The actual, current content of RoundSync's required-reading docs — not a\n" +
-  "pointer to go read them, not a summary. Treat this as already read. Do not\n" +
-  "re-summarize it back to the user unprompted; use it as grounding for real work.\n" +
-  "This does NOT replace skimming services/watcher/sync_pipeline.py per\n" +
-  "AI_CONTEXT.md's own instructions — do that too, via a real tool call.\n\n";
-for (const rel of REQUIRED_FILES) {
-  const body = readOrError(path.join(REPO_ROOT, rel), rel);
-  context += `--- ${rel} ---\n${body}\n\n`;
-}
-context += "=== END REQUIRED READING ===\n\n";
+// --- 2. RoundSync's own required-reading docs + 3. ignore files — verify
+// existence/size now (so the banner can report real errors), build absolute
+// paths for the instruction list.
+const requiredPaths = REQUIRED_FILES.map((rel) => {
+  const fullPath = path.join(REPO_ROOT, rel);
+  statOrError(fullPath, rel);
+  return fullPath;
+});
+const ignorePaths = IGNORE_FILES.map((rel) => {
+  const fullPath = path.join(REPO_ROOT, rel);
+  statOrError(fullPath, rel);
+  return fullPath;
+});
 
-// --- 3. Ignore rules.
-context +=
-  "=== IGNORE RULES — CHECK BEFORE READING OR DISPLAYING ANY FILE ===\n" +
-  "Never Read, cat, grep-with-content, or otherwise display the contents of a file\n" +
-  "matching .claudeignore below — especially anything that could hold secrets — even\n" +
-  "if asked directly. If unsure whether a file is covered, check indirectly (name/\n" +
-  "pattern match, ask the user) instead of opening it. .gitignore is included too so\n" +
-  "commits never accidentally include something meant to stay untracked.\n\n";
-for (const rel of IGNORE_FILES) {
-  const body = readOrError(path.join(REPO_ROOT, rel), rel);
-  context += `--- ${rel} ---\n${body}\n\n`;
-}
-context += "=== END IGNORE RULES ===";
+// --- Build the small, guaranteed-to-survive instruction.
+const lines = [];
+lines.push(
+  "=== MANDATORY FIRST ACTION — READ THESE FILES BEFORE RESPONDING TO ANYTHING ===",
+  "This list is generated fresh by a SessionStart hook, not hand-typed or recalled from",
+  "memory. Before your first response, use the Read tool on every path below, in order.",
+  "Do not summarize this list back to the user unprompted; use it as grounding for real",
+  "work. Do not skip any entry, including ones that look like they're 'just memory' —",
+  "each one carries a standing instruction from a real past incident.",
+  "",
+  `--- ~/.claude memory folder (${memoryPaths.length} files, MEMORY.md first) ---`,
+  ...memoryPaths,
+  "",
+  "--- RoundSync required-reading docs ---",
+  ...requiredPaths,
+  "",
+  "--- Ignore rules (check patterns here BEFORE reading or displaying any other file;",
+  "never Read/cat/grep-display a file matching .claudeignore, even if asked directly) ---",
+  ...ignorePaths,
+  "",
+  "This does NOT replace skimming services/watcher/sync_pipeline.py per AI_CONTEXT.md's",
+  "own instructions — do that too. Once a file above has been Read this session, don't",
+  "re-Read it again later unless you have a specific reason to think it changed.",
+  "",
+  "=== VISIBLE CONFIRMATION — REQUIRED, NOT OPTIONAL ===",
+  "The `systemMessage` field this hook also emits is confirmed (2026-08-26, by direct",
+  "user report across multiple real sessions) to never render in this VSCode extension's",
+  "panel UI, even though it's generated correctly — so the user has no way to see it.",
+  "Your own response text is the one channel proven to render reliably. So: after",
+  "completing every Read above, and before anything else, your first response this",
+  "session must begin with this exact line, verbatim, on its own:",
+  `✅ Required-reading hook ran: read ${memoryPaths.length} memory files + ${REQUIRED_FILES.length} project docs + ${IGNORE_FILES.length} ignore files.`,
+  "Then continue your response normally below it."
+);
+const context = lines.join("\n");
 
-// --- Visible banner for the USER, not the model. Every number here is
-// counted live by this script, right now — never hardcoded, never something
-// a model has to recall or re-derive (that's exactly what went wrong before).
-const kb = (context.length / 1024).toFixed(0);
-// Not toLocaleString() — its thousands-separator depends on the machine's locale
-// (this one uses a space, not a comma), which would make the banner's formatting
-// unpredictable across machines. Comma-separate manually instead, always the same.
-const tokenEst = Math.round(context.length / 4)
-  .toString()
-  .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+// --- systemMessage kept for completeness/log-grepping (confirmed 2026-08-26 to
+// not actually render in this VSCode extension's panel UI — see the in-context
+// instruction above, which is the real, working substitute). Every number here
+// is counted live by this script, right now.
+const totalKb = (totalBytes / 1024).toFixed(0);
 let systemMessage =
-  `✅ Required-reading hook ran: ${memoryFileCount} memory files + ` +
+  `✅ Required-reading hook ran: instructed to Read ${memoryPaths.length} memory files + ` +
   `${REQUIRED_FILES.length} project docs + ${IGNORE_FILES.length} ignore files ` +
-  `injected (~${kb}KB, ~${tokenEst} tokens est.)`;
+  `(~${totalKb}KB on disk)`;
 if (errors.length > 0) {
-  systemMessage += `\n⚠️ ${errors.length} file(s) failed to read: ${errors.join("; ")}`;
+  systemMessage += `\n⚠️ ${errors.length} file(s) failed to stat: ${errors.join("; ")}`;
 }
 
 console.log(
