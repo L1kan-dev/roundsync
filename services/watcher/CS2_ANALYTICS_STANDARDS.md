@@ -154,10 +154,12 @@ be setting its own methodology, not matching one.
 - **Purpose**: consistency measure, less swingy than K/D since it counts
   near-misses (damage without a kill) too.
 - **Measurement**: integer/float, per round, capped per hit at 100.
-- **RoundSync verdict**: **already have it, but the cap is missing** —
-  `total_damage` sums raw uncapped `dmg_health`. Fix: cap each hit at 100
-  before summing, in `extract_match_secondary_metrics`/
-  `process_and_parse_real_demo`. Needs a demo re-parse.
+- **RoundSync verdict**: **fixed, 2026-08-25 (second session).** Was
+  summing raw uncapped `dmg_health`; now capped at all 3 confirmed sites
+  via a shared `capped_damage_sum()` helper in `sync_pipeline.py`. Only
+  affects matches synced from this fix onward — historical matches keep
+  their old uncapped value (CDN links expire, can't re-parse). See
+  `NEXT_STEPS.md`'s Completed section for the full before/after.
 - **Legal**: open, generic term. Safe.
 - **Sources**: [esports.net](https://www.esports.net/wiki/guides/cs2-adr-explained/), [thunderpick.io](https://thunderpick.io/blog/adr-in-cs2-everything-you-need-to-know), [daddyskins.com](https://daddyskins.com/blog/counterpedia/cs2-stats-explained-adr-kda-kast/)
 

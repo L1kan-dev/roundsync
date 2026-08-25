@@ -37,12 +37,13 @@ export async function GET(request: Request) {
         .update(payload)
         .digest('hex');
       const proof = `${payload}:${signature}`;
+      const realm = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
       return new Response(
         `<html>
           <body>
             <script>
-              window.opener.postMessage({ type: 'STEAM_LOGIN', proof: '${proof}' }, '*');
+              window.opener.postMessage({ type: 'STEAM_LOGIN', proof: '${proof}' }, '${realm}');
               window.close();
             </script>
             <p>Authentication complete! You can close this window now.</p>

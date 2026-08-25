@@ -24,6 +24,7 @@ const csgo = new GlobalOffensive(user);
 let isGcReady = false;
 let pollingInterval = null;
 let isConnecting = false;
+let isProcessingMatches = false;
 
 // Robust Connection & Reconnection Handler
 function connectToSteam() {
@@ -90,6 +91,13 @@ csgo.on('disconnectedFromGC', (reason) => {
 // Match Resolution Logic
 async function processPendingMatches() {
   if (!isGcReady) return;
+  // setInterval fires every 5s regardless of whether the previous run finished — resolving
+  // up to 5 matches, each with its own 10s GC timeout, can genuinely take longer than that.
+  // Without this guard, two overlapping runs would each register their own one-time
+  // 'matchList' listener, and a response meant for one run's request could get consumed by
+  // the other's listener — silently attaching the wrong download URL to the wrong match.
+  if (isProcessingMatches) return;
+  isProcessingMatches = true;
 
   try {
     const { data: matches, error } = await supabase
@@ -122,12 +130,15 @@ async function processPendingMatches() {
 
         console.log(`📦 Successfully retrieved GC match details for ${dbMatchId}`);
 
-        const directUrl = 
-          gcData.matchurl || 
-          gcData.match_url || 
-          gcData.url || 
+        // Note: roundstatsall[i].map is the MAP NAME (e.g. "de_mirage"), not a URL — confirmed
+        // via the real protobuf schema audit (see project docs). A fallback here that read
+        // from it would silently store a map name as a "download URL", failing confusingly
+        // later instead of at the source — removed rather than left in as a broken fallback.
+        const directUrl =
+          gcData.matchurl ||
+          gcData.match_url ||
+          gcData.url ||
           (gcData.watchablematchinfo && (gcData.watchablematchinfo.matchurl || gcData.watchablematchinfo.match_url)) ||
-          (gcData.roundstatsall && gcData.roundstatsall.length > 0 && gcData.roundstatsall[gcData.roundstatsall.length - 1].map) ||
           (gcData.match && (gcData.match.matchurl || gcData.match.match_url));
 
         if (directUrl) {
@@ -160,6 +171,8 @@ async function processPendingMatches() {
     }
   } catch (err) {
     console.error('❌ Polling error:', err.message);
+  } finally {
+    isProcessingMatches = false;
   }
 }
 

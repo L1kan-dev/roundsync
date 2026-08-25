@@ -25,6 +25,17 @@ def parse_event(parser, event_name, **kwargs):
     return result
 
 
+def capped_damage_sum(hurt_rows) -> float:
+    """Sum a set of player_hurt rows' dmg_health, capping each individual hit at 100 first —
+    a single hit can't deal more than a player's full health, but the raw field sometimes
+    reports a value above that. Centralized here since every site that sums damage needs the
+    same cap; previously duplicated at 3 separate call sites, which is how the ADR damage-cap
+    bug (see NEXT_STEPS.md) went unfixed in 2 of the 3 for as long as it did."""
+    if hurt_rows.empty:
+        return 0.0
+    return float(hurt_rows["dmg_health"].clip(upper=100).sum())
+
+
 def classify_team_buy_capacity(start_balance: int, is_ct: bool) -> str:
     """Money-only classification (never spend) to avoid judging a buy decision using itself as the yardstick."""
     if start_balance < 2000:
@@ -147,17 +158,6 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
 
         team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
 
-        def team_for(steamid, tick):
-            candidates = [t for t in freeze_ticks if t <= tick]
-            lookup_tick = max(candidates) if candidates else (freeze_ticks[0] if freeze_ticks else tick)
-            sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
-            if sub.empty:
-                return None
-            return "CT" if int(sub.iloc[0]["team_num"]) == 3 else "T"
-
-        def round_for(tick):
-            return max(1, sum(1 for t in freeze_ticks if t <= tick))
-
         throws = []
         for event_name, label in GRENADE_DETONATE_EVENTS.items():
             try:
@@ -222,7 +222,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
             inferno_expire_df = pd.DataFrame()
 
         for t in throws:
-            round_number = round_for(t["tick"])
+            round_number = _round_for(freeze_ticks, t["tick"])
             enemies_blinded = None
             teammates_blinded = None
             total_enemy_blind_duration = None
@@ -236,7 +236,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
                 # player_blind rows are logged at the exact same tick as their flash's
                 # detonation, so pinning to t["tick"] isolates only this throw's real victims.
                 matched = blind_df[(blind_df["entityid"] == t["entityid"]) & (blind_df["tick"] == t["tick"])]
-                thrower_team = team_for(target, t["tick"])
+                thrower_team = _team_for(team_snap, freeze_ticks, target, t["tick"])
                 enemies_blinded, teammates_blinded, total_enemy_blind_duration = 0, 0, 0.0
                 flash_assist = False
                 for _, b in matched.iterrows():
@@ -244,7 +244,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
                     if victim == target:
                         continue  # self-blind, not a teammate flash
                     duration = float(b["blind_duration"])
-                    if team_for(victim, t["tick"]) == thrower_team:
+                    if _team_for(team_snap, freeze_ticks, victim, t["tick"]) == thrower_team:
                         teammates_blinded += 1
                         continue
                     enemies_blinded += 1
@@ -257,7 +257,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
                         ]
                         for _, k in kills_on_victim.iterrows():
                             killer = str(k["attacker_steamid"])
-                            if killer != target and team_for(killer, t["tick"]) == thrower_team:
+                            if killer != target and _team_for(team_snap, freeze_ticks, killer, t["tick"]) == thrower_team:
                                 flash_assist = True
 
             elif t["type"] in ("hegrenade", "molotov", "incendiary") and not hurt_df.empty:
@@ -278,7 +278,9 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
                     & (hurt_df["tick"] >= window_start) & (hurt_df["tick"] <= window_end)
                     & (hurt_df["weapon"].astype(str).str.contains(keywords, case=False, na=False))
                 ]
-                damage_dealt = int(relevant["dmg_health"].sum()) if not relevant.empty else 0
+                # Capping per-row (not the final total) still allows one grenade to legitimately
+                # total >100 across multiple victims — see capped_damage_sum's own docstring.
+                damage_dealt = int(capped_damage_sum(relevant))
 
             rows.append({
                 "round_number": round_number,
@@ -319,6 +321,41 @@ WALKING_AUDIBLE_RANGE_UNITS = 900.0
 def _angle_diff(a: float, b: float) -> float:
     """Signed shortest distance between two angles in degrees, handling the -180/180 wraparound."""
     return (a - b + 180) % 360 - 180
+
+
+def _round_for(freeze_ticks: list, tick: int) -> int:
+    """Which round number a given tick falls in — round N starts at freeze_ticks[N-1] and runs
+    until the next round's freeze tick. Was copy-pasted as an identical inner function in 3
+    different extract_fact_* functions; consolidated here since none of them customize it."""
+    return max(1, sum(1 for t in freeze_ticks if t <= tick))
+
+
+def _build_round_bounds(freeze_ticks: list, round_end_df, with_winner: bool = False) -> dict:
+    """round_number -> (start_tick, end_tick) or (start_tick, end_tick, winner) if with_winner.
+    Was copy-pasted (with two slightly different tuple shapes) in 4 different extract_fact_*
+    functions; consolidated here — the with_winner flag picks the shape a caller needs instead
+    of two near-identical duplicated blocks."""
+    round_bounds = {}
+    for round_number, start_tick in enumerate(freeze_ticks, start=1):
+        end_rows = round_end_df[round_end_df["round"] == round_number]
+        if end_rows.empty:
+            continue
+        end_tick = int(end_rows.iloc[0]["tick"])
+        round_bounds[round_number] = (
+            (start_tick, end_tick, str(end_rows.iloc[0]["winner"])) if with_winner else (start_tick, end_tick)
+        )
+    return round_bounds
+
+
+def _team_for(team_snap, freeze_ticks: list, steamid, tick: int):
+    """"CT"/"T"/None for a player at a given tick, looked up against the most recent
+    round_freeze_end snapshot at or before that tick. Was copy-pasted as an identical inner
+    function (modulo one team_snap = team_snap parameter) in 3 different extract_fact_*
+    functions; consolidated here."""
+    candidates = [t for t in freeze_ticks if t <= tick]
+    lookup_tick = max(candidates) if candidates else (freeze_ticks[0] if freeze_ticks else tick)
+    sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
+    return None if sub.empty else ("CT" if int(sub.iloc[0]["team_num"]) == 3 else "T")
 
 
 def _get_player_rank(parser, target_steam_id64: str):
@@ -415,27 +452,69 @@ def _find_enemy_audible_triggers(parser, target: str, round_bounds: dict) -> lis
     return triggers
 
 
-def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
+def _resolve_bomb_site(callouts: list, plant_x: float, plant_y: float, plant_z: float):
+    """Given this map's real BombsiteA/BombsiteB callout points (label, x, y, z tuples, from
+    dim_map_callout) and a plant's real X/Y/Z, return whichever site letter's nearest callout
+    point is closest in real 3D distance. A site can have several callout points (different
+    corners/levels of the same site) — comparing against every point and taking the overall
+    nearest, rather than a single center point per site, is what makes this accurate without
+    needing site boundary polygons. Z (height) has to be part of the distance, not just X/Y —
+    confirmed against real dim_map_callout data that de_nuke's Site B sits almost directly
+    underneath Site A (B's callouts are ~250 units lower in Z, at very similar X/Y), so a
+    flat-ground distance alone can pick the wrong site there specifically; a 2D-only version of
+    this function is exactly why de_nuke was left unresolved in the historical backfill.
+    Returns None if this map has no bombsite callouts at all (nothing to resolve against — the
+    raw numeric code stays as the fallback at the call site)."""
+    best_label, best_dist_sq = None, None
+    for label, cx, cy, cz in callouts:
+        dist_sq = (plant_x - cx) ** 2 + (plant_y - cy) ** 2 + (plant_z - cz) ** 2
+        if best_dist_sq is None or dist_sq < best_dist_sq:
+            best_label, best_dist_sq = label, dist_sq
+    return best_label
+
+
+def _resolve_bomb_sites_by_elevation(code_to_positions: dict, callouts: list):
+    """Fallback for when _resolve_bomb_site can't be trusted for a whole match (its self-check
+    failed) — for a map with exactly 2 real distinct site codes this match, sort the codes by
+    their plants' average height (Z) and sort the map's 2 site letters by their own callout
+    points' average height, then pair them up in the same order (lower code-group with lower
+    site, higher with higher). Confirmed against real de_nuke data (2026-08-25): Site B sits
+    almost 400 units lower than Site A there — X/Y-only or nearest-point matching gets confused
+    by the two sites' overlapping footprint, but height alone cleanly and correctly separates
+    them, matching the map's real, publicly well-known layout (A is the upper/outside site, B is
+    the basement). This is NOT a de_nuke-specific rule — the "which letter is higher" direction
+    is read from this map's own real callout data, not assumed, so it only ever fires (and only
+    ever helps) on a map that's genuinely arranged this way. Returns a {raw_code: letter} dict,
+    or None if there aren't exactly 2 codes and 2 site letters to pair (nothing safe to do)."""
+    if len(code_to_positions) != 2:
+        return None
+    site_letters = sorted(set(label for label, _, _, _ in callouts))
+    if len(site_letters) != 2:
+        return None
+    avg_letter_z = {
+        label: sum(cz for l, _, _, cz in callouts if l == label) / sum(1 for l, _, _, _ in callouts if l == label)
+        for label in site_letters
+    }
+    codes_by_z = sorted(code_to_positions.items(), key=lambda kv: sum(z for _, _, z in kv[1]) / len(kv[1]))
+    letters_by_z = sorted(site_letters, key=lambda label: avg_letter_z[label])
+    return {codes_by_z[0][0]: letters_by_z[0], codes_by_z[1][0]: letters_by_z[1]}
+
+
+def extract_fact_adaptation_event(parser, target_steam_id64: str, bomb_site_callouts: list = None) -> list:
     """One row per teammate-death, bomb-plant, or enemy-audible-movement trigger for
     target_steam_id64 only (same scoping rule as fact_economy/fact_utility_throw). Bomb-plant
     "opposite site" filtering is NOT applied here — distance_to_plant_units is stored as a raw
     fact and thresholded later, same facts-vs-rules split as reaction_time_seconds itself."""
     rows = []
+    bomb_site_callouts = bomb_site_callouts or []
+    # raw `site` code -> resolved letter, built and sanity-checked in the bomb-plant block below.
+    _raw_code_to_resolved_site = {}
     target = str(target_steam_id64)
     try:
         freeze_end_df = parse_event(parser, "round_freeze_end")
         freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
 
-        def round_for(tick):
-            return max(1, sum(1 for t in freeze_ticks if t <= tick))
-
         team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
-
-        def team_for(steamid, tick):
-            candidates = [t for t in freeze_ticks if t <= tick]
-            lookup_tick = max(candidates) if candidates else (freeze_ticks[0] if freeze_ticks else tick)
-            sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
-            return None if sub.empty else ("CT" if int(sub.iloc[0]["team_num"]) == 3 else "T")
 
         death_df = parse_event(parser, "player_death")
         if death_df.empty or "user_steamid" not in death_df.columns:
@@ -444,8 +523,8 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
         target_death_ticks = sorted(death_df[death_df["user_steamid"].astype(str) == target]["tick"].tolist())
 
         def target_alive_at(tick):
-            rnd = round_for(tick)
-            deaths_this_round = [t for t in target_death_ticks if round_for(t) == rnd]
+            rnd = _round_for(freeze_ticks, tick)
+            deaths_this_round = [t for t in target_death_ticks if _round_for(freeze_ticks, t) == rnd]
             return not any(dt <= tick for dt in deaths_this_round)
 
         player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
@@ -456,7 +535,8 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
             if victim == target:
                 continue
             tick = int(d["tick"])
-            if team_for(victim, tick) is None or team_for(victim, tick) != team_for(target, tick):
+            victim_team = _team_for(team_snap, freeze_ticks, victim, tick)
+            if victim_team is None or victim_team != _team_for(team_snap, freeze_ticks, target, tick):
                 continue
             if not target_alive_at(tick):
                 continue
@@ -468,7 +548,55 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
             plant_df = pd.DataFrame()
         if not plant_df.empty and "user_steamid" in plant_df.columns:
             planter_ticks = sorted(int(t) for t in plant_df["tick"].tolist())
-            planter_pos_df = parser.parse_ticks(["X", "Y"], ticks=planter_ticks)
+            # Z (height) is needed alongside X/Y — see _resolve_bomb_site's docstring for why
+            # a flat 2D distance isn't enough on a map like de_nuke, where Site B sits almost
+            # directly underneath Site A.
+            planter_pos_df = parser.parse_ticks(["X", "Y", "Z"], ticks=planter_ticks)
+
+            # Pass 1: resolve EVERY plant in the match (not just ones relevant to the tracked
+            # player) and check the whole match is internally consistent before trusting any of
+            # it. Confirmed empirically against a real de_nuke match (2026-08-25): nearest-point
+            # matching can silently pick a wrong site when a map's extracted callout points are
+            # too sparse/uneven, even with 3D distance — the two real, distinct site codes that
+            # match resolved to conflicting letters. When that happens, try the elevation-based
+            # fallback (_resolve_bomb_sites_by_elevation) before giving up to raw codes — proven
+            # against the same real de_nuke match to correctly separate the two sites by height.
+            site_resolution_trusted = True
+            code_to_positions = {}  # raw_code -> list of (x, y, z), for the elevation fallback
+            for _, p in plant_df.iterrows():
+                tick = int(p["tick"])
+                row = planter_pos_df[
+                    (planter_pos_df["tick"] == tick) & (planter_pos_df["steamid"].astype(str) == str(p["user_steamid"]))
+                ]
+                if row.empty:
+                    continue
+                x, y, z = float(row.iloc[0]["X"]), float(row.iloc[0]["Y"]), float(row.iloc[0]["Z"])
+                raw_code = str(p["site"])
+                code_to_positions.setdefault(raw_code, []).append((x, y, z))
+                resolved = _resolve_bomb_site(bomb_site_callouts, x, y, z)
+                if resolved is None:
+                    continue
+                if raw_code in _raw_code_to_resolved_site and _raw_code_to_resolved_site[raw_code] != resolved:
+                    site_resolution_trusted = False
+                elif resolved in _raw_code_to_resolved_site.values() and raw_code not in _raw_code_to_resolved_site:
+                    site_resolution_trusted = False
+                _raw_code_to_resolved_site[raw_code] = resolved
+
+            if not site_resolution_trusted:
+                elevation_mapping = _resolve_bomb_sites_by_elevation(code_to_positions, bomb_site_callouts)
+                if elevation_mapping:
+                    print("⚠️ Warning: bomb site resolution by nearest-point looked unreliable for "
+                          "this match — resolved by height instead (2 distinct sites, cleanly "
+                          "separated by elevation)")
+                    _raw_code_to_resolved_site = elevation_mapping
+                    site_resolution_trusted = True
+                else:
+                    print("⚠️ Warning: bomb site resolution for this match looks unreliable (two "
+                          "different site codes resolved to the same letter), and the elevation "
+                          "fallback doesn't apply — falling back to raw numeric codes for every "
+                          "bomb_plant this match instead of a wrong-looking guess")
+
+            # Pass 2: build the actual trigger rows, scoped to the tracked player as before.
             for _, p in plant_df.iterrows():
                 planter = str(p["user_steamid"])
                 tick = int(p["tick"])
@@ -479,10 +607,16 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
                 ]
                 if planter_row.empty:
                     continue
+                planter_x = float(planter_row.iloc[0]["X"])
+                planter_y = float(planter_row.iloc[0]["Y"])
+                raw_code = str(p["site"])
+                resolved_site = raw_code
+                if site_resolution_trusted and raw_code in _raw_code_to_resolved_site:
+                    resolved_site = _raw_code_to_resolved_site[raw_code]
                 triggers.append(("bomb_plant", tick, {
-                    "bomb_site": str(p["site"]),
-                    "_planter_x": float(planter_row.iloc[0]["X"]),
-                    "_planter_y": float(planter_row.iloc[0]["Y"]),
+                    "bomb_site": resolved_site,
+                    "_planter_x": planter_x,
+                    "_planter_y": planter_y,
                 }))
 
         try:
@@ -490,11 +624,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
         except Exception:
             round_end_df = pd.DataFrame()
         if not round_end_df.empty and "round" in round_end_df.columns:
-            round_bounds = {}
-            for round_number, start_tick in enumerate(freeze_ticks, start=1):
-                end_rows = round_end_df[round_end_df["round"] == round_number]
-                if not end_rows.empty:
-                    round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]))
+            round_bounds = _build_round_bounds(freeze_ticks, round_end_df)
             for tick, extra in _find_enemy_audible_triggers(parser, target, round_bounds):
                 if target_alive_at(tick):
                     triggers.append(("enemy_audible_movement", tick, extra))
@@ -538,7 +668,7 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str) -> list:
                                             + (float(baseline["Y"]) - extra["_planter_y"]) ** 2) ** 0.5
 
             rows.append({
-                "round_number": round_for(trigger_tick),
+                "round_number": _round_for(freeze_ticks, trigger_tick),
                 "steam_id64": target,
                 "trigger_type": trigger_type,
                 "trigger_tick": trigger_tick,
@@ -589,11 +719,7 @@ def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
             return rows
         freeze_ticks = sorted(freeze_end_df["tick"].tolist())
 
-        round_bounds = {}
-        for round_number, start_tick in enumerate(freeze_ticks, start=1):
-            end_rows = round_end_df[round_end_df["round"] == round_number]
-            if not end_rows.empty:
-                round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]))
+        round_bounds = _build_round_bounds(freeze_ticks, round_end_df)
         if not round_bounds:
             return rows
 
@@ -741,9 +867,6 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
         freeze_end_df = parse_event(parser, "round_freeze_end")
         freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
 
-        def round_for(tick):
-            return max(1, sum(1 for t in freeze_ticks if t <= tick))
-
         fire_df = parse_event(parser, "weapon_fire")
         if fire_df.empty or "user_steamid" not in fire_df.columns:
             return rows
@@ -835,7 +958,7 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
                     engagement_result = "lost"
 
             rows.append({
-                "round_number": round_for(opening_tick),
+                "round_number": _round_for(freeze_ticks, opening_tick),
                 "steam_id64": target,
                 "engagement_tick": opening_tick,
                 "opponent_steamid": opponent_steamid,
@@ -868,11 +991,7 @@ def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
             return rows
         freeze_ticks = sorted(freeze_end_df["tick"].tolist())
 
-        round_bounds = {}
-        for round_number, start_tick in enumerate(freeze_ticks, start=1):
-            end_rows = round_end_df[round_end_df["round"] == round_number]
-            if not end_rows.empty:
-                round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]), str(end_rows.iloc[0]["winner"]))
+        round_bounds = _build_round_bounds(freeze_ticks, round_end_df, with_winner=True)
         if not round_bounds:
             return rows
 
@@ -898,7 +1017,7 @@ def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
             damage = 0.0
             if not hurt_df.empty:
                 mine = hurt_df[(hurt_df["attacker_steamid"].astype(str) == steamid) & (hurt_df["tick"] < cutoff_tick)]
-                damage = float(mine["dmg_health"].sum()) if not mine.empty else 0.0
+                damage = capped_damage_sum(mine)
             return kills, deaths, damage
 
         for round_number, (start_tick, end_tick, winner) in round_bounds.items():
@@ -1001,11 +1120,7 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
             return metrics
         freeze_ticks = sorted(freeze_end_df["tick"].tolist())
 
-        round_bounds = {}
-        for round_number, start_tick in enumerate(freeze_ticks, start=1):
-            end_rows = round_end_df[round_end_df["round"] == round_number]
-            if not end_rows.empty:
-                round_bounds[round_number] = (start_tick, int(end_rows.iloc[0]["tick"]), str(end_rows.iloc[0]["winner"]))
+        round_bounds = _build_round_bounds(freeze_ticks, round_end_df, with_winner=True)
         if not round_bounds:
             return metrics
 
@@ -1013,12 +1128,6 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
             return metrics
 
         team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks)
-
-        def team_for(steamid, tick):
-            candidates = [t for t in freeze_ticks if t <= tick]
-            lookup_tick = max(candidates) if candidates else freeze_ticks[0]
-            sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
-            return None if sub.empty else ("CT" if int(sub.iloc[0]["team_num"]) == 3 else "T")
 
         # --- 1. Entry Success % — win rate of the FIRST death of the round, for either side,
         # when target was one of the two people involved (the killer or the victim). Rounds
@@ -1059,7 +1168,7 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
             if round_snap.empty:
                 continue
             round_ticks_sorted = sorted(round_snap["tick"].unique())
-            target_team = team_for(target, start_tick)
+            target_team = _team_for(team_snap, freeze_ticks, target, start_tick)
             if target_team is None or winner != target_team:
                 continue
             was_clutch = False
@@ -1111,12 +1220,12 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
                 ]
                 if prior_enemy_kills.empty:
                     continue
-                target_team = team_for(target, kill_tick)
+                target_team = _team_for(team_snap, freeze_ticks, target, kill_tick)
                 for _, prior_kill in prior_enemy_kills.iterrows():
                     victim = str(prior_kill["user_steamid"])
                     if victim == target:
                         continue
-                    if team_for(victim, kill_tick) == target_team:
+                    if _team_for(team_snap, freeze_ticks, victim, kill_tick) == target_team:
                         trade_kills += 1
                         break
             metrics["trade_kill_pct"] = round(100 * trade_kills / len(my_kills), 1)
@@ -1248,6 +1357,31 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         except Exception as e:
             print(f"⚠️ Warning parsing header: {e}")
 
+        # Real per-map bombsite callout points (label + X/Y), fetched once per match and reused
+        # for every plant this match has — resolves the raw numeric bomb_site code from the demo
+        # into a real "A"/"B" letter via nearest-callout matching (_resolve_bomb_site).
+        bomb_site_callouts = []
+        if map_name:
+            try:
+                callout_res = (
+                    supabase_client.table("dim_map_callout")
+                    .select("callout_name, origin_x, origin_y, origin_z")
+                    .eq("map_name", map_name)
+                    .ilike("callout_name", "%bombsite%")
+                    .execute()
+                )
+                # Normalize "BombsiteA"/"BombsiteB" (the raw env_cs_place label) down to just
+                # "A"/"B", matching the short form the historical backfill already wrote — a
+                # single-bombsite map's label ("BombSite", capital S, e.g. de_debris) has no
+                # letter suffix to strip and is left as-is.
+                bomb_site_callouts = [
+                    (row["callout_name"].removeprefix("Bombsite") or row["callout_name"],
+                     row["origin_x"], row["origin_y"], row["origin_z"])
+                    for row in callout_res.data
+                ]
+            except Exception as e:
+                print(f"⚠️ Warning fetching bombsite callouts for {map_name}: {e}")
+
         total_kills = 0
         total_deaths = 0
         headshots = 0
@@ -1285,7 +1419,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             hurt_df = parse_event(parser, "player_hurt")
             if not hurt_df.empty and "attacker_steamid" in hurt_df.columns and "dmg_health" in hurt_df.columns:
                 user_damage = hurt_df[hurt_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
-                total_damage = float(user_damage["dmg_health"].sum())
+                total_damage = capped_damage_sum(user_damage)
         except Exception as e:
             print(f"⚠️ Warning parsing damage: {e}")
 
@@ -1325,7 +1459,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             except Exception as e:
                 print(f"⚠️ Failed to save fact_utility_throw: {e}")
 
-        fact_adaptation_rows = extract_fact_adaptation_event(parser, target_steam_id64)
+        fact_adaptation_rows = extract_fact_adaptation_event(parser, target_steam_id64, bomb_site_callouts)
         if fact_adaptation_rows:
             try:
                 for r in fact_adaptation_rows:

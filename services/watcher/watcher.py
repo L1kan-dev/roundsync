@@ -24,8 +24,10 @@ def update_heartbeat():
             "last_activity": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
         }, on_conflict="service_name").execute()
     except Exception as e:
-        # Don't crash watcher if health check table is not created yet
-        pass
+        # Don't crash the watcher over a heartbeat failure, but a silently swallowed
+        # exception here was invisible in every log — nothing ever printed even if this
+        # broke for a real reason (bad table name, permissions, network).
+        print(f"⚠️ Warning updating heartbeat: {e}")
 
 def check_for_new_valve_matches():
     """Loops through registered users and queries Valve's API for new matches."""
@@ -101,10 +103,15 @@ def prune_old_matches():
 def process_pending_downloads():
     """Finds pending matches and hands off download URL to demoparser2 pipeline."""
     try:
+        # Only 1 match is ever processed per call (the loop below breaks after the first
+        # ready one — process_pending_downloads() runs every 5s in watch_queue()'s loop, so
+        # matches get worked through one at a time rather than in a single burst). Fetching
+        # more than 1 row was pure waste — every extra row's full match_data JSONB blob was
+        # downloaded from Supabase and then immediately discarded, on every 5-second poll.
         response = supabase.table('matches') \
             .select('match_id', 'steam_id64', 'match_data') \
             .contains('match_data', {'telemetry': {'status': 'pending_download'}}) \
-            .limit(10) \
+            .limit(1) \
             .execute()
 
         if response.data:

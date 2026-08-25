@@ -261,16 +261,12 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
 // 4. AI Coaching Chat Endpoint (Gemini Integration)
 const round1 = (n) => Math.round(n * 10) / 10;
 
-// Bands are the real, current (2026) CS2 Premier CS Rating bands — same ones used in the
-// coaching-fact design research, not invented for this feature.
-// Real CS2 Premier CS Rating bands, corrected against an actual in-game reference
-// screenshot the user provided (an earlier web-research-sourced 7-band guess was wrong
-// on both the thresholds AND the count — it's 6 real bands, not 7). Keep in sync with
-// frontend/lib/rank.ts's RANK_BANDS if these ever change again.
 // Real CS2 Premier CS Rating bands — corrected against a clear, exact in-game reference
-// screenshot of the full rank-up ladder. An earlier "fix" based on a blurrier screenshot
-// got this wrong a second time — this is the ground-truth version. Keep in sync with
-// frontend/lib/rank.ts's RANK_BANDS if these ever change again.
+// screenshot of the full rank-up ladder: 7 real bands (Grey/Light Blue/Blue/Purple/Pink/
+// Red/Gold), confirmed against frontend/lib/rank.ts's RANK_BANDS (the source of truth —
+// an earlier version of this comment claimed "6 real bands, not 7", which was simply
+// wrong; the 7-branch function below was already correct). Keep both in sync if the real
+// bands ever change again.
 function rankTierInstruction(rankNew) {
   if (rankNew === null || rankNew === undefined) {
     return "The player's current rank is unknown. Use clear, plain language and briefly explain any CS2-specific term the first time you use it.";
@@ -428,7 +424,12 @@ function summarizeEngage(rows) {
   };
 }
 
-async function buildFactSummary(steamId, matchIds) {
+// Fetches all 6 fact tables in parallel — the one place this query set is defined. Both
+// buildFactSummary (AI Coach) and buildDashboardPayload (Insights dashboard) need it; the
+// dashboard also needs the RAW rows (for trend charts + loadout breakdown), which is why
+// this returns rows rather than baking the summarize step in — summarizeFactRows below
+// does that as a separate, reusable step instead of duplicating the fetch to get it.
+async function fetchFactRows(steamId, matchIds) {
   const [economy, utility, adaptation, positioning, duels, engage] = await Promise.all([
     supabase.from('fact_economy').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
     supabase.from('fact_utility_throw').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
@@ -438,13 +439,28 @@ async function buildFactSummary(steamId, matchIds) {
     supabase.from('fact_engage_decision').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
   ]);
   return {
-    economy: summarizeEconomy(economy.data || []),
-    utility: summarizeUtility(utility.data || []),
-    adaptation: summarizeAdaptation(adaptation.data || []),
-    positioning: summarizePositioning(positioning.data || []),
-    duels: summarizeDuels(duels.data || []),
-    engage: summarizeEngage(engage.data || []),
+    economy: economy.data || [],
+    utility: utility.data || [],
+    adaptation: adaptation.data || [],
+    positioning: positioning.data || [],
+    duels: duels.data || [],
+    engage: engage.data || [],
   };
+}
+
+function summarizeFactRows(rows) {
+  return {
+    economy: summarizeEconomy(rows.economy),
+    utility: summarizeUtility(rows.utility),
+    adaptation: summarizeAdaptation(rows.adaptation),
+    positioning: summarizePositioning(rows.positioning),
+    duels: summarizeDuels(rows.duels),
+    engage: summarizeEngage(rows.engage),
+  };
+}
+
+async function buildFactSummary(steamId, matchIds) {
+  return summarizeFactRows(await fetchFactRows(steamId, matchIds));
 }
 
 // --- Dashboard-only helpers: 0-100 scores, per-map breakdown, per-match trends ---
@@ -461,10 +477,16 @@ function computeCategoryScores(factSummary) {
     scores.utility_iq = clamp(100 - (factSummary.utility.team_flash_pct || 0));
   }
   if (factSummary.adaptation) {
+    // True combined rate (total reacted ÷ total occurrences across all 3 trigger types),
+    // not an average of each type's own percentage — averaging percentages equally would
+    // let a low-occurrence trigger type (e.g. 4 bomb plants) skew the score as much as a
+    // high-occurrence one (e.g. 80 audible-enemy triggers), the same average-of-ratios
+    // mistake already found and fixed once for the dashboard's K/D stat.
     const types = Object.values(factSummary.adaptation);
-    if (types.length > 0) {
-      const avgReacted = types.reduce((s, t) => s + (100 - t.no_visible_reaction_within_3s_pct), 0) / types.length;
-      scores.awareness = clamp(avgReacted);
+    const totalOccurrences = types.reduce((s, t) => s + t.occurrences, 0);
+    if (totalOccurrences > 0) {
+      const totalReacted = types.reduce((s, t) => s + t.occurrences * (100 - t.no_visible_reaction_within_3s_pct) / 100, 0);
+      scores.awareness = clamp(100 * totalReacted / totalOccurrences);
     }
   }
   if (factSummary.positioning) {
@@ -574,26 +596,13 @@ async function buildDashboardPayload(steamId) {
   const matchList = matches || [];
   const matchIds = matchList.map((m) => m.match_id);
 
-  const [economy, utility, adaptation, positioning, duels, engage, rankInfo] = await Promise.all([
-    supabase.from('fact_economy').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_utility_throw').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_adaptation_event').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_positioning_risk').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_duel_placement').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_engage_decision').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+  const [rows, rankInfo] = await Promise.all([
+    fetchFactRows(steamId, matchIds),
     getPlayerRankInfo(steamId, matchIds),
   ]);
 
-  const factSummary = {
-    economy: summarizeEconomy(economy.data || []),
-    utility: summarizeUtility(utility.data || []),
-    adaptation: summarizeAdaptation(adaptation.data || []),
-    positioning: summarizePositioning(positioning.data || []),
-    duels: summarizeDuels(duels.data || []),
-    engage: summarizeEngage(engage.data || []),
-  };
-
-  const trends = buildTrends(matchList, adaptation.data || [], positioning.data || []);
+  const factSummary = summarizeFactRows(rows);
+  const trends = buildTrends(matchList, rows.adaptation, rows.positioning);
 
   return {
     matchesTracked: matchList.length,
@@ -603,7 +612,7 @@ async function buildDashboardPayload(steamId) {
     categoryScores: computeCategoryScores(factSummary),
     mapBreakdown: buildMapBreakdown(matchList),
     trends,
-    loadoutMix: countBy(economy.data || [], 'loadout_tier'),
+    loadoutMix: countBy(rows.economy, 'loadout_tier'),
   };
 }
 

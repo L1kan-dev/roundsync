@@ -40,14 +40,12 @@ Supabase data for the 8 matches that existed at the time:
    response's real `usageMetadata` was never read on insert into
    `coaching_history`. Fixed in `server.js`.
 
-Plus a partial fix: **`bomb_site` stored a raw internal numeric code, not
-"A"/"B"** — resolved for 7 of 8 historical matches by geometrically matching
-each plant's real position against that map's actual BombsiteA/BombsiteB
-callout coordinates (already in `dim_map_callout`). One match (`de_nuke`)
-stayed genuinely ambiguous and was left as raw codes rather than writing a
-confident-looking guess. **The production pipeline still emits raw codes for
-every future match** — this is why it's also listed as unfinished in Tier 1
-below, not just a historical note.
+Plus a partial fix at the time: **`bomb_site` stored a raw internal numeric
+code, not "A"/"B"** — resolved for 7 of 8 historical matches by geometrically
+matching each plant's real position against that map's actual
+BombsiteA/BombsiteB callout coordinates (already in `dim_map_callout`). One
+match (`de_nuke`) stayed genuinely ambiguous at the time. **Fully resolved,
+second session, same day — see the Tier 1 entry moved to Completed below.**
 
 Also confirmed via research, not just code-reading: CS2's sub-tick input
 system (client-side, sub-tick-precision input timestamps for movement/fire)
@@ -59,31 +57,82 @@ flash's detonation" empirical finding used in fix #3 above. See
 `services/watcher/DEMOPARSER2_FIELDS.md` for where this is now noted for any
 future tick-timing question.
 
+## Completed (2026-08-25, second session — ADR damage cap)
+
+6. **ADR damage cap** — every hit's `dmg_health` was being summed uncapped
+   into `total_damage`, inflating ADR (a single hit can't deal more than a
+   player's full health, but the raw field sometimes reports a value above
+   100). Fixed at all 3 confirmed sites by clipping each hit to 100 before
+   summing (per-row, not per-total, so a grenade hitting multiple victims
+   or a burn stacking multiple ticks on one victim can still legitimately
+   total >100): `sync_pipeline.py` ADR calculation (feeds
+   `matches.telemetry.total_damage`/`adr`), `running_stats()` (feeds
+   `fact_engage_decision.target_damage_so_far`), and grenade `damage_dealt`
+   in `extract_fact_utility_throw` (feeds `fact_utility_throw`, grouped
+   naturally since `relevant` is already per-throw). Confirmed no other
+   `dmg_health`-summing site exists via grep, and that the frontend never
+   recomputes ADR from raw damage client-side — it only ever reads the
+   already-computed `total_damage`/`adr` fields, so no frontend change was
+   needed. **Only affects future syncs** — historical matches keep their
+   old (uncapped) ADR value; a re-parse would need the original CDN link,
+   which expires, same limitation as the map/date backfill above.
+
+   **Follow-up cleanup, same session:** the 3 sites originally each had
+   their own copy of the same `.clip(upper=100).sum()` line — a real DRY
+   (repeated-logic) smell, and part of why this bug had already been fixed
+   in 1 of the 3 spots (the old `total_rounds_played` swap) while the other
+   2 sat unfixed for a while. Extracted into one shared
+   `capped_damage_sum(hurt_rows)` helper (top of `sync_pipeline.py`,
+   alongside the existing `parse_event()` wrapper); all 3 call sites now
+   call it instead of duplicating the cap logic. Any future site that needs
+   a capped damage total has one obvious function to call instead of
+   re-deriving the same line a 4th time.
+
+## Completed (2026-08-25, second session — bomb_site resolver, fully closed)
+
+7. **`bomb_site` resolver for the live pipeline — DONE, no remaining gap.**
+   `extract_fact_adaptation_event` now resolves every bomb plant's real
+   site letter instead of storing the raw numeric code. Two methods, in
+   order:
+   - **Primary — nearest-callout matching in real 3D** (`_resolve_bomb_site`):
+     compares the plant's real X/Y/Z against every `BombsiteA`/`BombsiteB`
+     point for that map in `dim_map_callout`, using full 3D distance (not
+     flat X/Y) — 2D alone gets fooled on a map where one site sits almost
+     directly under the other. A per-match self-check
+     (`site_resolution_trusted`) verifies the whole match resolves
+     consistently (two distinct raw codes must never resolve to the same
+     letter) before trusting any of it.
+   - **Fallback — elevation pairing** (`_resolve_bomb_sites_by_elevation`):
+     when the self-check fails (confirmed live on a real de_nuke match,
+     2026-08-25 — its two sites' callout points are too sparse/uneven for
+     nearest-point matching to trust), sort the match's 2 real site codes
+     by their plants' average height, sort the map's 2 site letters by
+     their own callout points' average height, and pair them in matching
+     order. Verified against the real de_nuke match: correctly resolved
+     both sites (A = upper/outside, B = basement) — matches the map's real,
+     well-known layout. This is a general height-based method, not a
+     de_nuke-specific hardcode — it only activates when the primary method
+     fails, and the "which letter is higher" direction is read from each
+     map's own real callout data, not assumed.
+   - Only if *neither* method can produce a trustworthy answer does it fall
+     back to the raw numeric code — verified this genuinely never happens
+     across all 8 existing matches once the elevation fallback existed.
+   - **The one remaining historical gap (de_nuke, 6 rows) was also
+     backfilled for real**, not left stale — re-ran the actual production
+     function against the real demo (link still live) and updated Supabase
+     directly. Confirmed via a fresh query: every match across every map now
+     has a real "A"/"B" letter, zero raw numeric codes left anywhere in
+     `fact_adaptation_event`.
+   - Also fixed in passing: the resolved label is normalized from the DB's
+     raw `"BombsiteA"`/`"BombsiteB"` down to `"A"`/`"B"` before being stored,
+     matching the short form the original historical backfill already used
+     — otherwise old and new matches would've stored the same fact in two
+     different formats.
+
 ## Tier 1 — Wrong math, fix regardless of cost
 
-- [ ] **ADR damage cap.** Cap each hit at 100 damage before summing
-      `total_damage`. Currently sums raw uncapped `dmg_health` — every ADR
-      number in the app is inflated. Needs a demo re-parse. **Same fix
-      needed at all 3 sites that sum `dmg_health`** (verified by grep,
-      2026-08-25): `sync_pipeline.py:1288` (feeds ADR, this one),
-      `sync_pipeline.py:901` (`running_stats`, feeds
-      `fact_engage_decision.target_damage_so_far` — same "total damage
-      dealt" quantity, same bug) — both need capping per-victim-per-hit.
-      `sync_pipeline.py:281` (grenade `damage_dealt` in
-      `extract_fact_utility_throw`) is **not** "already confirmed correct" —
-      that only verified the aggregate `utility_dmg_per_round` sits in a
-      realistic range, not that this specific line is free of the cap
-      issue. It needs the *same* fix in principle, but grouped by victim
-      first (one grenade can legitimately hit multiple people for >100
-      total) — low priority since HE/molotov per-hit damage rarely exceeds
-      100 to one person the way AWP does, but don't skip it while treating
-      it as already settled.
-- [ ] **`bomb_site` resolver for the live pipeline.** Historical backfill
-      used real per-map callout coordinates for 7 of 8 matches; production
-      code still emits raw numeric site codes for every future sync. Needs
-      full per-map callout coverage (not just 2-3 sample points) and a
-      nearest-region classifier with a self-check that refuses to write a
-      mapping where two different codes resolve to the same letter.
+Empty as of 2026-08-25 (second session) — both items (ADR damage cap,
+bomb_site resolver) are done, see the Completed section above.
 
 ## Tier 2 — Rebuild to the real definition
 
@@ -232,6 +281,169 @@ verified against real field availability, not estimated:
       undisclosed Impact formula — same open-source lineage as `awpy`.
 - [ ] Consider "Optimal Spending Error" as a rigorous replacement for the
       existing `buy_decisions_against_team_economy` heuristic.
+
+## Tier 9.5 — Found only after actually reading the full research docs, not their summaries
+
+Caught directly by the user asking "did you have the research in context?" during
+the Tier 9 audit — the honest answer was no, and reading both
+`CS2_ANALYTICS_STANDARDS.md` and `DEMOPARSER2_FIELDS.md` in full (not just
+`NEXT_STEPS.md`'s summary of them) immediately surfaced a real finding
+`NEXT_STEPS.md`'s summary couldn't have contained, since it was never
+promoted up from the raw field research in the first place.
+
+- [ ] **`extract_fact_duel_placement` uses a less precise data source than
+      what's already documented as available.** Currently anchors on
+      `weapon_fire` for the opening-shot tick, then does a separate
+      `parse_ticks()` snapshot lookup for the shooter's position/yaw and
+      (via `player_hurt`) the opponent's identity/position. But
+      `DEMOPARSER2_FIELDS.md`'s full field crawl already documents two
+      richer, more direct sources: `fire_bullets` carries the shooter's
+      *exact* fired angle (`angles_x/y/z`) on the same row as the shot
+      itself — no secondary tick-snapshot needed — and `player_bullet_hit`
+      carries the victim's *exact* position at the hit (`victim_pos_x/y/z`)
+      plus `round` built directly into the row. Rebuilding on these would
+      be strictly more precise (the real fired angle, not a nearby sampled
+      tick; the real hit position, not a secondary join) and matches what
+      `CS2_ANALYTICS_STANDARDS.md`'s Tier 5 "Accuracy (enemy spotted) /
+      spray accuracy" entry already independently flags as needing
+      `weapon_fire` "matched against player_hurt" — the richer alternative
+      just was never connected to that entry. **Flagged for a scope
+      decision** — this touches `fact_duel_placement`, which already feeds
+      production data (Crosshair Placement card, `aim_placement` category
+      score), so a rebuild needs sign-off, not a silent swap.
+
+## Tier 9 — Full-codebase audit findings (2026-08-25, third session same day)
+
+User requested a full senior-level pass over the whole app before any new
+metric work starts — optimize, sense-check, remove redundancy, verify math.
+Findings logged here as they're found; small clear-cut ones get fixed
+immediately (per session convention), bigger ones need a scope decision
+first and are tracked here until actioned.
+
+- [x] **3 duplicated helper functions in `sync_pipeline.py` consolidated.**
+      A "which round is this tick in" calculator, a "which team is this
+      player on" lookup, and a "build round start/end times" builder were
+      each copy-pasted 3-4 times across different `extract_fact_*`
+      functions (with two slightly different shapes for the round-bounds
+      builder). Extracted into 3 shared module-level helpers
+      (`_round_for`, `_team_for`, `_build_round_bounds`); all call sites
+      updated. Verified against a real match (de_cache) — output identical
+      to what was already correctly stored, confirming this was a pure
+      dedup with no behavior change.
+- [ ] **Every `extract_fact_*` function independently re-parses the same
+      base demo events** (`round_freeze_end`, `round_end`, `player_death`,
+      `player_hurt`, `weapon_fire`, etc.) from scratch via `parse_event`/
+      `parse_ticks`, instead of reading each event once and sharing it.
+      Counted: `round_freeze_end` alone is re-parsed independently up to 8
+      times per single match sync (once in `process_and_parse_real_demo`
+      itself, plus once in each of the 7 `extract_fact_*`/secondary-metrics
+      functions). Since `demoparser2` has to scan the compiled demo stream
+      per call, this is real, repeated wasted work every sync, not just a
+      style issue — but fixing it means changing the signatures of all 7
+      extraction functions to accept pre-parsed DataFrames instead of
+      parsing their own. **Flagged for a scope decision, not yet started.**
+
+- [x] watcher.py: 2 real fixes. A silently-swallowed exception in
+      update_heartbeat() (except Exception: pass, zero logging) now logs a
+      warning instead - this was invisible-by-design for any real failure,
+      not just the "table not created yet" case the comment described.
+      process_pending_downloads() fetched 10 pending matches from Supabase
+      every 5 seconds but only ever processed 1 (the loop breaks after the
+      first) - reduced to .limit(1), since the other 9 rows' full
+      match_data JSONB blobs were downloaded and immediately discarded,
+      forever, on every poll.
+- [x] services/api/server.js: real statistical bug in the "awareness"
+      dashboard score, same class as the already-fixed K/D bug.
+      computeCategoryScores() averaged each of the 3 adaptation-trigger
+      types' (teammate-death / bomb-plant / audible-enemy) own reaction-rate
+      percentage equally, instead of computing the true combined rate
+      (total reacted / total occurrences). Verified with a concrete example
+      before and after: 80 audible-enemy triggers at 75% reacted + 4 bomb
+      plants at 25% reacted gave a score of 50 under the old (wrong) method
+      vs. the mathematically correct 72.6 under the fix - a real ~22-point
+      understatement from bad math, not from anything the player actually
+      did. Also fixed a stale comment above rankTierInstruction() that
+      claimed "6 real bands, not 7" - checked frontend/lib/rank.ts directly
+      and confirmed there are genuinely 7 real Premier CS Rating bands,
+      matching what the 7-branch function already correctly does; the
+      comment was simply wrong. Not fixed, flagged only (a content choice,
+      not a bug): the Pink and Red rank bands' AI-coach tone instructions
+      are word-for-word identical, making those two tiers behave the same
+      despite being distinct bands - worth writing distinct copy for them
+      at some point, not urgent.
+
+- [x] services/gc-worker/index.js: 2 real fixes. processPendingMatches()
+      ran on a 5-second setInterval with no guard against overlapping runs
+      - resolving up to 5 matches (each with its own 10s GC timeout) can
+      genuinely take longer than 5 seconds, so a second cycle could start
+      while the first was still mid-flight. Each cycle registered its own
+      one-time 'matchList' listener, so a GC response meant for one run's
+      request could get consumed by the other run's listener - silently
+      attaching the wrong download URL to the wrong match_id in Supabase.
+      Added an isProcessingMatches in-flight guard. Also removed a wrong
+      fallback in the download-URL extraction chain that read
+      roundstatsall[i].map as if it were a URL - that field is the MAP
+      NAME (e.g. "de_mirage"), confirmed via the real protobuf schema
+      audit from an earlier session; if this fallback had ever actually
+      fired, it would have stored a map name as a "download URL" and
+      failed confusingly downstream instead of at the source.
+
+- [x] services/api/server.js: buildFactSummary() and buildDashboardPayload()
+      each independently fetched the same 6 fact tables (near-identical
+      Promise.all blocks) and ran the same 6 summarize*() calls - a real,
+      missed-on-first-pass duplication (found on a second, more deliberate
+      "can this be leaner" pass after being asked to look again). Split
+      into fetchFactRows() (the one shared fetch) and summarizeFactRows()
+      (the one shared summarize step); buildFactSummary is now a thin
+      wrapper, buildDashboardPayload calls both shared pieces and gets the
+      raw rows it separately needs (trend charts, loadout breakdown) for
+      free instead of re-fetching them.
+- [x] frontend/components/TopNav.tsx: the 4 nav buttons (Home/Matches/
+      Insights/Coach) were 4 copy-pasted blocks differing only in tab id,
+      icon, and label - collapsed into one array + .map(). Verified with
+      npx tsc --noEmit, clean.
+- [x] frontend/app/api/auth/steam/route.ts: the Steam login proof was
+      broadcast via postMessage(..., '*') - delivers to any origin
+      window.opener happens to be, instead of the app's own real origin
+      (already computed a few lines earlier as `realm`). Tightened to use
+      it.
+
+- [x] frontend/components/InsightsDashboard.tsx: real crash bug. The
+      dashboard-data fetch never checked response.ok before storing the
+      parsed JSON as data - a server error response's body is just
+      {error: "..."}, still a truthy object, so the existing "couldn't
+      load your insights" fallback (which only checks `!data`) never
+      caught it. Instead CATEGORY_ORDER.some((k) =>
+      data.categoryScores[k] !== undefined) would throw (categoryScores
+      doesn't exist on an error payload), crashing the component instead
+      of showing the graceful fallback that already existed for exactly
+      this case. Fixed by throwing on a non-ok response so the existing
+      catch block (which correctly leaves data as null) handles it.
+      Verified with npx tsc --noEmit, clean.
+- [x] frontend/components/InsightsDashboard.tsx: the 6-card InsightCard
+      idea above - DONE, user approved after seeing the explanation. New
+      InsightCard({ icon, title, color, delay, children }) wraps only the
+      genuinely-identical parts (outer box classes + icon/title header
+      row); each card's own content (including Buy Decisions' different
+      shape - it always renders LoadoutMixBar plus a conditional extra
+      block, not a single hasData/EmptyCard split like the other 5) stays
+      exactly as it was, passed in as children. The 2 full-width trend-
+      chart cards (no icon, lg:col-span-2) are a genuinely different shape
+      and were deliberately left out of this wrapper rather than forced
+      to fit. Verified: npx tsc --noEmit clean, grep confirms the old
+      repeated className string now appears exactly once (inside
+      InsightCard itself) instead of 6 times, and all 6 call sites render
+      with the right icon/title/color/delay.
+
+- [ ] services/api/server.js: NOT a bug, but a real finding that never got
+      written down anywhere until now. The AI Coach's model name
+      ('gemini-3.5-flash') was checked directly against real, current
+      (2026-08-25) documentation rather than assumed - it's genuinely
+      real and valid, not a typo. But newer stable models now exist
+      (gemini-3.6-flash, gemini-3.7-flash as of 2026-08-13) that weren't
+      available when this was first wired up. Upgrading is a cost/
+      behavior tradeoff for the user to decide, not something to change
+      unprompted - flagged here so it isn't silently forgotten.
 
 ## Already confirmed correct, no action needed
 

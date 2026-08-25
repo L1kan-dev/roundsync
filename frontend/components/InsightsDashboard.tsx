@@ -403,6 +403,25 @@ const SUB_TABS: { key: SubTab; label: string; icon: React.ElementType }[] = [
   { key: 'maps', label: 'Performance by Map', icon: MapPinned },
 ];
 
+// Shared shell for the 6 icon-header stat cards across the aim/decisions/resources
+// sub-tabs — every one of them used the exact same outer box + header-row markup, only
+// differing in icon/title/color/delay and (genuinely, not boilerplate) their own inner
+// content. The two full-width trend-chart cards are a different shape (no icon, spans
+// both columns) and aren't forced into this — only the true matches are.
+function InsightCard({ icon: Icon, title, color, delay, children }: {
+  icon: React.ElementType; title: string; color: string; delay?: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': color, animationDelay: delay } as CSSProperties}>
+      <div className="flex items-center gap-2 mb-4">
+        <Icon className="w-4 h-4" style={{ color }} />
+        <h3 className="font-display font-bold text-lg">{title}</h3>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 // Always-visible pill tab bar — replaces a hidden dropdown so every category is one
 // click away instead of two, matching the segmented-control pattern the top nav uses.
 function CategoryTabs({ value, onChange }: { value: SubTab; onChange: (v: SubTab) => void }) {
@@ -438,6 +457,11 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
         const response = await fetch(`${API_BASE_URL}/api/stats/dashboard`, {
           headers: { Authorization: `Bearer ${jwtToken}` },
         });
+        // An error response's body is just {error: "..."} — still a truthy object, so
+        // without this check `data` would get set to it and every categoryScores/
+        // factSummary access below would crash instead of showing the "couldn't load"
+        // fallback the !data check further down is meant to catch.
+        if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
         const json = await response.json();
         if (!cancelled) setData(json);
       } catch (err) {
@@ -512,11 +536,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
 
       {subTab === 'aim' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_LEFT } as CSSProperties}>
-            <div className="flex items-center gap-2 mb-4">
-              <Crosshair className="w-4 h-4" style={{ color: SIDE_LEFT }} />
-              <h3 className="font-display font-bold text-lg">Crosshair Placement</h3>
-            </div>
+          <InsightCard icon={Crosshair} title="Crosshair Placement" color={SIDE_LEFT}>
             {factSummary.duels ? (
               <>
                 <div className="grid grid-cols-2 gap-3 mb-4">
@@ -549,13 +569,9 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 <AskCoachHint />
               </>
             ) : <EmptyCard label="aim" />}
-          </div>
+          </InsightCard>
 
-          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_RIGHT, animationDelay: '80ms' } as CSSProperties}>
-            <div className="flex items-center gap-2 mb-4">
-              <Ear className="w-4 h-4" style={{ color: SIDE_RIGHT }} />
-              <h3 className="font-display font-bold text-lg">Reaction to Information</h3>
-            </div>
+          <InsightCard icon={Ear} title="Reaction to Information" color={SIDE_RIGHT} delay="80ms">
             {factSummary.adaptation ? (
               <>
                 <ReactionByTriggerChart
@@ -566,7 +582,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 <AskCoachHint />
               </>
             ) : <EmptyCard label="reaction" />}
-          </div>
+          </InsightCard>
 
           <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 lg:col-span-2 card-in" style={{ '--c': SIDE_CENTER, animationDelay: '160ms' } as CSSProperties}>
             <h3 className="font-display font-bold text-lg mb-4">Reaction Rate Over Time</h3>
@@ -582,11 +598,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
 
       {subTab === 'decisions' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_LEFT } as CSSProperties}>
-            <div className="flex items-center gap-2 mb-4">
-              <MapPinned className="w-4 h-4" style={{ color: SIDE_LEFT }} />
-              <h3 className="font-display font-bold text-lg">Isolated Pushes</h3>
-            </div>
+          <InsightCard icon={MapPinned} title="Isolated Pushes" color={SIDE_LEFT}>
             {factSummary.positioning ? (
               <>
                 <EmphasisBar
@@ -614,13 +626,9 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 <AskCoachHint />
               </>
             ) : <EmptyCard label="positioning" />}
-          </div>
+          </InsightCard>
 
-          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_RIGHT, animationDelay: '80ms' } as CSSProperties}>
-            <div className="flex items-center gap-2 mb-4">
-              <Users className="w-4 h-4" style={{ color: SIDE_RIGHT }} />
-              <h3 className="font-display font-bold text-lg">Engage vs. Save</h3>
-            </div>
+          <InsightCard icon={Users} title="Engage vs. Save" color={SIDE_RIGHT} delay="80ms">
             {factSummary.engage ? (
               <>
                 <div className="grid grid-cols-2 gap-3 mb-4">
@@ -652,7 +660,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 <AskCoachHint />
               </>
             ) : <EmptyCard label="engage-decision" />}
-          </div>
+          </InsightCard>
 
           <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 lg:col-span-2 card-in" style={{ '--c': SIDE_CENTER, animationDelay: '160ms' } as CSSProperties}>
             <h3 className="font-display font-bold text-lg mb-4">Positioning Decisions Over Time</h3>
@@ -668,11 +676,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
 
       {subTab === 'resources' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_LEFT } as CSSProperties}>
-            <div className="flex items-center gap-2 mb-4">
-              <Coins className="w-4 h-4" style={{ color: SIDE_LEFT }} />
-              <h3 className="font-display font-bold text-lg">Buy Decisions</h3>
-            </div>
+          <InsightCard icon={Coins} title="Buy Decisions" color={SIDE_LEFT}>
             <LoadoutMixBar mix={data.loadoutMix} color={SIDE_LEFT} onAsk={onAskCoach} />
             {factSummary.economy && (
               <div className="grid grid-cols-2 gap-3 mt-4">
@@ -691,13 +695,9 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
               </div>
             )}
             <AskCoachHint />
-          </div>
+          </InsightCard>
 
-          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_RIGHT, animationDelay: '80ms' } as CSSProperties}>
-            <div className="flex items-center gap-2 mb-4">
-              <Flame className="w-4 h-4" style={{ color: SIDE_RIGHT }} />
-              <h3 className="font-display font-bold text-lg">Utility Effectiveness</h3>
-            </div>
+          <InsightCard icon={Flame} title="Utility Effectiveness" color={SIDE_RIGHT} delay="80ms">
             {factSummary.utility ? (
               <>
                 <EmphasisBar
@@ -725,7 +725,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 <AskCoachHint />
               </>
             ) : <EmptyCard label="utility" />}
-          </div>
+          </InsightCard>
         </div>
       )}
     </div>

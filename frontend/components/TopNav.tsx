@@ -38,38 +38,22 @@ export function TopNav({ activeTab, onTabChange, isLive, personaName, avatarUrl,
         </button>
 
         <nav className="hidden sm:flex items-center gap-1 bg-[var(--panel)]/60 border border-[var(--edge)] rounded-full p-1">
-          <button
-            onClick={() => onTabChange('home')}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              activeTab === 'home' ? 'bg-[var(--cyan)] text-[#03141a]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
-            }`}
-          >
-            <BarChart2 className="w-4 h-4" /> Home
-          </button>
-          <button
-            onClick={() => onTabChange('matches')}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              activeTab === 'matches' ? 'bg-[var(--cyan)] text-[#03141a]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
-            }`}
-          >
-            <Swords className="w-4 h-4" /> Matches
-          </button>
-          <button
-            onClick={() => onTabChange('insights')}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              activeTab === 'insights' ? 'bg-[var(--cyan)] text-[#03141a]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
-            }`}
-          >
-            <LayoutGrid className="w-4 h-4" /> Insights
-          </button>
-          <button
-            onClick={() => onTabChange('coach')}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              activeTab === 'coach' ? 'bg-[var(--cyan)] text-[#03141a]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
-            }`}
-          >
-            <Brain className="w-4 h-4" /> AI Coach
-          </button>
+          {([
+            { tab: 'home' as const, icon: BarChart2, label: 'Home' },
+            { tab: 'matches' as const, icon: Swords, label: 'Matches' },
+            { tab: 'insights' as const, icon: LayoutGrid, label: 'Insights' },
+            { tab: 'coach' as const, icon: Brain, label: 'AI Coach' },
+          ]).map(({ tab, icon: Icon, label }) => (
+            <button
+              key={tab}
+              onClick={() => onTabChange(tab)}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                activeTab === tab ? 'bg-[var(--cyan)] text-[#03141a]' : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+              }`}
+            >
+              <Icon className="w-4 h-4" /> {label}
+            </button>
+          ))}
         </nav>
 
         <div className="relative" ref={menuRef}>
