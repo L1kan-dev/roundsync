@@ -13,11 +13,15 @@ export function formatMapName(map?: string | null): string {
 // legible, correct per-map before being added — not assumed from the filename alone),
 // resized to 800px wide and re-encoded as JPEG (originals were ~3MB PNGs; these are
 // ~50-80KB) since these are photographic content, not sprites needing transparency.
-// Every current active-duty map is covered; a map missing here (an unusual/retired one)
-// correctly falls back to the plain gradient panel instead of a broken <img>.
+// NOT a verified-complete list — de_cache was missing on the first pass (caught by the
+// user after deploy) and there are ~40 more maps in the source repo (mostly community/
+// operation maps unlikely to appear in real Premier matches). A map missing here falls
+// back to the plain gradient panel instead of a broken <img>, so it's a safe default, not
+// a crash — but if a real tracked match shows up with no thumbnail, that's the fix: pull
+// the map's `_png.png` from the same repo, verify it visually, add it here.
 const MAPS_WITH_SCREENSHOTS = new Set<string>([
   'de_dust2', 'de_inferno', 'de_mirage', 'de_nuke', 'de_ancient',
-  'de_anubis', 'de_overpass', 'de_train', 'de_vertigo',
+  'de_anubis', 'de_overpass', 'de_train', 'de_vertigo', 'de_cache',
 ]);
 export function mapScreenshotUrl(map?: string | null): string | null {
   if (!map || !MAPS_WITH_SCREENSHOTS.has(map)) return null;

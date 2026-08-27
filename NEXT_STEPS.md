@@ -1440,6 +1440,22 @@ future — that's the next session's first job.
       displays now share one component instead of 2 having their own
       separate markup). Verified live via headed Playwright runs at every
       step, including legibility at the match card's actual 20px size.
+      **Follow-up, same day, caught on the real deployed site:** the
+      rank number was hard to read against the badge fill. Lowered
+      `bandTones()`'s fill-brightness mix ratios (fillTop 0.35→0.2,
+      fillBottom 0.35→0.45 toward black) without touching the text
+      tone, widening the contrast gap. Verified with a before/after crop
+      comparison, not just re-reading the code.
+- [x] **Map thumbnail gap — `de_cache` was missing, DONE, 2026-08-27.**
+      Caught on the real deployed site (not every current/recent Premier
+      map was covered by the original 9). Same process as the original
+      batch: pulled `de_cache_png.png` from the same source repo, verified
+      it visually before adding (confirmed real Cache exterior/reactor
+      tower), added to `MAPS_WITH_SCREENSHOTS`. The doc comment claiming
+      "every current active-duty map is covered" was corrected to be
+      honest about not being a verified-complete list — there are ~40 more
+      maps in the source repo, mostly community/operation maps unlikely to
+      appear in real Premier matches, not individually checked.
 - [ ] **Rank-change celebration effects** — user wants a big effect on
       crossing into a new rank band and a smaller one for an in-band
       rank-up/down, both directions (up feeling good, down feeling

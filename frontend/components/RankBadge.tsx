@@ -52,8 +52,11 @@ interface Tones {
 // finds the derived version off, that's the thing to fix — see CS2_ANALYTICS_STANDARDS.md.
 function bandTones(hex: string): Tones {
   return {
-    fillTop: mix(hex, '#ffffff', 0.35),
-    fillBottom: mix(hex, '#000000', 0.35),
+    // Fill brightness lowered from the original 0.35/0.35 (user feedback, 2026-08-27: the
+    // rank number was hard to read against the deployed badge) — widens the gap against
+    // the text tone below (still 0.6 toward white) instead of touching the text itself.
+    fillTop: mix(hex, '#ffffff', 0.2),
+    fillBottom: mix(hex, '#000000', 0.45),
     rimLight: mix(hex, '#ffffff', 0.75),
     rimDark: mix(hex, '#000000', 0.55),
     bar: mix(hex, '#ffffff', 0.55),
