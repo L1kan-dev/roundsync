@@ -48,6 +48,9 @@ for you.
    and function names in this file directly (e.g. the `dmg_health`-summing
    sites at lines 281, 901, and 1288; the `parse_event()` wrapper added to
    fix a silent-data-loss bug).
+5. **`IDEAS.md`** (repo root) — original feature/metric ideas not yet
+   scoped into `NEXT_STEPS.md`. Check before proposing a "new" idea that
+   might already be recorded here.
 
 ## If the task involves frontend work
 

@@ -981,6 +981,172 @@ key discovered earlier this session. Left one advisor note alone —
 an "unused index" on `coaching_history` — likely just reflects the table
 still being small enough that Postgres prefers a full scan; not acted on.
 
+## Tier 12 — Research queue: what players actually want that existing trackers don't offer (queued 2026-08-27, not started)
+
+A real research task, not a quick lookup — deliberately queued for its own
+session rather than attempted inline. Goal: find genuine gaps in what
+Leetify/HLTV/Scope.gg/csstats.gg/tracker.gg etc. currently offer, driven by
+what real players actually say they want, not just by guessing at features.
+
+**Suggested method, for whoever picks this up:**
+1. Search real player-voiced sources, not marketing pages — Reddit
+   (r/GlobalOffensive, r/counterstrike), Steam community discussions,
+   existing trackers' own feature-request/feedback threads, Leetify's
+   Discord if publicly searchable, etc. Look for recurring complaints like
+   "I wish my tracker showed X" or "why doesn't anyone track Y."
+2. Compile a raw list of everything found, with sources — same rigor as
+   `CS2_ANALYTICS_STANDARDS.md`'s existing research (check every claim
+   against a real source, don't trust a single AI summary at face value,
+   watch for the same kind of fabricated-sounding entries that research
+   already caught once — see that doc's "Checked and rejected" section for
+   the shape of that failure mode).
+3. **Cross-verify each item against what the major trackers actually
+   currently ship** — a "gap" someone complained about 2 years ago might
+   already be built by now. Confirm it's a genuine, current gap before
+   calling it one.
+4. Whatever survives that check ("golden nuggets" — genuinely unmet,
+   genuinely real) goes into `IDEAS.md`, not straight into a build queue —
+   same "idea first, scope later" flow every other idea goes through.
+
+Not started. This is explicitly a research-first task — don't skip to
+"here's what I think players want" without the actual survey step above.
+
+## Tier 11 — Lifetime stats via Steam Web API (verified real, 2026-08-27, not yet built)
+
+User wants this built — verified it actually works before logging it as ready,
+not just from the research conversation. Called `ISteamUserStats
+/GetUserStatsForGame` (`appid=730`) against a real user's SteamID64 already in
+the database — **confirmed real, rich data comes back**, no demo parsing, no
+bot/GC connection needed, just the SteamID + the `VALVE_API_KEY` already
+configured:
+- Lifetime totals: `total_kills`, `total_deaths`, `total_wins`,
+  `total_damage_done`, `total_time_played`, `total_money_earned`,
+  `total_planted_bombs`/`total_defused_bombs`/`total_rescued_hostages`.
+- **Per-weapon lifetime kills** for every gun (`total_kills_ak47`,
+  `total_kills_awp`, `total_kills_headshot`, etc.).
+- **Per-map lifetime wins** (`total_wins_map_de_dust2`,
+  `total_wins_map_de_inferno`, etc.) — field names still include old
+  CS:GO-only maps (`cs_assault`, `cs_italy`, `de_aztec`), confirming this
+  genuinely spans the player's whole CS:GO + CS2 history, not just CS2.
+- Assorted fun granular ones: `total_kills_enemy_blinded`,
+  `total_kills_against_zoomed_sniper`, `total_kills_knife_fight`.
+
+**Why this is worth building, concretely:**
+1. Fills the "Scanning for your matches" empty state with something real on
+   day one, instead of nothing — no other RoundSync data needs to exist yet.
+2. Could serve as each player's own **personal baseline** for trend/
+   regression analysis (Tier 8's predictive-analysis section already says
+   naive trend-lines off ~8 matches are unreliable and population
+   benchmarks are blocked on RoundSync only having ~3 users — a player's
+   own lifetime per-map/per-weapon rate is a real baseline that's
+   available *today*, sidestepping both blockers at once).
+3. Per-map lifetime win rate vs. recent RoundSync-tracked win rate on that
+   same map is a genuinely new, real comparison nobody else surfaces this
+   specific way.
+
+Not yet built — this is verified-and-scoped, not implemented. Needs: a new
+`services/api/server.js` (or `sync_pipeline.py`) call to this endpoint, a
+place to store it (a new `lifetime_stats` column/table, refreshed
+periodically rather than every request), and a decision on where it
+displays (the empty-state card is the obvious first spot per point 1 above).
+
+## Tier 10 — Live-testing feedback, 2026-08-27 (logged only, nothing actioned yet)
+
+User found these by actually running the app locally after today's audit/fixes
+were deployed. Recorded verbatim intent, not yet triaged into fix-now vs.
+future — that's the next session's first job.
+
+**Bugs / clarity issues (things that are wrong or confusing, not new features):**
+
+- [ ] **"Positioning Decisions Over Time" chart tooltip is unclear.** The
+      label "Survived or tradeable" means nothing to a player without
+      context — needs either a plain-language rename or a real tooltip
+      explaining what it measures (see `summarizePositioning`'s
+      `survived_or_tradeable_pct` in `server.js` for the actual definition:
+      judges the *decision* to push, not just whether you died — surviving
+      OR having a teammate close enough to trade both count as "good").
+- [ ] **All reaction times must display in milliseconds, not seconds.**
+      Currently `reaction_time_seconds` shows as e.g. "1.8s". At minimum
+      the *display* should convert to ms; this is separate from (but
+      related to) Tier 2's already-tracked full rebuild (sampling every
+      tick instead of every 0.5s) — the unit fix could happen independently
+      and sooner.
+- [ ] **Tooltips/labels inconsistently show raw field names instead of
+      proper formatting.** "K/D" render as "kd", "ADR" as "adr" in some
+      places; "%" is shown in some spots and silently dropped in others
+      where the value is still a percentage. Needs a full pass checking
+      every stat label against its real unit, not spot-fixed one at a time.
+- [ ] **"Syncing your matches" progress counts don't match reality.**
+      User's example: showed "8 ready" when the real state was closer to
+      "2 ready, 5 done, 10 remaining" — the displayed numbers don't
+      reconcile the way the UI implies. Needs investigating
+      `/api/matches/sync-status` (`server.js`) and the Home dashboard's
+      sync-progress bar (`page.tsx`) together — this could be a real
+      backend counting bug, a frontend display bug, or both; not diagnosed
+      yet, only reported.
+
+**Feature requests / redesigns:**
+
+- [ ] **Real map images for match/map tiles.** `mapScreenshotUrl()`
+      currently has zero maps in `MAPS_WITH_SCREENSHOTS` — every card falls
+      back to a flat gradient. Per the established "prefer real extracted
+      assets" pattern (already used for the rank badge and operator
+      renders), find real CS2 map thumbnails from a community extraction
+      source (e.g. the `MurkyYT/cs2-map-icons` repo already used for the
+      operator art research) rather than generating anything new.
+- [ ] **KAST, headshot accuracy, and multi-kill rounds need to appear in
+      Insights too**, not just the Home dashboard tiles — currently
+      `InsightsDashboard.tsx` doesn't surface any of the 3 stats added this
+      session.
+- [ ] **Full metrics placement review.** Re-evaluate every metric against
+      *which page it actually belongs on* — Home vs. Matches vs. Insights
+      vs. Coach — and flag anywhere different granularities get mixed on
+      the same card/page (e.g. a career-aggregate stat sitting next to a
+      single-match stat with no visual distinction). A real design pass,
+      not a quick fix.
+- [ ] **Add a time estimate for match parsing** — either per-match ETA or
+      a total estimate for everything still queued, using the existing
+      `avgSeconds` data already tracked in sync-status.
+- [ ] **Rank badge visual redesign** — user has seen a newer/better real
+      CS2 Premier rank badge design (number formatting: the integer part
+      before the decimal/comma should render larger than the rest) and
+      wants `RankBadge.tsx` updated to match it more closely.
+- [ ] **Rank-change celebration effects** — user wants a big effect on
+      crossing into a new rank band and a smaller one for an in-band
+      rank-up/down, both directions (up feeling good, down feeling
+      appropriately negative). **Note for whoever picks this up**:
+      `RankBandTakeover` (full-screen, band-crossing) and `RankDeltaBadge`
+      (small pill, same-band) already exist in
+      `components/RankChangeOverlay.tsx` and are already wired into
+      `page.tsx` — confirm with the user whether this request means "I
+      didn't know this existed, show me" vs. "the existing effect needs to
+      look/feel better," rather than assuming it needs building from
+      scratch.
+- [ ] **Match-detail drill-down page** — a real per-match view (like
+      Leetify/HLTV/tracker.gg's match pages: overview, round-by-round,
+      etc.), not just the current summary card. RoundSync currently has no
+      single-match detail view at all — clicking a match card only jumps
+      to the AI Coach with a pre-filled question. A genuinely new page/route.
+- [ ] **Recent Matches carousel cards need more stats — and the actual
+      time played, not just the date.** Currently only shows map/date/K-D
+      ratio. User wants Kills, Deaths, Assists, Headshot %, K/D, ADR, and
+      Performance Index all visible (the Matches tab's own cards already
+      show most of these — Kills/ADR/HS%/K-D/Performance — but are missing
+      Assists; the Home carousel cards are missing almost all of them).
+      Also: `formatMatchDate()` (`page.tsx`) only formats the date portion
+      of `match_time` (`toLocaleDateString`) — needs the time-of-day
+      included too (e.g. via `toLocaleString` instead), everywhere a
+      match's date is shown, not just this one card. Needs a per-card audit
+      of exactly which fields are shown where.
+- [ ] **Re-evaluate Performance Index using the richer metrics now
+      available.** Currently a simple 3-input blend (K/D, ADR, headshot %),
+      explicitly labeled a placeholder in its own code comment. With KAST,
+      multi-kill rounds, utility, positioning, and engage-decision data all
+      now available, this deserves a real re-design — connects to the
+      already-researched "RoundSync needs an original composite score,
+      can't copy HLTV's undisclosed formula" discussion in
+      `CS2_ANALYTICS_STANDARDS.md`.
+
 ## Tier 9 — Full-codebase audit findings (2026-08-25, third session same day)
 
 User requested a full senior-level pass over the whole app before any new

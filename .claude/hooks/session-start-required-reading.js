@@ -39,6 +39,7 @@ const MEMORY_DIR =
 const REQUIRED_FILES = [
   "AI_CONTEXT.md",
   "NEXT_STEPS.md",
+  "IDEAS.md",
   "services/watcher/CS2_ANALYTICS_STANDARDS.md",
   "services/watcher/DEMOPARSER2_FIELDS.md",
 ];
