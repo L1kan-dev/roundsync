@@ -361,7 +361,7 @@ redesigned score first; treat the bomb-timer and next-round-affordability
 factors as separate follow-up work once the base version is proven useful.
 Deliberately not started yet — audit (Tier 9.6 below) remains the priority.
 
-## Tier 9.6 — Full-PROJECT audit using the 5-lens framework (planned 2026-08-26, not started)
+## Tier 9.6 — Full-PROJECT audit using the 6-lens framework (COMPLETE, 2026-08-27)
 
 Broader than Tier 9 below (which only covered source code): this pass covers
 **every real file in the repo** — config, Docker, deployment, docs, package
