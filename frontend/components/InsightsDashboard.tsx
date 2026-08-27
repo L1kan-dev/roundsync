@@ -4,6 +4,7 @@ import React, { useEffect, useState, CSSProperties } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
 import {
   Loader2, Coins, Flame, Ear, Users, MapPinned, Crosshair, MessageCircleQuestion,
+  CheckCircle2,
 } from 'lucide-react';
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { shadeHex, Bar3DShape, ctTAccent, hexToRgba, duelLerp } from '@/lib/duelColors';
@@ -18,11 +19,16 @@ const SIDE_CENTER = ctTAccent(0, 1);
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+// Matches services/api/server.js's round1() exactly — used only where a value gets
+// derived here (e.g. 100 - x), not for values the backend already rounded to 1 decimal,
+// which should be passed through as-is rather than re-rounded to a coarser grain.
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 // --- Types (mirror services/api/server.js buildDashboardPayload) ---
 interface AdaptationDetail {
   occurrences: number;
   no_visible_reaction_within_3s_pct: number;
-  avg_reaction_time_seconds: number | null;
+  avg_reaction_time_ms: number | null;
 }
 interface FactSummary {
   economy: { rounds_tracked: number; buy_decisions_against_team_economy_pct: number } | null;
@@ -39,7 +45,7 @@ interface FactSummary {
   duels: {
     engagements_tracked: number; won: number; lost: number;
     avg_angle_deviation_deg_when_won: number | null; avg_angle_deviation_deg_when_lost: number | null;
-    avg_angle_deviation_deg_overall: number | null; avg_time_to_damage_seconds_when_won: number | null;
+    avg_angle_deviation_deg_overall: number | null; avg_time_to_damage_ms_when_won: number | null;
   } | null;
   engage: {
     outnumbered_moments: number; chose_to_engage_pct: number;
@@ -57,6 +63,9 @@ interface DashboardPayload {
   mapBreakdown: MapBreakdownRow[];
   trends: { reaction: TrendPoint[]; positioning: TrendPoint[] };
   loadoutMix: Record<string, number>;
+  avgKastPct: number | null;
+  avgHeadshotAccuracyPct: number | null;
+  totalMultiKillRounds: number | null;
 }
 
 
@@ -191,7 +200,7 @@ function LoadoutMixBar({ mix, color, onAsk }: { mix: Record<string, number>; col
 function ReactionByTriggerChart({ adaptation, color, onAsk }: { adaptation: Record<string, AdaptationDetail>; color: string; onAsk: (triggerLabel: string, reactedPct: number) => void }) {
   const data = Object.entries(adaptation).map(([type, d]) => ({
     name: TRIGGER_LABELS[type] || type,
-    reacted_pct: Math.round(100 - d.no_visible_reaction_within_3s_pct),
+    reacted_pct: round1(100 - d.no_visible_reaction_within_3s_pct),
   }));
   // Same shading approach as the loadout mix — each bar is a shade of the panel's one
   // side color, not an unrelated per-trigger hue.
@@ -560,9 +569,9 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   />
                   <StatTile
                     label="Time to damage (won)"
-                    value={factSummary.duels.avg_time_to_damage_seconds_when_won !== null ? `${factSummary.duels.avg_time_to_damage_seconds_when_won}s` : '—'}
+                    value={factSummary.duels.avg_time_to_damage_ms_when_won !== null ? `${factSummary.duels.avg_time_to_damage_ms_when_won}ms` : '—'}
                     color={SIDE_LEFT}
-                    onAsk={() => onAskCoach(`It takes me ${factSummary.duels?.avg_time_to_damage_seconds_when_won ?? '—'}s to land damage after winning a duel. Is that fast or slow for my rank?`)}
+                    onAsk={() => onAskCoach(`It takes me ${factSummary.duels?.avg_time_to_damage_ms_when_won ?? '—'}ms to land damage after winning a duel. Is that fast or slow for my rank?`)}
                   />
                 </div>
                 <p className="text-xs text-[var(--text-dim)]">Smaller deviation = your crosshair was already closer to the enemy the instant you fired.</p>
@@ -582,6 +591,31 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 <AskCoachHint />
               </>
             ) : <EmptyCard label="reaction" />}
+          </InsightCard>
+
+          <InsightCard icon={CheckCircle2} title="Consistency & Impact" color={SIDE_LEFT} delay="120ms">
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <StatTile
+                label="KAST"
+                value={data.avgKastPct !== null ? `${data.avgKastPct}%` : '—'}
+                color={SIDE_LEFT}
+                onAsk={() => onAskCoach(`My KAST is ${data.avgKastPct ?? '—'}% — which rounds am I contributing nothing at all, no kill, no assist, no survival, no trade?`)}
+              />
+              <StatTile
+                label="HS Accuracy"
+                value={data.avgHeadshotAccuracyPct !== null ? `${data.avgHeadshotAccuracyPct}%` : '—'}
+                color={SIDE_LEFT}
+                onAsk={() => onAskCoach(`Of all my shots that actually land, ${data.avgHeadshotAccuracyPct ?? '—'}% hit the head. Is my crosshair placement the issue?`)}
+              />
+              <StatTile
+                label="Multi-Kills"
+                value={data.totalMultiKillRounds !== null ? `${data.totalMultiKillRounds}` : '—'}
+                color={SIDE_LEFT}
+                onAsk={() => onAskCoach(`I've had ${data.totalMultiKillRounds ?? '—'} multi-kill rounds (2K or more). What am I doing right in those rounds?`)}
+              />
+            </div>
+            <p className="text-xs text-[var(--text-dim)]">KAST: % of rounds with a Kill, Assist, Survival, or Trade — the floor-level "did I contribute something" stat.</p>
+            <AskCoachHint />
           </InsightCard>
 
           <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 lg:col-span-2 card-in" style={{ '--c': SIDE_CENTER, animationDelay: '160ms' } as CSSProperties}>
@@ -667,9 +701,13 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
             <TrendChart
               data={data.trends.positioning}
               dataKey="good_decision_pct"
-              label="Survived or tradeable"
-              onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, my "survived or tradeable" rate was ${point.good_decision_pct}%. What happened in that match?`)}
+              label="Good Push Rate"
+              onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, my Good Push Rate was ${point.good_decision_pct}%. What happened in that match?`)}
             />
+            <p className="text-xs text-[var(--text-dim)] mt-3">
+              Judges the decision, not just the death: counts as "good" if you survived an isolated push,
+              OR a teammate was close enough to trade your death — not just whether you lived.
+            </p>
           </div>
         </div>
       )}
@@ -702,11 +740,11 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
               <>
                 <EmphasisBar
                   goodLabel="Enemy-blinding flashes"
-                  goodValue={Math.round(100 - (factSummary.utility.team_flash_pct || 0))}
+                  goodValue={round1(100 - (factSummary.utility.team_flash_pct || 0))}
                   badLabel="Team-flashes"
-                  badValue={Math.round(factSummary.utility.team_flash_pct || 0)}
+                  badValue={factSummary.utility.team_flash_pct || 0}
                   color={SIDE_RIGHT}
-                  onAsk={() => onAskCoach(`${Math.round(factSummary.utility?.team_flash_pct || 0)}% of my flashes are team-flashes. Which of my flashbangs blinded my own team?`)}
+                  onAsk={() => onAskCoach(`${factSummary.utility?.team_flash_pct || 0}% of my flashes are team-flashes. Which of my flashbangs blinded my own team?`)}
                 />
                 <div className="grid grid-cols-2 gap-3 mt-4">
                   <StatTile

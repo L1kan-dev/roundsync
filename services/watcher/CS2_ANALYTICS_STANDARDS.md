@@ -87,6 +87,8 @@ Implementing these means *matching a known definition*, not inventing one.
 - **`awpy` as reference or dependency** (MIT) → §Academic / open-source layer
 - **Win-probability action-valuation methodology, Optimal Spending Error, Plus/Minus rating** — open academic foundations, legal to build from → §Academic / open-source layer
 - **Cheat-detection model itself** (CC BY 4.0 + open-source) — legal to use; see Not Allowed below for how it must be *presented* → §Cheat detection
+- **Lifetime stats via Steam Web API** (career K/D, win rate, per-weapon accuracy, etc. — DONE, 2026-08-27) → §Lifetime stats via Steam Web API
+- **Premier rank badge visual redesign** (real shape/color/number-formatting research, verified against a screenshot + gameplay recording — research done, component build in progress) → §Premier rank badge
 
 ### 🔧 Must build ourselves — no real external standard exists, or the data doesn't exist yet
 
@@ -415,6 +417,129 @@ extraction work). Corrects a couple of lift estimates from the first pass.
   this is pure frontend work.
 
 **Sources**: [leetify.com/blog/leetify-stats-glossary](https://leetify.com/blog/leetify-stats-glossary/), [hltv.org/news/42485 — Introducing Rating 3.0](https://www.hltv.org/news/42485/introducing-rating-30), [blog.scope.gg — mistake identification](https://esports.gg/news/counter-strike-2/scope-gg-review/)
+
+## Lifetime stats via Steam Web API (`GetUserStatsForGame`) — a real data source, not a community-defined metric
+
+Distinct from everything else in this doc: this isn't a stat RoundSync
+computes from a demo, it's Valve's own official per-account career
+totals, pulled live via `ISteamUserStats/GetUserStatsForGame` (`appid=730`,
+the existing `VALVE_API_KEY`). Verified twice, live, against a real
+account — first during the original research pass, then re-confirmed
+2026-08-27 while actually building it (see `NEXT_STEPS.md` Tier 11 for the
+full build/before-after record; this section is the research half only).
+
+- **215 real stat fields come back.** Full career totals (kills, deaths,
+  MVPs, bomb plants/defuses, hours played), per-weapon kills/shots/hits for
+  every CS:GO-era weapon (accuracy is directly computable, not just kill
+  counts), per-map wins/rounds for an old map pool, and assorted novelty
+  fields (`total_dominations`, `total_broken_windows`).
+- **Real gotcha, confirmed live: `total_wins` is round wins, not match
+  wins.** It's roughly half of `total_rounds_played`, a sane career
+  round-win rate — computing a "win rate" against `total_matches_played`
+  with this field produces an impossible 1028%. The real match-win counter
+  is a separate field, `total_matches_won`, which correctly pairs with
+  `total_matches_played` (verified: 43.1% for the same test account, a
+  sane number). Anyone building anything else off this endpoint should use
+  `total_matches_won`, never `total_wins`, for a win rate.
+- **Real gap: per-map stats are frozen to an old CS:GO-era pool.**
+  Confirmed present: `de_dust2`, `de_inferno`, `de_nuke`, `de_train`, plus
+  several retired maps. **Confirmed absent: `de_mirage`, `de_ancient`,
+  `de_anubis`, `de_overpass`** — zero lifetime data for any of them, likely
+  including some of the most-played current active-duty maps. Any feature
+  using this data must treat "no lifetime data for this map" as a real,
+  expected case.
+- **Legal**: this is the player's own account data, requested with their
+  own Steam login (via `authenticateToken`) and the project's own
+  `VALVE_API_KEY` — no different in kind from the profile-summary call
+  already made in `/api/user/profile`. No new legal question raised beyond
+  what's already covered for the Steam Web API elsewhere in this doc.
+- **Sources**: live API call, `api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v0002/`, verified directly (not from third-party documentation) against a real account, twice.
+
+## Premier rank badge — real visual design, verified against a live screenshot and a real gameplay recording
+
+Not a stat definition — a visual-asset research pass for `RankBadge.tsx`,
+done because the user flagged rank as emotionally high-stakes and asked for
+real research before touching anything rank-related (see Claude's memory,
+`feedback_rank_requires_extra_rigor.md`). Two independent real sources used,
+not one: a user-provided screenshot of a real Gold-tier badge ("30,000"),
+and a real ~19s CS2 gameplay recording (`.mp4`, 2560x1440) the user
+provided, showing a real Light Blue-tier badge ("CS Rating 7,258").
+
+**Shape, confirmed exact, not approximate:** the real badge's path geometry
+was pulled directly from `github.com/Juknum/counter-strike-icons`
+(auto-updates from CS2's own live game files — `premier_rating_bg.svg`),
+not eyeballed. Confirmed 3 left accent bars (a dark shadow bar layered
+between two bright ones — easy to undercount as 2 at a glance, confirmed
+by counting real pixels in the recording), and 2 semi-transparent diagonal
+glare streaks across the main face. `RankBadge.tsx`'s existing shape
+(before this pass) already matched the box outline closely, but was
+missing the 3rd bar and the glare streaks entirely.
+
+**Color, confirmed for 2 of 7 bands, generalized for the rest:** the real
+Gold badge has a bright, fairly uniform gold fill (not the near-black
+gradient the component used to render) and light gold-cream text with a
+bronze drop-shadow, not solid gold text. The real Light Blue badge
+(measured from the recording) showed the same pattern — bright bars, a
+light cyan-tinted text (not pure white), background fill more desaturated
+than the bars. **Only Gold and Light Blue were directly verified.** The
+other 5 bands + Unranked use one consistent derived formula (mix each
+band's existing base hue toward white/black at fixed ratios) rather than
+7 independently hand-picked colors — applying the confirmed principle
+uniformly instead of guessing per-band. Flag this if a future session
+gets a real screenshot of another band and finds the derived version off.
+
+**Number formatting, measured precisely, not eyeballed:** real footage of
+"7,258" (measured via pixel column-height analysis on the extracted video
+frame) showed only a **subtle** size difference between the leading
+digits and the rest — not the dramatic ~35% jump first assumed. The
+*shipped* component ended up using a more pronounced ratio than that
+literal measurement, per the user's explicit follow-up request
+("increase the pre comma digits") after seeing the subtle version — a
+deliberate stylization choice on top of the real measurement, not a claim
+that this exact ratio exists in the live game. Comma formatting itself
+(`toLocaleString()`) was already correct, confirmed against both real
+examples.
+
+**Animation, confirmed real, not shipped:** frame-differencing the
+recording (comparing frames ~0.4s apart, amplified) showed a real,
+localized soft white shimmer over the bars — distinct from generic video-
+compression noise, which was visible but differently distributed
+elsewhere in the same frames. The "shadow drifting right and fading"
+half of the user's description wasn't clearly isolated in the diff data.
+Built and shown as a live CSS animation in review, then explicitly
+removed at the user's request — the shipped badge is static. If revisited
+later, the confirmed real effect is a soft, slow shimmer over the bars,
+not a dramatic one.
+
+**Vertical text centering — methodology worth reusing:** the review's
+first "big number" attempt read visually off-center. Rather than nudge
+by eye, the actual rendered pixels were measured (isolate near-white
+text pixels via a color threshold, exclude the bars by x-range, compare
+the glyphs' vertical midpoint against the true image center) — found 8.5px
+off in a 151px-tall render, corrected, then re-measured to confirm within
+1-2px. Worth reusing this measure-don't-eyeball approach for any future
+pixel-level UI positioning dispute.
+
+**Separately confirmed, unrelated to the badge's visual design:**
+`rank_at_match_start` (used on match cards) is the player's rank *before*
+that match started, not after — traced directly to `rank_old` from the
+demo's own `rank_update` event in `sync_pipeline.py` (the code comment
+already said this; confirmed by reading the actual extraction code, not
+just trusting the comment).
+
+**Legal**: same reasoning as `feedback_prefer_real_extracted_assets.md`
+already covers for the rank badge shape and operator art — this is Valve's
+own game asset (extracted via a repo that pulls from CS2's live game
+files), governed by Valve's Fan Content Policy gray area, not a
+freestanding original design. `Juknum/counter-strike-icons` itself carries
+no explicit repo license, same as the badge-shape source used previously;
+the operative legal question is Valve's asset ownership, not the
+extraction repo's own terms.
+
+**Sources**: `github.com/Juknum/counter-strike-icons` (raw SVG path data,
+fetched live), a user-provided real in-game screenshot, and a user-provided
+real ~19s CS2 gameplay recording (frame-extracted and measured with
+ffmpeg + PIL/numpy, not just watched).
 
 ## Academic / open-source layer — the safest tier for anything HLTV-Impact-like
 

@@ -6,6 +6,131 @@ the completed section below exists as a "RoundSync Data Audit" Claude
 artifact, but that link lives outside this repo — treat this file as the
 source of truth, not the artifact.
 
+## Recommended Priority Order (added 2026-08-27, reshuffled by recommendation)
+
+The Tiers below are grouped by *category* (what kind of fix/feature), not by
+urgency — they got appended session-by-session as things were found, not
+reordered as the backlog grew. This section is the actual "what to work on
+next" guide; the Tier sections below stay the source of truth for full
+detail/history on any one item, they're not being renumbered or rewritten.
+
+`IDEAS.md` is a separate, intentionally-overlapping list — some ideas below
+(Tier 11 lifetime stats, Tier 5.5 Engage IQ) also appear there in their own
+words. That duplication is deliberate, not a cleanup target: an idea can
+live in both places at once.
+
+**Standing note, added 2026-08-27, updated same day:** Tier 14's 502 fix
+is now applied (see Tier 14 for the real before/after) and shipped with
+the next production push. The `gc-worker` GC retry loop item is still
+open and not yet investigated — it doesn't block a redeploy (login,
+dashboard, and existing match data all work fine regardless), but new-
+match syncing for the 2 affected pending matches may still be stuck.
+Worth a real look next session rather than assuming it self-resolved.
+
+**Band 1 — Real users are confused right now, fix first. DONE, 2026-08-27.**
+All 4 came from actually using the live app (Tier 10's bug list — see that
+tier for full before/after detail on each):
+- [x] Sync-progress counts not matching reality
+- [x] Reaction time shown in seconds instead of ms
+- [x] Inconsistent stat labels/units ("kd" vs "K/D", missing "%") — including a follow-up fix for the same bug in chart tooltips, caught by the user after the first pass
+- [x] Unclear "Positioning Decisions" tooltip
+
+**Band 2 — Cheap, real value, no blockers.** Reuse a pattern already written
+elsewhere, or pure aggregation over data already flowing through the pipeline:
+- [x] Tier 11: lifetime stats via Steam Web API — DONE, 2026-08-27
+- Tier 5 "Free/Cheap": weapon-segmented stats, kills/damage in wins vs. losses, kill distance, self-flash duration
+- Tier 6.5: rank-tier label (pure lookup on data already stored)
+- [x] KAST/headshot%/multi-kill parity in Insights — DONE, 2026-08-27
+- [x] Real map thumbnails — DONE, 2026-08-27
+- [x] Tier 13: precision-over-rounding sweep — DONE, 2026-08-27
+
+**Band 3 — Consistency work tied to what's already shipped.** Not new
+features — fixing known-weak spots in formulas already live and visible:
+- Performance Index redesign (Tier 10 — explicitly labeled a placeholder in its own code comment; KAST/multi-kill/positioning data now exists to build a real one)
+- Tier 5.5: Engage IQ redesign (staged plan already agreed, just not started)
+
+**Band 4 — Needs one scope decision, then unblocks work.** Bundled because
+both are "is a bigger refactor worth doing now" questions on the same file:
+- Tier 9: 8x-per-sync duplicate parsing (touches all 7 extraction function signatures)
+- Tier 9.5: `fact_duel_placement` rebuild onto `fire_bullets`/`player_bullet_hit` (touches production Crosshair Placement data)
+
+**Band 5 — Cheap correctness tweaks, align to published definitions.**
+Constant/threshold changes, not new logic (all Tier 3):
+- Trade-kill window 3s → 4s
+- Flash assist: add HLTV's 1.1s minimum
+- Clutch won: exclude "fake" clutches
+
+**Band 6 — Bigger builds, sequenced by shared dependency.** Tier 2's Time to
+Damage and reaction-time rebuilds both need a real player-visibility
+primitive. Tier 6's `awpy` (MIT) already has this solved — evaluate it
+first; it's the one action that unlocks both Tier 2 items plus raw/spray
+accuracy at once, instead of building visibility detection from scratch.
+
+**Band 7 — Bigger UX asks, real value but bigger scope.** All Tier 10
+feature requests:
+- Match-detail drill-down page
+- Recent Matches carousel — missing fields
+- Full metrics placement review
+- [x] Rank badge visual redesign — DONE, 2026-08-27
+- Rank-change celebration effects (confirm with the user first whether `RankChangeOverlay.tsx` — which already exists — was known about)
+- Parse-time ETA
+
+**Band 8 — Research-only, no build attached yet.** Safe to slot into any
+quiet session; nothing else depends on these finishing:
+- Tier 12: player-wanted-gaps research
+- Tier 6: Round Swing / win-probability-added academic line
+- Cheat detection (Tier 7) — kept separate from the "no risk" framing above; the methodology is legal and ready, but this is flagged as a product-risk decision (a false accusation about a real person), not just an engineering one — needs explicit sign-off before research time goes toward it, not just before shipping it.
+
+**Band 9 — Parked, blocked, or deliberately deferred:**
+- Tier 6.5: bracket/population comparison — blocked on user count (~3 users)
+- Tier 8: predictive/trend analysis — deliberately gated behind more match history
+- `IDEAS.md` #4: team-level data schema fork — real, but no urgency, just a known fork in the road
+
+## Tier 13 — Precision-over-rounding sweep — DONE, 2026-08-27
+
+New standing rule (see Claude's memory, `feedback_precision_over_rounding.md`,
+corrected mid-session — read the correction, not just the first pass):
+round to a stat's own natural finest grain, never coarser — don't throw
+away real precision by rounding to a "clean" flat value. This does NOT mean
+adding decimal places by default. Came from fixing the reaction-time/
+Time-to-Damage ms display (`avg_reaction_time_ms`,
+`avg_time_to_damage_ms_when_won`) — the real bug was a coincidentally-round
+`200ms` in test data reading as "rounded to the nearest 100," not a lack of
+decimals; both fields are correctly whole milliseconds (`Math.round(1000 *
+seconds)`), matching ms's own natural grain, not `round1()`'s 1-decimal
+style (that's the right precision for percentages elsewhere in the app,
+not for ms).
+
+A quick grep for every `Math.round(` in `server.js`, `page.tsx`, and
+`InsightsDashboard.tsx` while fixing that bug already surfaced 2 real
+candidates, not yet fixed — this tier is for a real, deliberate pass over
+all of them (and anywhere else the same pattern hides), not just these two:
+
+- [x] `InsightsDashboard.tsx`'s "Team-flashes" `EmphasisBar` — fixed.
+      `badValue`/the coach-prompt value now pass `team_flash_pct` straight
+      through (backend already rounds it to 1 decimal, no re-rounding
+      needed at all); `goodValue` (a derived `100 - x`) uses a new local
+      `round1()` matching `server.js`'s own helper, since a raw JS
+      subtraction can reintroduce floating-point noise. Verified live:
+      **86.6% / 13.4%**, not 87%/13%.
+- [x] `InsightsDashboard.tsx`'s reaction-rate bar chart (`reacted_pct`) —
+      fixed the same way (`round1(100 - d.no_visible_reaction_within_3s_pct)`
+      instead of `Math.round(...)`). Judgment call resolved: this value
+      also feeds a real tooltip number (`"Reacted within 3s : X%"`) and the
+      AI Coach prompt, not just bar width, so it needed the same fix as a
+      standalone stat tile. Verified live via a headed Playwright run,
+      hovering the bar: **"Reacted within 3s : 69.3%"**, not 69%.
+
+**Full sweep completed, not just the 2 known candidates:** re-checked every
+remaining `Math.round(` in `server.js`, `page.tsx`, and
+`InsightsDashboard.tsx`, plus every `.toFixed(0)` in the frontend (none
+found). Confirmed legitimate, not re-litigated: the sync-status `avgSeconds`
+ETA (an estimate, not a measurement), the Performance Index (0-100
+whole-number composite score, conventional for a score-out-of-100), CSS bar
+widths that never render as visible text, and the new `hoursPlayed` field
+on the Tier 11 lifetime-stats endpoint (whole hours matches Steam's own
+"X hrs on record" display convention, not lost precision).
+
 ## Completed (2026-08-25) — for the record, not to redo
 
 Five real bugs found and fixed this session, all backfilled into the live
@@ -1011,7 +1136,7 @@ what real players actually say they want, not just by guessing at features.
 Not started. This is explicitly a research-first task — don't skip to
 "here's what I think players want" without the actual survey step above.
 
-## Tier 11 — Lifetime stats via Steam Web API (verified real, 2026-08-27, not yet built)
+## Tier 11 — Lifetime stats via Steam Web API — DONE, 2026-08-27
 
 User wants this built — verified it actually works before logging it as ready,
 not just from the research conversation. Called `ISteamUserStats
@@ -1044,11 +1169,144 @@ configured:
    same map is a genuinely new, real comparison nobody else surfaces this
    specific way.
 
-Not yet built — this is verified-and-scoped, not implemented. Needs: a new
-`services/api/server.js` (or `sync_pipeline.py`) call to this endpoint, a
-place to store it (a new `lifetime_stats` column/table, refreshed
-periodically rather than every request), and a decision on where it
-displays (the empty-state card is the obvious first spot per point 1 above).
+**Re-verified live, 2026-08-27 (this session), against the real API, not just recalled from the earlier research:**
+called `GetUserStatsForGame` for a real user already in the database —
+**215 real stat fields come back**, confirmed via a live call, not assumed
+from the summary above. Sample real values for this account: 64,359 career
+kills, 57,268 deaths, 22,747 headshot kills, 3,094 bombs planted, 846
+defused.
+
+**Real bug caught before it shipped, same live-verification pass:**
+`total_wins` (32,138 for this account) looks like the obvious field for a
+lifetime win count, but it's actually **round wins**, not match wins — it's
+roughly half of `total_rounds_played` (64,829), a sane career round-win
+rate. Computing `total_wins ÷ total_matches_played` produced an impossible
+**1028% "win rate."** The real match-win counter is a separate field,
+`total_matches_won` (1,345 for this account) — paired with
+`total_matches_played` (3,124), that gives a real **43.1%** win rate. Fixed
+in `decodeLifetimeStats()` (`server.js`) before any frontend code was
+written against it — caught by actually running the decode logic against
+live data rather than trusting the field name.
+
+**New finding from this live check, not in the original research:** Valve's
+per-map stats (`total_wins_map_de_dust2`, `total_rounds_map_de_dust2`,
+etc.) are frozen to an old CS:GO-era map pool. **Confirmed present:**
+`de_dust2`, `de_inferno`, `de_nuke`, `de_train`, plus several retired maps
+(`de_aztec`, `de_cbble`, `cs_assault`, `cs_italy`, `cs_office`, `de_lake`,
+`de_safehouse`, `de_sugarcane`, `de_stmarc`, `de_bank`, `de_house`,
+`de_vertigo`, `cs_militia`, the `ar_*` maps). **Confirmed absent: `de_mirage`,
+`de_ancient`, `de_anubis`, `de_overpass`** — no stat field for any of them
+exists anywhere in the 215-field response. This directly limits point 3
+above (per-map lifetime comparison) — it has real data for some of
+RoundSync's tracked maps and zero data for others, Mirage most notably
+(likely one of the most-played active-duty maps). Any per-map lifetime
+feature needs to handle "Valve has no lifetime data for this map" as a
+real, expected case, not an error.
+
+Also confirmed present and available beyond what the original research
+listed: per-weapon `total_shots_X`/`total_hits_X` (not just
+`total_kills_X`) for every CS:GO-era weapon — meaning **lifetime accuracy
+per weapon** (hits ÷ shots) is directly computable, not just kill counts.
+Also present: `total_shots_fired`/`total_shots_hit` (overall lifetime
+accuracy), `total_rounds_played`, `total_matches_played`, `total_mvps`,
+`total_dominations`, `total_revenges`, and assorted novelty stats
+(`total_broken_windows`, `total_weapons_donated`). A large batch of
+`GI.lesson.*` fields (in-game tutorial completion flags) are real but
+irrelevant — noise to filter out, not a data source.
+
+**Built and shipped, 2026-08-27.** Live-fetches from Steam on each request
+rather than storing a `lifetime_stats` column/table — this data barely
+changes match-to-match, a live call is cheap and fast, and it avoids any
+Supabase storage growth or cache-staleness concern under the $0-cost
+constraint. New endpoint: `GET /api/user/lifetime-stats` (`server.js`),
+via `decodeLifetimeStats()` — returns career K/D, win rate, headshot %,
+overall accuracy, hours played, MVPs, bomb plants/defuses, every tracked
+weapon's kills+accuracy (not just a top few), and every Valve-tracked
+map's raw wins/rounds. Displayed on the Home dashboard's "Scanning for
+your matches" empty state as a 4-tile card (Career K/D, Win Rate,
+Headshot %, Best Weapon + its accuracy) — each tile deliberately answers a
+distinct real question (per the user's own standing rule: no headline
+number without one), not picked at random. Verified live via a headed
+Playwright run: 1.12 K/D, 43.1% win rate, 35.3% HS%, AK-47 at 20.6%
+accuracy — real numbers, not placeholders.
+
+**Real bug caught during this build** (see the correction above, in the
+research section): `total_wins` looked like the obvious win-count field
+but is actually round wins, not match wins — using it produced an
+impossible 1028% "win rate." Fixed by pairing `total_matches_won` with
+`total_matches_played` instead, verified against real data before any
+frontend code was written against it.
+
+**See also `IDEAS.md`'s new entry** for a bigger, separate future vision
+(a full dedicated Lifetime Stats page using all of Valve's data, not just
+this curated 4-tile summary) — the endpoint already returns the full
+decoded weapon/map data, not just what today's card uses, so that future
+page can reuse it directly rather than needing new backend work.
+
+## Tier 14 — Production incident findings, 2026-08-27 (found, not yet fixed)
+
+Found while bringing production back online for a planned showcase (which
+didn't end up happening because of the first item below). Both are real,
+diagnosed root causes — not guesses — but neither has been fixed yet;
+production was paused again at the end of this session per the user's
+request, with both issues still open.
+
+- [x] **Frontend returns 502 in production — FIXED, 2026-08-27, root cause confirmed via
+      Railway's HTTP/network-flow logs.** `frontend/Dockerfile` explicitly
+      sets `ENV HOSTNAME=0.0.0.0`, which binds Next.js's standalone server
+      to IPv4 only. Railway's internal network path to this service uses
+      IPv6 addresses (`fd12:...`). Confirmed via `railway logs --network`:
+      connections register as "OK" at the raw TCP level (tiny byte counts,
+      0ms latency) but the app's own console never logs a single incoming
+      request — the connection never actually reaches an accepting socket.
+      Compared directly against `services/api/server.js`'s `app.listen(PORT,
+      ...)`, which has no host override (Node defaults to dual-stack) and
+      which returns a real 200 through the same networking — confirming
+      this is specifically the frontend's explicit IPv4-only override, not
+      a project-wide networking problem. **Fix identified, not yet
+      applied, 2026-08-27:** `HOSTNAME` changed from `0.0.0.0` to `::` in
+      `frontend/Dockerfile` (dual-stack bind). Deployed via the next
+      production push — verify with a real `curl` against
+      `roundsync.up.railway.app` after the redeploy completes, not just
+      by assuming the Dockerfile change was sufficient.
+- [ ] **`gc-worker` stuck in a tight retry loop on 2 real pending matches**,
+      repeatedly getting `⚠️ No direct URL found in GC response` from
+      Valve's Game Coordinator for the same 2 match codes, cycling rapidly
+      rather than backing off. Not yet investigated further — worth
+      checking whether this is a real code bug (not handling a GC response
+      shape correctly) or an expected-but-mishandled Valve-side state
+      (e.g. the demo genuinely isn't available yet and the code should
+      wait longer between attempts instead of hammering it).
+
+**Related lesson, not a confirmed code bug — recorded so the local/prod
+conflict isn't repeated, but with the actual sequence, not an overclaim:**
+during this session, a local `docker-compose up` was started (for an
+unrelated "preview the frontend locally" request) while production's
+`gc-worker` was also being brought back online — both instances logged
+into the *same real Steam account* at the same time, and the production
+bot got kicked with `LoggedInElsewhere`, then hung indefinitely at a
+"Steam Guard App Code:" prompt with zero further log output. **Never run a
+local `gc-worker` (via `docker-compose up` with no service filter, or the
+`gc-worker` service specifically) at the same time as production's
+`gc-worker` might be logging in** — both use the same real Steam
+credentials from `.env`, and Steam only allows one active session. This
+part is confirmed.
+
+**What's NOT confirmed, and still worth checking:** stopping the local
+stack alone did not visibly fix anything in real time — the logs stayed
+identically stuck for another full check afterward. Production only
+recovered after a separate `railway restart` was issued. That leaves a
+real open question: does `gc-worker`'s retry loop ever self-recover from a
+`LoggedInElsewhere` kick, or does it hang indefinitely at the Steam Guard
+prompt regardless of cause, needing a manual restart every time? If the
+latter, that's a real bug in the retry logic (not just an
+"avoid this workflow" lesson) — Batch 2's existing fatal-vs-transient
+EResult classification in `services/gc-worker/index.js` (see Tier 9's
+completed record) treats login errors as retriable, but this session never
+confirmed the retry loop actually *executes* a fresh attempt after this
+specific error, versus stalling on a callback that never resolves in a
+non-interactive container. Worth a dedicated look before assuming the
+workflow lesson above is the whole story.
 
 ## Tier 10 — Live-testing feedback, 2026-08-27 (logged only, nothing actioned yet)
 
@@ -1056,48 +1314,103 @@ User found these by actually running the app locally after today's audit/fixes
 were deployed. Recorded verbatim intent, not yet triaged into fix-now vs.
 future — that's the next session's first job.
 
-**Bugs / clarity issues (things that are wrong or confusing, not new features):**
+**Bugs / clarity issues — ALL FIXED, 2026-08-27 (Band 1 of the priority order above, done in full):**
 
-- [ ] **"Positioning Decisions Over Time" chart tooltip is unclear.** The
-      label "Survived or tradeable" means nothing to a player without
-      context — needs either a plain-language rename or a real tooltip
-      explaining what it measures (see `summarizePositioning`'s
-      `survived_or_tradeable_pct` in `server.js` for the actual definition:
-      judges the *decision* to push, not just whether you died — surviving
-      OR having a teammate close enough to trade both count as "good").
-- [ ] **All reaction times must display in milliseconds, not seconds.**
-      Currently `reaction_time_seconds` shows as e.g. "1.8s". At minimum
-      the *display* should convert to ms; this is separate from (but
-      related to) Tier 2's already-tracked full rebuild (sampling every
-      tick instead of every 0.5s) — the unit fix could happen independently
-      and sooner.
-- [ ] **Tooltips/labels inconsistently show raw field names instead of
-      proper formatting.** "K/D" render as "kd", "ADR" as "adr" in some
-      places; "%" is shown in some spots and silently dropped in others
-      where the value is still a percentage. Needs a full pass checking
-      every stat label against its real unit, not spot-fixed one at a time.
-- [ ] **"Syncing your matches" progress counts don't match reality.**
-      User's example: showed "8 ready" when the real state was closer to
-      "2 ready, 5 done, 10 remaining" — the displayed numbers don't
-      reconcile the way the UI implies. Needs investigating
-      `/api/matches/sync-status` (`server.js`) and the Home dashboard's
-      sync-progress bar (`page.tsx`) together — this could be a real
-      backend counting bug, a frontend display bug, or both; not diagnosed
-      yet, only reported.
+- [x] **"Positioning Decisions Over Time" chart tooltip is unclear.** No
+      card anywhere explained what "Survived or tradeable" meant. Added a
+      caption under the chart in `InsightsDashboard.tsx`, matching the
+      explanatory-caption pattern already used by other cards in the same
+      file, using the real definition already sitting in `server.js`'s
+      `summarizePositioning` comment: "Judges the decision, not just the
+      death: counts as 'good' if you survived an isolated push, OR a
+      teammate was close enough to trade your death — not just whether you
+      lived." **Follow-up, same day, user-caught:** even with the caption,
+      the label itself ("Survived or tradeable") still read like a
+      boolean/condition, not a rate — user also flagged that "Survived or
+      Traded" would have been factually wrong ("tradeable" = a teammate was
+      in position to trade, not that the trade necessarily happened).
+      Renamed to **"Good Push Rate"** (matches the code's own existing
+      internal field name, `good_decision_pct`), keeping the caption for
+      the precise definition. The underlying `survived_or_tradeable_pct`
+      field name is unchanged — only the user-facing label. Verified live
+      via a headed Playwright run, hovering the chart.
+- [x] **All reaction times must display in milliseconds, not seconds.**
+      `avg_reaction_time_seconds`/`avg_time_to_damage_seconds_when_won`
+      renamed to `avg_reaction_time_ms`/`avg_time_to_damage_ms_when_won` and
+      converted with `Math.round(1000 * seconds)` — whole milliseconds, not
+      a coarser grain (this went through 2 wrong passes first: decimal ms
+      like "187.3ms", then correctly settled on whole "187ms" per direct
+      user correction — see `feedback_precision_over_rounding.md`). Fixed
+      both the real UI display (`InsightsDashboard.tsx`'s "Time to damage
+      (won)" tile, previously showing raw "0.2s") and the AI Coach's prompt
+      context (`server.js`), which was reading the same raw seconds field.
+- [x] **Tooltips/labels inconsistently show raw field names instead of
+      proper formatting.** Root cause: `server.js` dumps raw snake_case JSON
+      (`kd_ratio`, `adr`, `team_flash_pct`, etc.) straight into the Gemini
+      prompt with no formatting instruction, so the AI Coach would
+      sometimes echo the raw key back. Fixed with a pattern-based prompt
+      instruction (`_pct`->%, `_ms`->ms, `_deg`->°, anything else described
+      in plain language) instead of a hardcoded per-field list, so it stays
+      correct as new fields get added. Along the way, found and fixed a
+      real, separate precision inconsistency: the Home dashboard's
+      secondary KPI row (Entry Success/Trade Kill/KAST/HS Accuracy) was
+      truncating percentages to whole numbers while its own neighbors
+      (K/D, ADR, HS%) show 1 decimal — now consistent. **Follow-up, same
+      day, user-caught:** the 4 Home dashboard trend-chart tooltips
+      (`page.tsx`) were *also* showing raw lowercase keys with no `%`/unit
+      ("hs : 38" instead of "Headshot % : 38%") — missed on the first pass
+      because `InsightsDashboard.tsx`'s own charts already had this done
+      right, which made it easy to assume all charts did. All 4 fixed with
+      a shared `formatter` using each chart's own `title`/`unit`/`decimals`.
+      See Tier 13 for the broader precision-consistency sweep this spun off.
+- [x] **"Syncing your matches" progress counts don't match reality.**
+      Real root cause, confirmed against live Supabase data: the panel
+      compared `fully_parsed` count against the player's *entire* match
+      history, not just the matches in the current sync batch — so 8 old,
+      already-parsed matches plus 2 brand-new ones showed "8 ready" and an
+      80%-full bar before either new match had even started. Fixed with a
+      client-side `syncBatchBaseline` (`page.tsx`) that snapshots the
+      queued/downloading count the moment a sync batch begins, so "ready"/
+      "failed" only count matches finished during *this* sync. Verified
+      live: the same 8-old/2-new scenario now correctly shows "0 ready · 2
+      remaining."
 
 **Feature requests / redesigns:**
 
-- [ ] **Real map images for match/map tiles.** `mapScreenshotUrl()`
-      currently has zero maps in `MAPS_WITH_SCREENSHOTS` — every card falls
-      back to a flat gradient. Per the established "prefer real extracted
-      assets" pattern (already used for the rank badge and operator
-      renders), find real CS2 map thumbnails from a community extraction
-      source (e.g. the `MurkyYT/cs2-map-icons` repo already used for the
-      operator art research) rather than generating anything new.
-- [ ] **KAST, headshot accuracy, and multi-kill rounds need to appear in
-      Insights too**, not just the Home dashboard tiles — currently
-      `InsightsDashboard.tsx` doesn't surface any of the 3 stats added this
-      session.
+- [x] **Real map images for match/map tiles — DONE, 2026-08-27.** Pulled
+      real in-game screenshots from `github.com/MurkyYT/cs2-map-icons`
+      (same repo already used for the operator art research) for all 9
+      recent-rotation active-duty maps: Dust2, Inferno, Mirage, Nuke,
+      Ancient, Anubis, Overpass, Train, Vertigo. Each verified visually
+      before being added (not assumed correct from the filename) — e.g.
+      confirmed Mirage's real A-site plaza and Nuke's real exterior cooling
+      towers. Originals were ~3MB PNGs each; resized to 800px wide and
+      re-encoded as JPEG (photographic content doesn't need PNG
+      transparency), landing at ~50-80KB each — `frontend/public/maps/
+      screens/`. `MAPS_WITH_SCREENSHOTS` (`frontend/lib/mapDisplay.ts`)
+      populated with all 9; the existing `bg ? <img> : gradient` branch in
+      `page.tsx`/`InsightsDashboard.tsx` needed no changes at all, it was
+      already correctly wired to "just work" once real URLs existed.
+      **Legal**: the source repo itself carries no explicit license, but
+      per the established reasoning in `feedback_prefer_real_extracted_
+      assets.md`, the operative question is Valve's Fan Content Policy
+      (already-accepted gray area, already covered by the project's global
+      disclaimer footer) — not the extraction repo's own license. Verified
+      live via a headed Playwright run on the Home dashboard's Recent
+      Matches carousel.
+- [x] **KAST, headshot accuracy, and multi-kill rounds now appear in
+      Insights too — DONE, 2026-08-27.** Added a new "Consistency & Impact"
+      card to the Aim & Reaction subtab (`InsightsDashboard.tsx`). Backend:
+      `buildDashboardPayload()` (`server.js`) now also returns `avgKastPct`/
+      `avgHeadshotAccuracyPct`/`totalMultiKillRounds`, computed via
+      `avgWeightedServer()`/`sumOptionalFieldServer()` — deliberately kept
+      in sync with `page.tsx`'s existing `avgWeighted()`/`sumOptionalField()`
+      (same "weight by real rounds/kills played, don't average percentages
+      as if every match counts equally" principle already fixed for the
+      awareness-score bug), so Insights and Home can never quietly disagree
+      on the same number. Verified live via a headed Playwright run: KAST
+      63.6%, HS Accuracy 33.8%, Multi-Kills 5 — matching the Home
+      dashboard's own values for the same mock data.
 - [ ] **Full metrics placement review.** Re-evaluate every metric against
       *which page it actually belongs on* — Home vs. Matches vs. Insights
       vs. Coach — and flag anywhere different granularities get mixed on
@@ -1107,10 +1420,26 @@ future — that's the next session's first job.
 - [ ] **Add a time estimate for match parsing** — either per-match ETA or
       a total estimate for everything still queued, using the existing
       `avgSeconds` data already tracked in sync-status.
-- [ ] **Rank badge visual redesign** — user has seen a newer/better real
-      CS2 Premier rank badge design (number formatting: the integer part
-      before the decimal/comma should render larger than the rest) and
-      wants `RankBadge.tsx` updated to match it more closely.
+- [x] **Rank badge visual redesign — DONE, 2026-08-27.** Full real-asset
+      research (shape, color, number formatting, a real-but-unshipped
+      animation) in `CS2_ANALYTICS_STANDARDS.md`'s "Premier rank badge"
+      section — verified against a real user screenshot and a real
+      gameplay recording, not guessed. `RankBadge.tsx` rebuilt: real
+      3-bar/glare geometry (exact path data from `Juknum/counter-strike-
+      icons`, not approximated), bright per-band fills + light-tinted
+      text/bars derived from one consistent formula (`bandTones()`)
+      replacing the old 8-entry hand-tuned color table, and a
+      larger-integer-before-comma number split. Vertical text centering
+      was measured pixel-by-pixel (not eyeballed) after the first attempt
+      read visually off-center — found 8.5px off, corrected, re-measured
+      to confirm within 1-2px. **Also fixed, found during this pass:**
+      match cards previously showed only a plain colored dot + number
+      pill, not the real badge — both match-card locations
+      (`RecentMatchesCarousel` and the Matches tab) now render the actual
+      `RankBadge` component instead, closing a real DRY gap (4 rank
+      displays now share one component instead of 2 having their own
+      separate markup). Verified live via headed Playwright runs at every
+      step, including legibility at the match card's actual 20px size.
 - [ ] **Rank-change celebration effects** — user wants a big effect on
       crossing into a new rank band and a smaller one for an in-band
       rank-up/down, both directions (up feeling good, down feeling

@@ -2,13 +2,14 @@
 
 import React from 'react';
 
-// Real CS2 Premier rank badge geometry, reverse-engineered from Valve's own game files
-// (github.com/ItzArty/csgo-rank-icons, premier/premier_rating_bg.svg) — a plain slanted
-// parallelogram with two accent bars to its left, NOT an arbitrary design. See the base
-// viewBox below: main box top edge x:34-178, bottom edge x:22-166 (same 144px width,
-// shifted 12px left going down), no chamfers/curves/points.
-const VIEWBOX_WIDTH = 190;
-const VIEWBOX_HEIGHT = 76;
+// Real CS2 Premier rank badge geometry — path data is the exact d= coordinates from
+// github.com/Juknum/counter-strike-icons's premier_rating_bg.svg (auto-updates from CS2's
+// own live game files), confirmed live 2026-08-27 against a real user screenshot and a
+// real gameplay recording. See CS2_ANALYTICS_STANDARDS.md's "Premier rank badge" section
+// for the full verification record (what was directly confirmed vs. derived) before
+// changing anything here — rank display gets extra research rigor on this project.
+const VIEWBOX_WIDTH = 178;
+const VIEWBOX_HEIGHT = 64;
 
 function clamp255(n: number): number {
   return Math.max(0, Math.min(255, Math.round(n)));
@@ -33,36 +34,32 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 interface Tones {
   fillTop: string;
   fillBottom: string;
-  strokeLight: string;
-  strokeDark: string;
+  rimLight: string;
+  rimDark: string;
   bar: string;
+  barShadow: string;
+  text: string;
+  textShadow: string;
 }
 
-// Hand-tuned per-band tones (not a generic formula) — pulled straight from the approved design
-// reference (all 7 CS Rating bands + unranked grey), because auto-mixing a single gradient
-// formula off of each band's base color didn't hold up visually for every hue (cooler colors
-// like Light Blue came out muddy/grey instead of reading as blue). Keyed by the exact hex each
-// band uses in lib/rank.ts's RANK_BANDS.
-const TONE_MAP: Record<string, Tones> = {
-  '#d1d5db': { fillTop: '#3f4551', fillBottom: '#16181d', strokeLight: '#f1f2f5', strokeDark: '#9ca3af', bar: '#e5e7eb' }, // Grey
-  '#7dd3fc': { fillTop: '#0c3a4d', fillBottom: '#061620', strokeLight: '#c7ecfd', strokeDark: '#0ea5e9', bar: '#bae6fd' }, // Light Blue
-  '#818cf8': { fillTop: '#2a2470', fillBottom: '#10102e', strokeLight: '#e0e7ff', strokeDark: '#4f46e5', bar: '#c7d2fe' }, // Blue
-  '#a855f7': { fillTop: '#3a1f66', fillBottom: '#150b2a', strokeLight: '#f3e8ff', strokeDark: '#7e22ce', bar: '#d8b4fe' }, // Purple
-  '#d946ef': { fillTop: '#4a1152', fillBottom: '#1c0620', strokeLight: '#fae8ff', strokeDark: '#a21caf', bar: '#f5d0fe' }, // Pink
-  '#ef4444': { fillTop: '#4a1010', fillBottom: '#1c0505', strokeLight: '#fee2e2', strokeDark: '#b91c1c', bar: '#fecaca' }, // Red
-  '#eab308': { fillTop: '#453000', fillBottom: '#1c1200', strokeLight: '#fef9c3', strokeDark: '#a16207', bar: '#fef08a' }, // Gold
-  '#9ca3af': { fillTop: '#3f4551', fillBottom: '#16181d', strokeLight: '#f1f2f5', strokeDark: '#6b7280', bar: '#e5e7eb' }, // Unranked
-};
-
-// Fallback for a color outside the 7 real bands (shouldn't normally happen) — approximates the
-// same look via mixing instead of leaving the badge uncolored.
-function derivedTones(hex: string): Tones {
+// Every band's tones are derived from its one base hex via the same formula — a bright,
+// fairly saturated fill (confirmed against a real Gold screenshot: NOT the near-black
+// gradient this component used before this pass) and light-tinted bars/text matching the
+// band's own hue (confirmed against a real Light Blue gameplay recording: NOT pure white).
+// Only Gold and Light Blue were directly verified against real sources; the other 5 bands
+// + Unranked apply the same confirmed principle uniformly rather than being independently
+// hand-picked per band. If a future session gets a real screenshot of another band and
+// finds the derived version off, that's the thing to fix — see CS2_ANALYTICS_STANDARDS.md.
+function bandTones(hex: string): Tones {
   return {
-    fillTop: mix(hex, '#000000', 0.65),
-    fillBottom: mix(hex, '#000000', 0.9),
-    strokeLight: mix(hex, '#ffffff', 0.85),
-    strokeDark: mix(hex, '#000000', 0.25),
+    fillTop: mix(hex, '#ffffff', 0.35),
+    fillBottom: mix(hex, '#000000', 0.35),
+    rimLight: mix(hex, '#ffffff', 0.75),
+    rimDark: mix(hex, '#000000', 0.55),
     bar: mix(hex, '#ffffff', 0.55),
+    barShadow: mix(hex, '#000000', 0.35),
+    text: mix(hex, '#ffffff', 0.6),
+    textShadow: mix(hex, '#000000', 0.6),
   };
 }
 
@@ -71,68 +68,88 @@ const UNRANKED_COLOR = '#9ca3af';
 export function RankBadge({ color, rankNew, size = 92 }: { color: string; rankNew: number | null; size?: number }) {
   const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
   const boxGradId = `rb-box-${uid}`;
-  const strokeGradId = `rb-stroke-${uid}`;
+  const rimGradId = `rb-rim-${uid}`;
+  const barGradId = `rb-bar-${uid}`;
+  const barGradId2 = `rb-bar2-${uid}`;
 
   const isUnranked = rankNew === null || rankNew === undefined;
   const bandColor = isUnranked ? UNRANKED_COLOR : color;
-  const tones = TONE_MAP[bandColor] ?? derivedTones(bandColor);
+  const tones = bandTones(bandColor);
 
   const width = (size * VIEWBOX_WIDTH) / VIEWBOX_HEIGHT;
 
+  // Splits "18,420" into "18" (rendered larger) and ",420" (smaller) — confirmed via real
+  // footage that the leading digits genuinely render bigger, though the exact ratio below
+  // is a deliberate stylization on top of that (the real footage showed a subtler jump;
+  // this was intentionally pushed further per direct feedback after seeing the subtle
+  // version). No comma (e.g. a sub-1,000 rank, or the unranked "—") means the whole string
+  // is just the "big" part, which renders correctly with no special-casing needed.
+  const formatted = isUnranked ? '—' : rankNew!.toLocaleString();
+  const commaIndex = formatted.indexOf(',');
+  const bigPart = commaIndex === -1 ? formatted : formatted.slice(0, commaIndex);
+  const restPart = commaIndex === -1 ? '' : formatted.slice(commaIndex);
+
   return (
-    <svg width={width} height={size} viewBox="-6 -6 190 76" xmlns="http://www.w3.org/2000/svg">
+    <svg width={width} height={size} viewBox="0 0 178 64" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id={boxGradId} x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor={tones.fillTop} />
-          <stop offset="100%" stopColor={tones.fillBottom} />
+        <linearGradient id={boxGradId} x1="187.49" y1="48.7288" x2="30.4973" y2="20.5012" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor={tones.fillTop} />
+          <stop offset="0.55" stopColor={bandColor} />
+          <stop offset="1" stopColor={tones.fillBottom} />
         </linearGradient>
-        <linearGradient id={strokeGradId} x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor={tones.strokeLight} />
-          <stop offset="50%" stopColor={bandColor} />
-          <stop offset="100%" stopColor={tones.strokeDark} />
+        <linearGradient id={rimGradId} x1="185.411" y1="47.9446" x2="26.5628" y2="33.7951" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor={tones.rimLight} stopOpacity="0.55" />
+          <stop offset="1" stopColor={tones.rimDark} />
+        </linearGradient>
+        <linearGradient id={barGradId} x1="23.4998" y1="1" x2="23.4998" y2="63" gradientUnits="userSpaceOnUse">
+          <stop stopColor={tones.rimLight} />
+          <stop offset="1" stopColor={tones.bar} />
+        </linearGradient>
+        <linearGradient id={barGradId2} x1="10.4998" y1="1" x2="10.4998" y2="63" gradientUnits="userSpaceOnUse">
+          <stop stopColor={tones.rimLight} />
+          <stop offset="1" stopColor={tones.bar} />
         </linearGradient>
       </defs>
 
-      {/* Contact-shadow sliver between the second bar and the box */}
-      <polygon points="25,0 21,0 9,64 13,64" fill="#000000" opacity="0.35" />
+      {/* Every path below is the literal d= from Juknum/counter-strike-icons'
+          premier_rating_bg.svg — only fill colors and the text differ from the raw asset.
+          3 left bars (a dark shadow bar between two bright ones) and 2 diagonal glare
+          streaks across the main face — both confirmed against real footage; the previous
+          version of this component had 2 bars and no glare at all. */}
+      <path d="M25 0H21L9 64H13L25 0Z" fill={tones.barShadow} />
+      <path d="M178 0H33.9996L22 64H166L178 0Z" fill={`url(#${boxGradId})`} />
+      <path d="M176.25 1.5H33.24L21.6562 62.5H164.666L176.25 1.5Z" fill={`url(#${rimGradId})`} />
+      <path opacity="0.35" d="M46.1141 4L54 4L40.8859 61H33L46.1141 4Z" fill="#ffffff" />
+      <path d="M36.7301 4L42 4L30.2699 61H25L36.7301 4Z" fill={tones.barShadow} />
+      <path opacity="0.35" d="M56.8737 4L72 4L59.1263 61H44L56.8737 4Z" fill="#ffffff" />
+      <path opacity="0.22" d="M75.7813 4L110 4L97.2187 61H63L75.7813 4Z" fill="#ffffff" />
+      <path d="M18 0H27L18 64H3.25L18 0Z" fill={tones.barShadow} />
+      <path d="M12 0H21L9 64H0L12 0Z" fill={tones.rimLight} />
+      <path d="M24.9997 0H33.9997L22 64H13L24.9997 0Z" fill={tones.rimLight} />
+      <path d="M25 0H33L21 64H13L25 0Z" fill={`url(#${barGradId})`} />
+      <path d="M12 0H20L8 64H0L12 0Z" fill={`url(#${barGradId2})`} />
 
-      {/* Accent bars */}
-      <polygon points="12,0 20,0 8,64 0,64" fill={tones.bar} />
-      <polygon points="25,0 33,0 21,64 13,64" fill={tones.bar} />
-
-      {/* Main body */}
-      <polygon
-        points="178,0 34,0 22,64 166,64"
-        fill={`url(#${boxGradId})`}
-        stroke={`url(#${strokeGradId})`}
-        strokeWidth="2"
-        strokeLinejoin="miter"
-      />
-      {/* Inner trim */}
-      <polygon
-        points="172,4 40,4 27,60 160,60"
-        fill="none"
-        stroke={tones.strokeLight}
-        strokeOpacity="0.3"
-        strokeWidth="1"
-        strokeLinejoin="miter"
-      />
-
-      {/* y=32 is the box's true vertical center (it spans 0-64); dominantBaseline="central" centers
-          on the em-box rather than the font's "middle" metric, which for numerals (no descenders)
-          reads as noticeably low — this is what made the number look bottom-heavy before. */}
+      {/* Embossed look: a dark, semi-transparent copy of the text offset down-right, then
+          the real light text on top — confirmed real vs. this component's previous flat
+          solid-color text. x/y values here were measured against real rendered pixels
+          (not eyeballed) to correct a real off-center bug found during review. */}
       <text
-        x="100"
-        y="32"
-        textAnchor="middle"
-        dominantBaseline="central"
+        x="107" y="31"
+        textAnchor="middle" dominantBaseline="central"
         fontFamily="var(--font-display), ui-sans-serif, system-ui, sans-serif"
-        fontWeight="700"
-        fontSize="42"
-        letterSpacing="-1.5"
-        fill={bandColor}
+        fontWeight="800" letterSpacing="-1.5"
+        fill={tones.textShadow} opacity="0.5"
       >
-        {isUnranked ? '—' : rankNew!.toLocaleString()}
+        <tspan fontSize="42">{bigPart}</tspan><tspan fontSize="32">{restPart}</tspan>
+      </text>
+      <text
+        x="106" y="29"
+        textAnchor="middle" dominantBaseline="central"
+        fontFamily="var(--font-display), ui-sans-serif, system-ui, sans-serif"
+        fontWeight="800" letterSpacing="-1.5"
+        fill={tones.text}
+      >
+        <tspan fontSize="42">{bigPart}</tspan><tspan fontSize="32">{restPart}</tspan>
       </text>
     </svg>
   );

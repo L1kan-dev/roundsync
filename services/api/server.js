@@ -258,6 +258,99 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// 3c. Lifetime Stats Endpoint (Steam Web API, GetUserStatsForGame — appid 730)
+// Live-fetched on each request rather than stored in Supabase: this data barely changes
+// match-to-match, a live call is fast, and it avoids any storage growth under the $0-cost
+// constraint. See NEXT_STEPS.md Tier 11 for the live field verification this is built from.
+const LIFETIME_WEAPON_NAMES = {
+  glock: 'Glock-18', deagle: 'Desert Eagle', elite: 'Dual Berettas', fiveseven: 'Five-SeveN',
+  xm1014: 'XM1014', mac10: 'MAC-10', ump45: 'UMP-45', p90: 'P90', awp: 'AWP', ak47: 'AK-47',
+  aug: 'AUG', famas: 'FAMAS', g3sg1: 'G3SG1', m249: 'M249', hkp2000: 'P2000', p250: 'P250',
+  sg556: 'SG 553', scar20: 'SCAR-20', ssg08: 'SSG 08', mp7: 'MP7', mp9: 'MP9', nova: 'Nova',
+  negev: 'Negev', sawedoff: 'Sawed-Off', bizon: 'PP-Bizon', tec9: 'Tec-9', mag7: 'MAG-7',
+  // Valve's stat schema has one combined bucket for both M4 variants, not split — labeled
+  // to reflect that rather than implying it's specifically one or the other.
+  m4a1: 'M4A4 / M4A1-S', galilar: 'Galil AR',
+};
+
+// Maps Valve's GetUserStatsForGame still tracks per-map wins/rounds for — an old CS:GO-era
+// pool, confirmed live (2026-08-27, see NEXT_STEPS.md Tier 11). Mirage/Ancient/Anubis/
+// Overpass have NO lifetime data at all — deliberately not "every active-duty map."
+const LIFETIME_TRACKED_MAPS = ['de_dust2', 'de_inferno', 'de_nuke', 'de_train'];
+
+function decodeLifetimeStats(rawStats) {
+  const byName = {};
+  for (const s of rawStats) byName[s.name] = s.value;
+  const get = (name) => (typeof byName[name] === 'number' ? byName[name] : 0);
+
+  const totalKills = get('total_kills');
+  const totalDeaths = get('total_deaths');
+  // total_wins is actually ROUND wins (confirmed live: it's ~half of total_rounds_played,
+  // a sane career round-win rate) — total_matches_won is the real match-win counter, the
+  // only one that pairs correctly with total_matches_played for an actual win rate.
+  // Using total_wins here produced an impossible 1028% "win rate" before this was caught.
+  const totalMatchesWon = get('total_matches_won');
+  const totalMatchesPlayed = get('total_matches_played');
+  const totalShotsFired = get('total_shots_fired');
+  const totalShotsHit = get('total_shots_hit');
+  const totalHeadshotKills = get('total_kills_headshot');
+
+  const weapons = Object.entries(LIFETIME_WEAPON_NAMES).map(([key, label]) => {
+    const kills = get(`total_kills_${key}`);
+    const shots = get(`total_shots_${key}`);
+    const hits = get(`total_hits_${key}`);
+    return { key, label, kills, accuracyPct: shots > 0 ? round1(100 * hits / shots) : null };
+  }).filter((w) => w.kills > 0).sort((a, b) => b.kills - a.kills);
+
+  // Raw counts, not a computed win rate — Valve's schema has no reliable "matches played on
+  // this map" denominator (total_rounds_map_X is rounds, not matches), so a fabricated rate
+  // would misrepresent the data. Consumers decide how to present raw wins/roundsPlayed.
+  const maps = LIFETIME_TRACKED_MAPS
+    .map((mapKey) => ({ map: mapKey, wins: get(`total_wins_map_${mapKey}`), roundsPlayed: get(`total_rounds_map_${mapKey}`) }))
+    .filter((m) => m.roundsPlayed > 0);
+
+  return {
+    careerKd: totalDeaths > 0 ? round1(totalKills / totalDeaths) : null,
+    winRatePct: totalMatchesPlayed > 0 ? round1(100 * totalMatchesWon / totalMatchesPlayed) : null,
+    headshotPct: totalKills > 0 ? round1(100 * totalHeadshotKills / totalKills) : null,
+    accuracyPct: totalShotsFired > 0 ? round1(100 * totalShotsHit / totalShotsFired) : null,
+    totalKills, totalDeaths, totalMatchesWon, totalMatchesPlayed,
+    hoursPlayed: Math.round(get('total_time_played') / 3600),
+    mvps: get('total_mvps'),
+    bombsPlanted: get('total_planted_bombs'),
+    bombsDefused: get('total_defused_bombs'),
+    bestWeapon: weapons[0] || null,
+    weapons,
+    maps,
+  };
+}
+
+app.get('/api/user/lifetime-stats', authenticateToken, async (req, res) => {
+  const steamId = req.user.steamId;
+  if (!VALVE_API_KEY) {
+    return res.status(503).json({ error: 'Lifetime stats unavailable (no Valve API key configured).' });
+  }
+  try {
+    const steamRes = await fetch(
+      `https://api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v0002/?appid=730&key=${VALVE_API_KEY}&steamid=${steamId}`
+    );
+    if (!steamRes.ok) {
+      // A brand-new or private-profile account can genuinely have no CS2 stats to return —
+      // not a server error, just nothing to show yet.
+      return res.json({ available: false });
+    }
+    const steamData = await steamRes.json();
+    const rawStats = steamData?.playerstats?.stats;
+    if (!Array.isArray(rawStats) || rawStats.length === 0) {
+      return res.json({ available: false });
+    }
+    res.json({ available: true, ...decodeLifetimeStats(rawStats) });
+  } catch (err) {
+    console.warn('⚠️ Could not fetch lifetime stats:', err.message);
+    res.status(500).json({ error: 'Failed to fetch lifetime stats.' });
+  }
+});
+
 // 4. AI Coaching Chat Endpoint (Gemini Integration)
 const round1 = (n) => Math.round(n * 10) / 10;
 
@@ -370,7 +463,12 @@ function summarizeAdaptation(rows) {
     summary[key] = {
       occurrences: v.count,
       no_visible_reaction_within_3s_pct: round1(100 * (v.count - v.reacted) / v.count),
-      avg_reaction_time_seconds: v.reacted ? round1(v.totalReaction / v.reacted) : null,
+      // Milliseconds, not seconds — the AI Coach reads this field name/value straight into
+      // its prompt and would otherwise describe reactions in seconds ("1.8s") to the player.
+      // Rounded to the nearest whole millisecond, NOT a coarser grain (10ms/100ms) — a real
+      // measured value like 187ms is precise; rounding it down to a flat 190/200 would throw
+      // real precision away. Decimal ms would just be visual noise past the point it matters.
+      avg_reaction_time_ms: v.reacted ? Math.round(1000 * v.totalReaction / v.reacted) : null,
     };
   }
   return summary;
@@ -402,9 +500,11 @@ function summarizeDuels(rows) {
   const lost = real.filter((r) => r.engagement_result === 'lost');
   const avgDeviation = (arr) => arr.length
     ? round1(arr.reduce((s, r) => s + (r.angle_deviation_deg || 0), 0) / arr.length) : null;
+  // Milliseconds, not seconds, rounded to the nearest whole ms — same reasoning as
+  // avg_reaction_time_ms above.
   const avgTTD = (arr) => {
     const withTTD = arr.filter((r) => r.time_to_damage_seconds !== null && r.time_to_damage_seconds !== undefined);
-    return withTTD.length ? round1(withTTD.reduce((s, r) => s + r.time_to_damage_seconds, 0) / withTTD.length) : null;
+    return withTTD.length ? Math.round(1000 * withTTD.reduce((s, r) => s + r.time_to_damage_seconds, 0) / withTTD.length) : null;
   };
   return {
     engagements_tracked: real.length,
@@ -413,7 +513,7 @@ function summarizeDuels(rows) {
     avg_angle_deviation_deg_when_won: avgDeviation(won),
     avg_angle_deviation_deg_when_lost: avgDeviation(lost),
     avg_angle_deviation_deg_overall: avgDeviation(real),
-    avg_time_to_damage_seconds_when_won: avgTTD(won),
+    avg_time_to_damage_ms_when_won: avgTTD(won),
   };
 }
 
@@ -593,6 +693,24 @@ function buildTrends(matchList, adaptationRows, positioningRows) {
   return { reaction, positioning };
 }
 
+// Mirrors frontend/app/page.tsx's avgWeighted()/sumOptionalField() exactly — same "pool by
+// each match's real sample size, don't average the percentages as if every match carried
+// equal weight" principle as the already-fixed awareness-score bug. Kept in sync since
+// Insights needs the identical numbers the Home dashboard already shows for these 3 stats.
+function avgWeightedServer(matchList, pickValue, pickWeight) {
+  const pairs = matchList
+    .map((m) => ({ value: pickValue(m.match_data?.telemetry || {}), weight: pickWeight(m.match_data?.telemetry || {}) }))
+    .filter((p) => typeof p.value === 'number' && typeof p.weight === 'number' && p.weight > 0);
+  if (pairs.length === 0) return null;
+  const totalWeight = pairs.reduce((s, p) => s + p.weight, 0);
+  return round1(pairs.reduce((s, p) => s + p.value * p.weight, 0) / totalWeight);
+}
+
+function sumOptionalFieldServer(matchList, pick) {
+  const values = matchList.map((m) => pick(m.match_data?.telemetry || {})).filter((v) => typeof v === 'number');
+  return values.length > 0 ? values.reduce((a, b) => a + b, 0) : null;
+}
+
 async function buildDashboardPayload(steamId) {
   const { data: matches } = await supabase
     .from('matches')
@@ -619,6 +737,11 @@ async function buildDashboardPayload(steamId) {
     mapBreakdown: buildMapBreakdown(matchList),
     trends,
     loadoutMix: countBy(rows.economy, 'loadout_tier'),
+    avgKastPct: avgWeightedServer(matchList, (t) => t.kast_pct, (t) => t.rounds_played),
+    avgHeadshotAccuracyPct: avgWeightedServer(matchList, (t) => t.headshot_accuracy_pct, (t) => t.rounds_played),
+    totalMultiKillRounds: sumOptionalFieldServer(matchList, (t) =>
+      t.multi_kill_rounds ? t.multi_kill_rounds['2k'] + t.multi_kill_rounds['3k'] + t.multi_kill_rounds['4k'] + t.multi_kill_rounds.ace : null
+    ),
   };
 }
 
@@ -724,6 +847,15 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
 
     Here is the recent conversation with this player, most recent last, for continuity:
     ${conversationContext}
+
+    The two JSON blocks below use raw internal field names (snake_case) so they stay compact
+    — NEVER repeat a raw field name back to the player in your response. Always translate it
+    to the player-facing term instead: "kd_ratio" -> "K/D ratio", "adr" -> "ADR", any field
+    ending in "_pct" -> its plain-English name with a "%" sign on the number (e.g.
+    "headshot_pct" -> "headshot %"), any field ending in "_ms" -> its plain-English name with
+    "ms" after the number, any field ending in "_deg" -> "°" after the number. If a field name
+    isn't covered by these patterns, describe it in plain language rather than quoting the
+    raw key.
 
     Here is a summary of the player's last ${matchSummaries.length} matches:
     ${JSON.stringify(matchSummaries)}

@@ -32,6 +32,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
+# Dual-stack bind (IPv4 + IPv6) — Railway's internal network path to this service uses
+# IPv6 addresses, so an IPv4-only bind here caused every request to 502 despite the app
+# claiming "Ready." Confirmed via Railway's network-flow logs, 2026-08-27; see
+# NEXT_STEPS.md Tier 14 for the full diagnosis. api/server.js works because it never set
+# an explicit host at all (Node defaults to dual-stack) — this makes the frontend match.
+ENV HOSTNAME=::
 
 CMD ["node", "server.js"]

@@ -9,12 +9,17 @@ export function formatMapName(map?: string | null): string {
   return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// No maps currently have a real in-game screenshot saved locally (see
-// frontend/public/maps/screens/) — every map falls back to a plain gradient panel
-// instead of a broken <img>. Add an entry here (and the matching file) once a
-// verified real screenshot is available for that map.
-const MAPS_WITH_SCREENSHOTS = new Set<string>([]);
+// Real in-game screenshots, sourced from github.com/MurkyYT/cs2-map-icons (verified real,
+// legible, correct per-map before being added — not assumed from the filename alone),
+// resized to 800px wide and re-encoded as JPEG (originals were ~3MB PNGs; these are
+// ~50-80KB) since these are photographic content, not sprites needing transparency.
+// Every current active-duty map is covered; a map missing here (an unusual/retired one)
+// correctly falls back to the plain gradient panel instead of a broken <img>.
+const MAPS_WITH_SCREENSHOTS = new Set<string>([
+  'de_dust2', 'de_inferno', 'de_mirage', 'de_nuke', 'de_ancient',
+  'de_anubis', 'de_overpass', 'de_train', 'de_vertigo',
+]);
 export function mapScreenshotUrl(map?: string | null): string | null {
   if (!map || !MAPS_WITH_SCREENSHOTS.has(map)) return null;
-  return `/maps/screens/${map}.png`;
+  return `/maps/screens/${map}.jpg`;
 }

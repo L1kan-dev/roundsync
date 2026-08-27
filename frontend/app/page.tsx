@@ -633,11 +633,10 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
                 )}
                 {matchRankBand && typeof t.rank_at_match_start === 'number' && (
                   <div
-                    className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/50 rounded-full px-2 py-1"
+                    className="absolute top-2 right-2 drop-shadow-md"
                     title={`Premier rank at kickoff: ${t.rank_at_match_start} (${matchRankBand.label})`}
                   >
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: matchRankBand.color }} />
-                    <span className="font-tel text-[10px] font-bold text-[var(--text)]">{t.rank_at_match_start}</span>
+                    <RankBadge color={matchRankBand.color} rankNew={t.rank_at_match_start} size={20} />
                   </div>
                 )}
               </div>
@@ -731,6 +730,17 @@ export default function Home() {
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
+
+  // Lifetime Steam stats (career totals, not RoundSync-tracked matches) — fills the empty
+  // state with something real on day one, before any match has finished parsing.
+  interface LifetimeStats {
+    available: boolean;
+    careerKd: number | null;
+    winRatePct: number | null;
+    headshotPct: number | null;
+    bestWeapon: { label: string; kills: number; accuracyPct: number | null } | null;
+  }
+  const [lifetimeStats, setLifetimeStats] = useState<LifetimeStats | null>(null);
   // Read by the match/sync-status polling effect below to decide its next delay without
   // needing to re-run (and re-subscribe) that effect on every syncStatus update.
   const hasActiveSyncRef = useRef(false);
@@ -739,6 +749,26 @@ export default function Home() {
     const queued = counts ? counts.pending_url + counts.pending_download : 0;
     hasActiveSyncRef.current = queued > 0 || (counts?.downloading ?? 0) > 0;
   }, [syncStatus]);
+
+  // Tracks how many matches were still queued/downloading when the CURRENT sync batch
+  // began, so the "ready"/"failed" counts below reflect only matches finished during this
+  // sync — not the player's entire lifetime match history. Without this, an old,
+  // already-parsed match count made a fresh sync look far more "done" than it actually was.
+  const [syncBatchBaseline, setSyncBatchBaseline] = useState<{ total: number; readyAtStart: number; failedAtStart: number } | null>(null);
+  useEffect(() => {
+    const counts = syncStatus?.counts;
+    if (!counts) return;
+    const active = hasActiveSyncRef.current;
+    if (active && !syncBatchBaseline) {
+      setSyncBatchBaseline({
+        total: counts.pending_url + counts.pending_download + counts.downloading,
+        readyAtStart: counts.fully_parsed,
+        failedAtStart: counts.parse_failed,
+      });
+    } else if (!active && syncBatchBaseline) {
+      setSyncBatchBaseline(null);
+    }
+  }, [syncStatus, syncBatchBaseline]);
 
   // Chat State
   const [chatInput, setChatInput] = useState('');
@@ -809,6 +839,19 @@ export default function Home() {
     }
   }, []);
 
+  const fetchLifetimeStats = useCallback(async (token: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/user/lifetime-stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.status === 401 || response.status === 403) { handleLogout(); return; }
+      const data = await response.json();
+      setLifetimeStats(data);
+    } catch (err) {
+      console.error('Error fetching lifetime stats:', err);
+    }
+  }, []);
+
   const fetchMatches = useCallback(async () => {
     if (!jwtToken) return;
     setIsLoadingMatches(true);
@@ -849,6 +892,7 @@ export default function Home() {
       fetchMatches();
       fetchSyncStatus(jwtToken);
       fetchChatHistory(jwtToken);
+      fetchLifetimeStats(jwtToken);
 
       // Poll every 10s only while something's actually in flight — once idle, back off to
       // every 60s. A real CS2 match takes 30+ minutes to play, so nothing meaningful ever
@@ -869,7 +913,7 @@ export default function Home() {
       scheduleNext(10000);
       return () => { cancelled = true; clearTimeout(timer); };
     }
-  }, [jwtToken, fetchProfile, fetchMatches, fetchSyncStatus, fetchChatHistory]);
+  }, [jwtToken, fetchProfile, fetchMatches, fetchSyncStatus, fetchChatHistory, fetchLifetimeStats]);
 
   // Detects a real rank change since the last time this player loaded Home (tracked
   // per-browser via localStorage, not a server-side history table — this is purely a
@@ -1189,13 +1233,12 @@ export default function Home() {
     { id: 'custom', label: 'Type my own', icon: Plus, prompt: null },
   ];
 
-  // Sync progress math
+  // Sync progress math — scoped to the CURRENT sync batch (see syncBatchBaseline above),
+  // not the player's lifetime match count.
   const syncCounts = syncStatus?.counts;
-  const totalTracked = syncCounts
-    ? syncCounts.pending_url + syncCounts.pending_download + syncCounts.downloading + syncCounts.fully_parsed + syncCounts.parse_failed
-    : 0;
-  const readyCount = syncCounts?.fully_parsed ?? 0;
-  const failedCount = syncCounts?.parse_failed ?? 0;
+  const batchTotal = syncBatchBaseline?.total ?? 0;
+  const batchReadyCount = syncBatchBaseline ? Math.max(0, (syncCounts?.fully_parsed ?? 0) - syncBatchBaseline.readyAtStart) : 0;
+  const batchFailedCount = syncBatchBaseline ? Math.max(0, (syncCounts?.parse_failed ?? 0) - syncBatchBaseline.failedAtStart) : 0;
   const queuedCount = syncCounts ? syncCounts.pending_url + syncCounts.pending_download : 0;
   const hasActiveSync = queuedCount > 0 || (syncCounts?.downloading ?? 0) > 0;
   const currentElapsed = syncStatus?.current ? Math.max(0, nowSeconds - syncStatus.current.startedAt) : 0;
@@ -1418,7 +1461,7 @@ export default function Home() {
                     <LogIn className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Entry Success</p>
                   </div>
-                  <p className="font-tel text-2xl font-bold">{avgEntrySuccessPct !== null ? `${avgEntrySuccessPct.toFixed(0)}%` : '—'}</p>
+                  <p className="font-tel text-2xl font-bold">{avgEntrySuccessPct !== null ? `${avgEntrySuccessPct.toFixed(1)}%` : '—'}</p>
                 </button>
                 <button
                   type="button"
@@ -1454,7 +1497,7 @@ export default function Home() {
                     <Repeat className="w-3.5 h-3.5 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Trade Kill %</p>
                   </div>
-                  <p className="font-tel text-2xl font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(0)}%` : '—'}</p>
+                  <p className="font-tel text-2xl font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(1)}%` : '—'}</p>
                 </button>
               </div>
 
@@ -1470,7 +1513,7 @@ export default function Home() {
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">KAST</p>
                   </div>
-                  <p className="font-tel text-2xl font-bold">{avgKastPct !== null ? `${avgKastPct.toFixed(0)}%` : '—'}</p>
+                  <p className="font-tel text-2xl font-bold">{avgKastPct !== null ? `${avgKastPct.toFixed(1)}%` : '—'}</p>
                 </button>
                 <button
                   type="button"
@@ -1482,7 +1525,7 @@ export default function Home() {
                     <Target className="w-3.5 h-3.5 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">HS Accuracy</p>
                   </div>
-                  <p className="font-tel text-2xl font-bold">{avgHeadshotAccuracyPct !== null ? `${avgHeadshotAccuracyPct.toFixed(0)}%` : '—'}</p>
+                  <p className="font-tel text-2xl font-bold">{avgHeadshotAccuracyPct !== null ? `${avgHeadshotAccuracyPct.toFixed(1)}%` : '—'}</p>
                 </button>
                 <button
                   type="button"
@@ -1506,8 +1549,8 @@ export default function Home() {
                       Syncing your matches
                     </div>
                     <span className="text-xs font-tel text-[var(--text-dim)]">
-                      {readyCount} ready
-                      {failedCount > 0 && <span className="text-[var(--danger)]"> · {failedCount} failed</span>}
+                      {batchReadyCount} ready
+                      {batchFailedCount > 0 && <span className="text-[var(--danger)]"> · {batchFailedCount} failed</span>}
                       {' '}· {queuedCount + (syncCounts?.downloading ?? 0)} remaining
                     </span>
                   </div>
@@ -1515,11 +1558,11 @@ export default function Home() {
                   <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden mb-2 flex">
                     <div
                       className="h-full bg-[var(--cyan)] transition-all duration-500"
-                      style={{ width: `${totalTracked > 0 ? (readyCount / totalTracked) * 100 : 0}%` }}
+                      style={{ width: `${batchTotal > 0 ? (batchReadyCount / batchTotal) * 100 : 0}%` }}
                     />
                     <div
                       className="h-full bg-[var(--danger)] transition-all duration-500"
-                      style={{ width: `${totalTracked > 0 ? (failedCount / totalTracked) * 100 : 0}%` }}
+                      style={{ width: `${batchTotal > 0 ? (batchFailedCount / batchTotal) * 100 : 0}%` }}
                     />
                   </div>
 
@@ -1563,7 +1606,38 @@ export default function Home() {
                     <p className="text-sm max-w-sm mx-auto">RoundSync is watching for your next match — this dashboard fills in automatically the moment one finishes parsing.</p>
                   </div>
                 </div>
-              ) : (
+              ) : null}
+
+              {parsedMatches.length === 0 && lifetimeStats?.available && (
+                <div className="hud-corners bg-[var(--panel)] border border-[var(--edge)] rounded-2xl p-4 mt-3">
+                  <p className="text-xs uppercase tracking-wider text-[var(--text-dim)] mb-3">
+                    While you wait — your lifetime CS2 stats (from Steam, not RoundSync-tracked yet)
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+                      <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">Career K/D</p>
+                      <p className="font-tel text-2xl font-bold">{lifetimeStats.careerKd ?? '—'}</p>
+                    </div>
+                    <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+                      <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">Win Rate</p>
+                      <p className="font-tel text-2xl font-bold">{lifetimeStats.winRatePct !== null ? `${lifetimeStats.winRatePct}%` : '—'}</p>
+                    </div>
+                    <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+                      <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">Headshot %</p>
+                      <p className="font-tel text-2xl font-bold">{lifetimeStats.headshotPct !== null ? `${lifetimeStats.headshotPct}%` : '—'}</p>
+                    </div>
+                    <div className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center">
+                      <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">Best Weapon</p>
+                      <p className="font-tel text-lg font-bold">{lifetimeStats.bestWeapon?.label ?? '—'}</p>
+                      {lifetimeStats.bestWeapon?.accuracyPct !== null && lifetimeStats.bestWeapon?.accuracyPct !== undefined && (
+                        <p className="text-[11px] text-[var(--text-dim)]">{lifetimeStats.bestWeapon.accuracyPct}% accuracy</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {parsedMatches.length > 0 && (
                 <>
                   <RecentMatchesCarousel
                     matches={parsedMatches}
@@ -1583,11 +1657,11 @@ export default function Home() {
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                       {([
-                        { key: 'kd' as const, title: 'K/D Ratio', type: 'line' as const, decimals: 2, metricLabel: 'K/D ratio' },
-                        { key: 'adr' as const, title: 'Average Damage per Round', type: 'bar' as const, decimals: 0, metricLabel: 'ADR' },
-                        { key: 'hs' as const, title: 'Headshot %', type: 'line' as const, decimals: 0, metricLabel: 'headshot percentage' },
-                        { key: 'perf' as const, title: 'Performance Index', type: 'bar' as const, decimals: 0, metricLabel: 'performance index' },
-                      ]).map(({ key, title, type, decimals, metricLabel }, chartIndex) => {
+                        { key: 'kd' as const, title: 'K/D Ratio', type: 'line' as const, decimals: 2, metricLabel: 'K/D ratio', unit: '' },
+                        { key: 'adr' as const, title: 'Average Damage per Round', type: 'bar' as const, decimals: 0, metricLabel: 'ADR', unit: '' },
+                        { key: 'hs' as const, title: 'Headshot %', type: 'line' as const, decimals: 0, metricLabel: 'headshot percentage', unit: '%' },
+                        { key: 'perf' as const, title: 'Performance Index', type: 'bar' as const, decimals: 0, metricLabel: 'performance index', unit: '/100' },
+                      ]).map(({ key, title, type, decimals, metricLabel, unit }, chartIndex) => {
                         const recent = chartData.slice(-5);
                         const prior = chartData.slice(-10, -5);
                         const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
@@ -1644,6 +1718,7 @@ export default function Home() {
                                       labelStyle={{ color: '#e7edf3' }}
                                       itemStyle={{ color: '#e7edf3' }}
                                       labelFormatter={(_, payload) => payload?.[0]?.payload ? `${payload[0].payload.name} · ${payload[0].payload.date}` : ''}
+                                      formatter={(value: any) => [`${Number(value).toFixed(decimals)}${unit}`, title]}
                                     />
                                     <Area
                                       type="monotone"
@@ -1687,6 +1762,7 @@ export default function Home() {
                                       labelStyle={{ color: '#e7edf3' }}
                                       itemStyle={{ color: '#e7edf3' }}
                                       labelFormatter={(_, payload) => payload?.[0]?.payload ? `${payload[0].payload.name} · ${payload[0].payload.date}` : ''}
+                                      formatter={(value: any) => [`${Number(value).toFixed(decimals)}${unit}`, title]}
                                     />
                                     <Bar
                                       dataKey={key}
@@ -1768,11 +1844,10 @@ export default function Home() {
                       <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-transparent" />
                       {matchRankBand && typeof t.rank_at_match_start === 'number' && (
                         <div
-                          className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/55 rounded-full px-2.5 py-1"
+                          className="absolute top-3 right-3 drop-shadow-md"
                           title={`Premier rank at kickoff: ${t.rank_at_match_start} (${matchRankBand.label})`}
                         >
-                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: matchRankBand.color }} />
-                          <span className="font-tel text-[11px] font-bold text-[var(--text)]">{t.rank_at_match_start}</span>
+                          <RankBadge color={matchRankBand.color} rankNew={t.rank_at_match_start} size={24} />
                         </div>
                       )}
                       {/* Map name/date are the only things that live on the image itself —

@@ -29,16 +29,23 @@ for you.
    record of every bug found and fixed in the 2026-08-25 data audit, so you
    don't need the external Claude artifact link to know that history — this
    file is self-contained.
-2. **`services/watcher/CS2_ANALYTICS_STANDARDS.md`** — ~40 CS2 analytics
-   metrics (ADR, KAST, Time to Damage, reaction time, trade kills, clutches,
-   cheat detection, predictive/trend analysis, rank-bracket comparison, and
-   more) researched against real sources — Leetify, HLTV, FACEIT, academic
-   papers, open-source libraries — not assumed or taken from a single AI
-   summary. Opens with a master index sorting everything into what
-   RoundSync can legally adopt outright, what has no external standard and
-   must be built from scratch, and what's off-limits (IP risk or product
-   risk). This is the evidence behind every item in `NEXT_STEPS.md` — check
-   it before re-researching any CS2 stat definition from scratch.
+2. **`services/watcher/CS2_ANALYTICS_STANDARDS.md`** — broader than its name
+   suggests: not just ~40 CS2 analytics metrics (ADR, KAST, Time to Damage,
+   reaction time, trade kills, clutches, cheat detection, predictive/trend
+   analysis, rank-bracket comparison, and more) researched against real
+   sources — Leetify, HLTV, FACEIT, academic papers, open-source libraries
+   — but also any other externally-researched, verified-against-a-real-
+   source finding that isn't a code change itself: third-party ToS/legal
+   checks (the Steam bot account, dependency licenses), and real data-source
+   integrations like the Steam Web API lifetime-stats research (confirmed
+   real fields, a real gotcha in `total_wins` vs `total_matches_won`).
+   **Caught directly, 2026-08-27:** a past session under-scoped this doc to
+   "just metric definitions" and nearly left real research undocumented
+   because of it — don't repeat that. Opens with a master index sorting
+   everything into what RoundSync can legally adopt outright, what has no
+   external standard and must be built from scratch, and what's off-limits
+   (IP risk or product risk). This is the evidence behind every item in
+   `NEXT_STEPS.md` — check it before re-researching anything from scratch.
 3. **`services/watcher/DEMOPARSER2_FIELDS.md`** — the field/event reference
    for `demoparser2`, the library RoundSync's data pipeline is built on,
    plus specific researched findings (e.g. sub-tick input timing vs. the

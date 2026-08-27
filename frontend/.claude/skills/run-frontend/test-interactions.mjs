@@ -32,9 +32,9 @@ const dashboard = {
   factSummary: {
     economy: { rounds_tracked: 44, buy_decisions_against_team_economy_pct: 12 },
     utility: { total_throws: 80, flashbangs_thrown: 30, team_flash_count: 4, team_flash_pct: 13, flash_assist_count: 6, avg_enemies_blinded_per_flash: 0.7, avg_damage_per_he_or_molotov: 22 },
-    adaptation: { teammate_death: { occurrences: 20, no_visible_reaction_within_3s_pct: 30, avg_reaction_time_seconds: 1.8 }, bomb_plant: { occurrences: 10, no_visible_reaction_within_3s_pct: 20, avg_reaction_time_seconds: 1.2 } },
+    adaptation: { teammate_death: { occurrences: 20, no_visible_reaction_within_3s_pct: 30, avg_reaction_time_ms: 1834 }, bomb_plant: { occurrences: 10, no_visible_reaction_within_3s_pct: 20, avg_reaction_time_ms: 1188 } },
     positioning: { isolated_commitments: 15, died_pct: 60, survived_pct: 40, of_deaths_teammate_was_in_trade_range_pct: 35, of_deaths_actually_traded_pct: 20, survived_or_tradeable_pct: 55 },
-    duels: { engagements_tracked: 120, won: 66, lost: 54, avg_angle_deviation_deg_when_won: 4.2, avg_angle_deviation_deg_when_lost: 9.1, avg_angle_deviation_deg_overall: 6.5, avg_time_to_damage_seconds_when_won: 0.2 },
+    duels: { engagements_tracked: 120, won: 66, lost: 54, avg_angle_deviation_deg_when_won: 4.2, avg_angle_deviation_deg_when_lost: 9.1, avg_angle_deviation_deg_overall: 6.5, avg_time_to_damage_ms_when_won: 187 },
     engage: { outnumbered_moments: 25, chose_to_engage_pct: 40, round_win_pct_when_engaged: 45, survived_pct_when_disengaged: 70 },
   },
   categoryScores: { economic_discipline: 78, utility_iq: 65, awareness: 70, trade_discipline: 55, aim_placement: 72, engage_iq: 60 },
@@ -47,6 +47,7 @@ const dashboard = {
     positioning: [{ match_id: 'demo-1', map: 'de_mirage', good_decision_pct: 50 }, { match_id: 'demo-2', map: 'de_mirage', good_decision_pct: 40 }, { match_id: 'demo-3', map: 'de_ancient', good_decision_pct: 65 }],
   },
   loadoutMix: { full_buy: 20, half_buy: 10, force_buy: 5, eco: 6, carried_over: 3 },
+  avgKastPct: 63.6, avgHeadshotAccuracyPct: 33.8, totalMultiKillRounds: 5,
 };
 
 // Headed by default so the user can watch this run live — see driver.mjs's comment.

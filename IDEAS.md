@@ -46,3 +46,23 @@ every fact table is scoped to one `steam_id64`. If RoundSync ever wants
 team-level insight ("how did my whole team do this round," not just me),
 that's a real schema-level shift, not a small addition. Not urgent, just
 worth having on record as a known fork in the road.
+
+## 5. A dedicated "Lifetime Stats" section using ALL of Valve's data, not just a curated subset
+
+User's own framing (2026-08-27): all of the 215 real fields Valve's
+`GetUserStatsForGame` returns (see `NEXT_STEPS.md` Tier 11 for the full
+live-verified field list) would be valuable somewhere — not just the small
+curated summary (career K/D, top weapons, etc.) planned for the "Scanning
+for your matches" empty state. Think a real dedicated page/tab: full
+per-weapon breakdown (kills/shots/hits/accuracy for every CS:GO-era
+weapon), every map Valve tracks (with an honest note for the ones it
+doesn't — Mirage/Ancient/Anubis/Overpass have zero lifetime data), the
+novelty stats (dominations, revenges, broken windows, weapons donated),
+total contribution score, last-match snapshot, all of it.
+
+This is a bigger, separate vision from Tier 11's day-one empty-state card —
+not a replacement for it. Tier 11's endpoint (`GET
+/api/user/lifetime-stats`) should be built to return enough of the real
+decoded data that this future full page can reuse it directly rather than
+needing a second endpoint built later. When this gets picked up for real,
+move it into `NEXT_STEPS.md` as its own tier.
