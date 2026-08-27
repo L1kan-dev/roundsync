@@ -52,10 +52,18 @@ body {
   pointer-events: none;
 }
 
+/* Both the sweep (::before) and the rings (::after) are centered on a FIXED pixel
+   distance from the top (121px), not a percentage of the card's total height — this is
+   the one and only place .radar-backdrop is used, and its icon's real vertical position
+   is a fixed offset (card's py-20 top padding + half the icon circle's own height),
+   independent of how much text sits below it. A percentage-based center (the original
+   "50% 42%") only happened to line up for one specific amount of text; any other amount
+   changes the card's total height and throws the alignment off — confirmed by measuring
+   the actual rendered icon position via a headed Playwright check, not eyeballed. */
 .radar-backdrop::before {
   content: "";
   position: absolute;
-  top: 50%;
+  top: 121px;
   left: 50%;
   width: 140vmax;
   height: 140vmax;
@@ -70,9 +78,9 @@ body {
   position: absolute;
   inset: 0;
   background-image:
-    radial-gradient(circle at 50% 42%, transparent 0, transparent 119px, rgba(34,211,238,0.10) 120px, rgba(34,211,238,0.10) 121px, transparent 122px),
-    radial-gradient(circle at 50% 42%, transparent 0, transparent 219px, rgba(34,211,238,0.07) 220px, rgba(34,211,238,0.07) 221px, transparent 222px),
-    radial-gradient(circle at 50% 42%, transparent 0, transparent 319px, rgba(34,211,238,0.05) 320px, rgba(34,211,238,0.05) 321px, transparent 322px);
+    radial-gradient(circle at 50% 121px, transparent 0, transparent 119px, rgba(34,211,238,0.10) 120px, rgba(34,211,238,0.10) 121px, transparent 122px),
+    radial-gradient(circle at 50% 121px, transparent 0, transparent 219px, rgba(34,211,238,0.07) 220px, rgba(34,211,238,0.07) 221px, transparent 222px),
+    radial-gradient(circle at 50% 121px, transparent 0, transparent 319px, rgba(34,211,238,0.05) 320px, rgba(34,211,238,0.05) 321px, transparent 322px);
 }
 
 /* HUD corner brackets for panels — small tactical-readout framing */

@@ -13,6 +13,7 @@ import { RankBadge } from '@/components/RankBadge';
 import { RankBandTakeover, RankDeltaBadge, type RankChangeEvent } from '@/components/RankChangeOverlay';
 import { rankBand, rankBandIndex, RANK_BANDS, LAST_KNOWN_RANK_KEY } from '@/lib/rank';
 import { ctTAccent, shadeHex, Bar3DShape, duelLerp } from '@/lib/duelColors';
+import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -37,6 +38,9 @@ interface Match {
       utility_dmg_per_round?: number | null;
       clutches_won?: number | null;
       trade_kill_pct?: number | null;
+      kast_pct?: number | null;
+      headshot_accuracy_pct?: number | null;
+      multi_kill_rounds?: { '2k': number; '3k': number; '4k': number; ace: number } | null;
     };
   };
 }
@@ -64,35 +68,30 @@ function matchSortKey(m: Match): number {
   return m.match_data.telemetry.match_time ? m.match_data.telemetry.match_time * 1000 : new Date(m.parsed_at).getTime();
 }
 
-export function formatMapName(map?: string | null): string {
-  if (!map) return 'Unknown Map';
-  return map.replace(/^de_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// No maps currently have a real in-game screenshot saved locally (see
-// frontend/public/maps/screens/) — every map falls back to a plain gradient panel
-// instead of a broken <img>. Add an entry here (and the matching file) once a
-// verified real screenshot is available for that map.
-const MAPS_WITH_SCREENSHOTS = new Set<string>([]);
-export function mapScreenshotUrl(map?: string | null): string | null {
-  if (!map || !MAPS_WITH_SCREENSHOTS.has(map)) return null;
-  return `/maps/screens/${map}.png`;
-}
-
-// Averages an optional telemetry field across matches that actually have it, same
-// optional-field/graceful-fallback pattern avgAdr/avgHs already use for total_damage/
-// headshots — a match parsed before a field existed just doesn't count toward the average
-// instead of dragging it toward a fake zero. Returns null (tile shows "—") when no match has it.
-function avgOptionalField(matches: Match[], pick: (t: Match['match_data']['telemetry']) => number | null | undefined): number | null {
-  const values = matches.map((m) => pick(m.match_data.telemetry)).filter((v): v is number => typeof v === 'number');
-  if (values.length === 0) return null;
-  return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
 function sumOptionalField(matches: Match[], pick: (t: Match['match_data']['telemetry']) => number | null | undefined): number | null {
   const values = matches.map((m) => pick(m.match_data.telemetry)).filter((v): v is number => typeof v === 'number');
   if (values.length === 0) return null;
   return values.reduce((a, b) => a + b, 0);
+}
+
+// True weighted average — each match's own percentage/rate weighted by its real sample size
+// (rounds played, kills, whichever the stat's actual denominator is), not averaged as if every
+// match carried equal weight regardless of how many rounds/kills it actually represents. Same
+// "pool the real counts, don't average the percentages" principle as the already-fixed
+// awareness-score bug, generalized here since the frontend only has each match's final
+// percentage, not its raw numerator/denominator — weighting by the real per-match sample size
+// is the closest true pooling gets without a backend schema change.
+function avgWeighted(
+  matches: Match[],
+  pickValue: (t: Match['match_data']['telemetry']) => number | null | undefined,
+  pickWeight: (t: Match['match_data']['telemetry']) => number | null | undefined
+): number | null {
+  const pairs = matches
+    .map((m) => ({ value: pickValue(m.match_data.telemetry), weight: pickWeight(m.match_data.telemetry) }))
+    .filter((p): p is { value: number; weight: number } => typeof p.value === 'number' && typeof p.weight === 'number' && p.weight > 0);
+  if (pairs.length === 0) return null;
+  const totalWeight = pairs.reduce((s, p) => s + p.weight, 0);
+  return pairs.reduce((s, p) => s + p.value * p.weight, 0) / totalWeight;
 }
 
 interface ChatHistoryEntry { question: string; response: string; created_at: string }
@@ -447,6 +446,55 @@ function useHoverTooltip(text: string) {
   return { handlers: { onMouseEnter, onMouseMove, onMouseLeave }, tooltip };
 }
 
+// The one-time setup form (Home) and the Settings "Update Codes" form were copy-pasted
+// verbatim except for the submit button's width/label — shared here instead.
+function OnboardingForm({
+  gameAuthCode, setGameAuthCode, recentShareCode, setRecentShareCode,
+  isOnboarding, onSubmit, submitLabel, fullWidthButton, shareCodeHint,
+}: {
+  gameAuthCode: string; setGameAuthCode: (v: string) => void;
+  recentShareCode: string; setRecentShareCode: (v: string) => void;
+  isOnboarding: boolean; onSubmit: (e: React.FormEvent) => void;
+  submitLabel: string; fullWidthButton?: boolean; shareCodeHint?: boolean;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div>
+        <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
+        <input
+          type="password"
+          required
+          value={gameAuthCode}
+          onChange={(e) => setGameAuthCode(e.target.value)}
+          placeholder="••••••••••••"
+          className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">
+          Recent Match Share Code{shareCodeHint ? ' (CSGO-XXXXX-...)' : ''}
+        </label>
+        <input
+          type="text"
+          required
+          value={recentShareCode}
+          onChange={(e) => setRecentShareCode(e.target.value)}
+          placeholder="CSGO-abc12-def34-..."
+          className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
+        />
+      </div>
+      <button
+        type="submit"
+        disabled={isOnboarding}
+        className={`px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center gap-2 ${fullWidthButton ? 'w-full justify-center' : ''}`}
+      >
+        {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
+        {submitLabel}
+      </button>
+    </form>
+  );
+}
+
 const CAROUSEL_AUTO_MS = 4500;
 const CAROUSEL_PER_PAGE = 5;
 const CAROUSEL_GAP = 12;
@@ -671,7 +719,9 @@ export default function Home() {
   const [rankNew, setRankNew] = useState<number | null>(null);
   const [rankChangeEvent, setRankChangeEvent] = useState<RankChangeEvent | null>(null);
 
-  const [showWelcomeToast, setShowWelcomeToast] = useState(false);
+  // Replaces the old showWelcomeToast boolean — one generic toast slot now covers both
+  // the success message and any error that used to be a jarring browser alert() instead.
+  const [toast, setToast] = useState<{ message: string; subtext?: string; variant?: 'success' | 'error' } | null>(null);
 
   // Sync progress — how many matches are queued/downloading/done, and how long the current one has taken
   interface SyncStatus {
@@ -681,6 +731,14 @@ export default function Home() {
   }
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
+  // Read by the match/sync-status polling effect below to decide its next delay without
+  // needing to re-run (and re-subscribe) that effect on every syncStatus update.
+  const hasActiveSyncRef = useRef(false);
+  useEffect(() => {
+    const counts = syncStatus?.counts;
+    const queued = counts ? counts.pending_url + counts.pending_download : 0;
+    hasActiveSyncRef.current = queued > 0 || (counts?.downloading ?? 0) > 0;
+  }, [syncStatus]);
 
   // Chat State
   const [chatInput, setChatInput] = useState('');
@@ -708,7 +766,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE_URL}/api/user/profile`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (response.status === 401 || response.status === 403) return;
+      if (response.status === 401 || response.status === 403) { handleLogout(); return; }
       const data = await response.json();
       setIsOnboarded(Boolean(data.onboarded));
       setPersonaName(data.personaName || null);
@@ -727,7 +785,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE_URL}/api/coaching/history`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (response.status === 401 || response.status === 403) return;
+      if (response.status === 401 || response.status === 403) { handleLogout(); return; }
       const data = await response.json();
       if (!Array.isArray(data.history)) return;
       // Only populates the recent-chats sidebar — the chat pane itself starts blank on
@@ -743,7 +801,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE_URL}/api/matches/sync-status`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (response.status === 401 || response.status === 403) return;
+      if (response.status === 401 || response.status === 403) { handleLogout(); return; }
       const data = await response.json();
       if (data.counts) setSyncStatus(data);
     } catch (err) {
@@ -791,11 +849,25 @@ export default function Home() {
       fetchMatches();
       fetchSyncStatus(jwtToken);
       fetchChatHistory(jwtToken);
-      const interval = setInterval(() => {
-        fetchMatches();
-        fetchSyncStatus(jwtToken);
-      }, 10000);
-      return () => clearInterval(interval);
+
+      // Poll every 10s only while something's actually in flight — once idle, back off to
+      // every 60s. A real CS2 match takes 30+ minutes to play, so nothing meaningful ever
+      // changes between one idle 10s poll and the next; hammering the API/DB that often
+      // forever, for a tab just left open, was pure waste against this project's own
+      // $0-cost constraint. setTimeout (not setInterval) so the delay can change each cycle
+      // based on the latest known sync state, via hasActiveSyncRef below.
+      let cancelled = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const scheduleNext = (delayMs: number) => {
+        timer = setTimeout(async () => {
+          if (cancelled) return;
+          await Promise.all([fetchMatches(), fetchSyncStatus(jwtToken)]);
+          if (cancelled) return;
+          scheduleNext(hasActiveSyncRef.current ? 10000 : 60000);
+        }, delayMs);
+      };
+      scheduleNext(10000);
+      return () => { cancelled = true; clearTimeout(timer); };
     }
   }, [jwtToken, fetchProfile, fetchMatches, fetchSyncStatus, fetchChatHistory]);
 
@@ -864,10 +936,10 @@ export default function Home() {
             setJwtToken(data.token);
             localStorage.setItem('steamId', data.steamId);
             localStorage.setItem('jwtToken', data.token);
-            setShowWelcomeToast(true);
+            setToast({ message: 'Successfully signed in', subtext: 'Your Steam account is authenticated.' });
           }
         } catch (err) {
-          alert('Failed to obtain authenticated token from API Gateway.');
+          setToast({ message: 'Failed to obtain authenticated token from API Gateway.', variant: 'error' });
         }
       }
     };
@@ -918,10 +990,10 @@ export default function Home() {
         setIsOnboarded(true);
         setActiveTab('home');
       } else {
-        alert(`Onboarding error: ${data.error || 'Unknown error'}`);
+        setToast({ message: `Onboarding error: ${data.error || 'Unknown error'}`, variant: 'error' });
       }
     } catch (err) {
-      alert('Failed to connect to API Gateway for onboarding.');
+      setToast({ message: 'Failed to connect to API Gateway for onboarding.', variant: 'error' });
     } finally {
       setIsOnboarding(false);
     }
@@ -1039,28 +1111,36 @@ export default function Home() {
         matchesWithRawAdr.reduce((acc, m) => acc + (m.match_data.telemetry.total_damage || 0), 0) /
         Math.max(1, matchesWithRawAdr.reduce((acc, m) => acc + (m.match_data.telemetry.rounds_played || 0), 0))
       ).toFixed(1)
-    : parsedMatches.length > 0
-      ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.adr, 0) / parsedMatches.length).toFixed(1)
-      : '0.0';
+    // Fallback weighted by rounds_played (ADR's own real denominator) instead of a flat
+    // average of each match's already-computed rate — a 13-round match no longer counts
+    // exactly as much as a 30-round one.
+    : (avgWeighted(parsedMatches, (t) => t.adr, (t) => t.rounds_played) ?? 0).toFixed(1);
   const matchesWithRawHs = parsedMatches.filter(m => typeof m.match_data.telemetry.headshots === 'number');
   const avgHs = matchesWithRawHs.length > 0
     ? (
         (matchesWithRawHs.reduce((acc, m) => acc + (m.match_data.telemetry.headshots || 0), 0) /
         Math.max(1, matchesWithRawHs.reduce((acc, m) => acc + m.match_data.telemetry.kills, 0))) * 100
       ).toFixed(1)
-    : parsedMatches.length > 0
-      ? (parsedMatches.reduce((acc, m) => acc + m.match_data.telemetry.headshot_pct, 0) / parsedMatches.length).toFixed(1)
-      : '0.0';
+    // Fallback weighted by kills (headshot_pct's real denominator is kills, not rounds).
+    : (avgWeighted(parsedMatches, (t) => t.headshot_pct, (t) => t.kills) ?? 0).toFixed(1);
   const avgPerformanceIndex = parsedMatches.length > 0
     ? Math.round(parsedMatches.reduce((acc, m) => acc + performanceIndex(m.match_data.telemetry), 0) / parsedMatches.length)
     : 0;
 
   // Secondary KPI row (Part 3 backend fields) — each is null when no recent match has that
   // field yet (older matches parsed before this shipped), in which case the tile shows "—".
-  const avgEntrySuccessPct = avgOptionalField(parsedMatches, (t) => t.entry_success_pct);
-  const avgUtilityDmgPerRound = avgOptionalField(parsedMatches, (t) => t.utility_dmg_per_round);
+  // Weighted by each stat's real denominator (rounds for a per-round rate, kills for a
+  // per-kill rate) instead of averaged as if every match carried equal weight — see
+  // avgWeighted's own comment for why this isn't just cosmetic.
+  const avgEntrySuccessPct = avgWeighted(parsedMatches, (t) => t.entry_success_pct, (t) => t.rounds_played);
+  const avgUtilityDmgPerRound = avgWeighted(parsedMatches, (t) => t.utility_dmg_per_round, (t) => t.rounds_played);
   const totalClutchesWon = sumOptionalField(parsedMatches, (t) => t.clutches_won);
-  const avgTradeKillPct = avgOptionalField(parsedMatches, (t) => t.trade_kill_pct);
+  const avgTradeKillPct = avgWeighted(parsedMatches, (t) => t.trade_kill_pct, (t) => t.kills);
+  const avgKastPct = avgWeighted(parsedMatches, (t) => t.kast_pct, (t) => t.rounds_played);
+  const avgHeadshotAccuracyPct = avgWeighted(parsedMatches, (t) => t.headshot_accuracy_pct, (t) => t.rounds_played);
+  const totalMultiKillRounds = sumOptionalField(parsedMatches, (t) =>
+    t.multi_kill_rounds ? t.multi_kill_rounds['2k'] + t.multi_kill_rounds['3k'] + t.multi_kill_rounds['4k'] + t.multi_kill_rounds.ace : null
+  );
 
   // Recent Form strip — same kd_ratio >= 1 win/loss proxy the Matches tab already uses for
   // match-card accent color, just tallied here instead of colored per-card.
@@ -1127,6 +1207,17 @@ export default function Home() {
   if (!steamId) {
     return (
       <div className="relative min-h-screen overflow-hidden text-[var(--text)] flex flex-col items-center justify-center px-6">
+        {/* A failed Steam login callback can fire while still on this logged-out landing
+            page (steamId isn't set yet at that point), so this needs its own toast render,
+            not just the logged-in shell's below. */}
+        {toast && (
+          <Toast
+            message={toast.message}
+            subtext={toast.subtext}
+            variant={toast.variant}
+            onDone={() => setToast(null)}
+          />
+        )}
         <div className="relative z-10 max-w-2xl w-full text-center">
           <div className="flex justify-center mb-8">
             <LogoMark className="w-20 h-20" />
@@ -1180,11 +1271,12 @@ export default function Home() {
   // ---------- LOGGED-IN APP SHELL ----------
   return (
     <div className="min-h-screen text-[var(--text)]">
-      {showWelcomeToast && (
+      {toast && (
         <Toast
-          message="Successfully signed in"
-          subtext="Your Steam account is authenticated."
-          onDone={() => setShowWelcomeToast(false)}
+          message={toast.message}
+          subtext={toast.subtext}
+          variant={toast.variant}
+          onDone={() => setToast(null)}
         />
       )}
 
@@ -1214,38 +1306,12 @@ export default function Home() {
               <p className="text-sm text-[var(--text-dim)] text-center mb-6">
                 Give RoundSync your CS2 game authentication code and one recent match share code, and it'll sync your matches automatically from here on.
               </p>
-              <form onSubmit={handleOnboarding} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
-                  <input
-                    type="password"
-                    required
-                    value={gameAuthCode}
-                    onChange={(e) => setGameAuthCode(e.target.value)}
-                    placeholder="••••••••••••"
-                    className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code (CSGO-XXXXX-...)</label>
-                  <input
-                    type="text"
-                    required
-                    value={recentShareCode}
-                    onChange={(e) => setRecentShareCode(e.target.value)}
-                    placeholder="CSGO-abc12-def34-..."
-                    className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={isOnboarding}
-                  className="w-full px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center justify-center gap-2"
-                >
-                  {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
-                  Activate Auto-Sync
-                </button>
-              </form>
+              <OnboardingForm
+                gameAuthCode={gameAuthCode} setGameAuthCode={setGameAuthCode}
+                recentShareCode={recentShareCode} setRecentShareCode={setRecentShareCode}
+                isOnboarding={isOnboarding} onSubmit={handleOnboarding}
+                submitLabel="Activate Auto-Sync" fullWidthButton shareCodeHint
+              />
             </div>
           </div>
         ) : (
@@ -1389,6 +1455,46 @@ export default function Home() {
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Trade Kill %</p>
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(0)}%` : '—'}</p>
+                </button>
+              </div>
+
+              {/* KAST, headshot accuracy, multi-kill rounds — added 2026-08-27 */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 mb-3.5">
+                <button
+                  type="button"
+                  onClick={() => promptCoach('My KAST is what it is — which rounds am I contributing nothing at all, no kill, no assist, no survival, no trade?')}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(0, 3) } as CSSProperties}
+                >
+                  <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">KAST</p>
+                  </div>
+                  <p className="font-tel text-2xl font-bold">{avgKastPct !== null ? `${avgKastPct.toFixed(0)}%` : '—'}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => promptCoach('Of all my shots that actually land, what fraction are hitting the head versus body? Is my crosshair placement the issue?')}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(1, 3) } as CSSProperties}
+                >
+                  <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                    <Target className="w-3.5 h-3.5 text-[var(--amber)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">HS Accuracy</p>
+                  </div>
+                  <p className="font-tel text-2xl font-bold">{avgHeadshotAccuracyPct !== null ? `${avgHeadshotAccuracyPct.toFixed(0)}%` : '—'}</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => promptCoach('Walk me through my multi-kill rounds — what am I doing right in the rounds where I pick up 2 or more kills?')}
+                  className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
+                  style={{ '--c': ctTAccent(2, 3) } as CSSProperties}
+                >
+                  <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                    <Zap className="w-3.5 h-3.5 text-[var(--cyan)]" />
+                    <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Multi-Kill Rounds</p>
+                  </div>
+                  <p className="font-tel text-2xl font-bold">{totalMultiKillRounds !== null ? totalMultiKillRounds : '—'}</p>
                 </button>
               </div>
 
@@ -1602,11 +1708,6 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <p className="text-center text-[10px] leading-relaxed text-[var(--text-dim)] max-w-2xl mx-auto pb-6">
-                    RoundSync is an independent, fan-made tool and is not affiliated with or endorsed by Valve Corporation.
-                    Counter-Strike 2, map imagery, and rank icons are trademarks/property of Valve Corporation, used here for
-                    identification purposes only.
-                  </p>
                 </>
               )}
             </div>
@@ -1977,38 +2078,12 @@ export default function Home() {
                     <CheckCircle2 className="w-5 h-5" /> Auto-Sync is currently active.
                   </div>
                 )}
-                <form onSubmit={handleOnboarding} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">CS2 Game Authentication Code</label>
-                    <input
-                      type="password"
-                      required
-                      value={gameAuthCode}
-                      onChange={(e) => setGameAuthCode(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] transition-colors"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-[var(--text-dim)] mb-2">Recent Match Share Code</label>
-                    <input
-                      type="text"
-                      required
-                      value={recentShareCode}
-                      onChange={(e) => setRecentShareCode(e.target.value)}
-                      placeholder="CSGO-abc12-def34-..."
-                      className="w-full bg-[var(--void)] border border-[var(--edge)] focus:border-[var(--cyan)] outline-none rounded-xl px-4 py-3 text-[var(--text)] font-tel transition-colors"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isOnboarding}
-                    className="px-5 py-3 bg-[var(--cyan)] hover:bg-[#5eead4] disabled:bg-[var(--edge)] disabled:text-[var(--text-dim)] font-bold text-[#03141a] rounded-xl transition-all flex items-center gap-2"
-                  >
-                    {isOnboarding && <Loader2 className="w-5 h-5 animate-spin" />}
-                    {isOnboarded ? 'Update Codes' : 'Activate Auto-Sync'}
-                  </button>
-                </form>
+                <OnboardingForm
+                  gameAuthCode={gameAuthCode} setGameAuthCode={setGameAuthCode}
+                  recentShareCode={recentShareCode} setRecentShareCode={setRecentShareCode}
+                  isOnboarding={isOnboarding} onSubmit={handleOnboarding}
+                  submitLabel={isOnboarded ? 'Update Codes' : 'Activate Auto-Sync'}
+                />
               </div>
 
               <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-5 flex items-center justify-between gap-4" style={{ '--c': ctTAccent(1, 2) } as CSSProperties}>

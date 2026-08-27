@@ -37,6 +37,18 @@ None of this is a legal opinion — it's engineering-level diligence. If
 RoundSync ships a public composite score, a real IP/trademark check before
 launch is the safe move, not this doc.
 
+**Added 2026-08-27 — the Steam bot account itself.** `services/gc-worker`
+logs into a real Steam account and automates it (connects to CS2's Game
+Coordinator, requests match data, runs unattended). Steam's Subscriber
+Agreement prohibits "bots"/"automation software" interacting with Steam's
+services, read literally. In practice, this is the *only* way to resolve a
+match share-code into a downloadable demo link — there's no official public
+API for it — and every third-party CS2 stats site (Leetify, Scope.gg,
+csstats.gg) runs the same kind of bot account to do exactly this. Valve has
+never enforced against this specific use. Same category of finding as the
+extracted-assets gray area above: real on paper, informally tolerated
+industry-wide, not something RoundSync is uniquely exposed on.
+
 ---
 
 ## Master categorization: Can do / Must build ourselves / Not allowed
@@ -173,11 +185,15 @@ be setting its own methodology, not matching one.
   bad for a player who dies a lot but almost always dies *usefully* (already
   traded, already got the trade kill, etc).
 - **Measurement**: percentage, per-round boolean OR'd across 4 conditions.
-- **RoundSync verdict**: **don't have it, should add it.** All four raw
-  ingredients already exist: kills/deaths (`player_death`), trades (the
-  existing `TRADE_KILL_WINDOW_TICKS` logic in `extract_match_secondary_metrics`),
-  survival (`fact_positioning_risk`/`fact_engage_decision`'s alive-tracking).
-  This is assembly of existing data, not new extraction.
+- **RoundSync verdict**: **backend built, 2026-08-27.** Computed per-round
+  in `extract_match_secondary_metrics` (`sync_pipeline.py`), stored as
+  `telemetry.kast_pct`. All four ingredients came from data/logic already
+  in the file — kills/assists from `player_death`'s own columns, survival
+  from the absence of a death row that round, traded death from the same
+  `TRADE_KILL_WINDOW_TICKS` trade-window logic already used for
+  `trade_kill_pct` (applied in the other direction: was target's own
+  killer avenged by a teammate). Displayed on the Home dashboard as its
+  own KPI tile as of the same day.
 - **Legal**: introduced by HLTV in 2017 as part of Rating 2.0, but the KAST
   metric itself (unlike the overall Rating formula) is not proprietary —
   it's now published independently by FACEIT, Leetify, Vandal, and others.
@@ -318,11 +334,11 @@ extraction work). Corrects a couple of lift estimates from the first pass.
 
 **Aim/mechanics:**
 - **Headshot accuracy** (% of *hits*, not kills, landing on the head) —
-  **cheaper than first estimated.** `player_hurt` already carries a
-  `hitgroup` field, and `player_hurt` is already parsed every sync (used
-  today for utility damage in `extract_fact_utility_throw`). This is
-  capture-and-aggregate, not new extraction: filter `player_hurt` to
-  `attacker_steamid == target`, group by `hitgroup`. Different from the
+  **done, 2026-08-27.** `player_hurt` already carries a `hitgroup` field
+  (confirmed `1 == head` via Valve's own Source SDK reference — the same
+  enum has been stable since CS:S), and `player_hurt` is already parsed
+  every sync for ADR. Computed as `telemetry.headshot_accuracy_pct` in
+  `sync_pipeline.py`, displayed on the Home dashboard. Different from the
   existing `headshot_pct`, which is % of *kills* headshotted, a distinct and
   already-correct scoreboard stat.
 - **Weapon-segmented stats** (AWP kills, AWP opening kills, rifle vs. pistol
@@ -368,9 +384,11 @@ extraction work). Corrects a couple of lift estimates from the first pass.
   which nothing currently captures.
 
 **Round-outcome:**
-- **Multi-kill rounds (2K/3K/4K/Ace)** — pure aggregation. `player_death` is
-  already parsed every sync; group by `(match_id, round_number,
-  attacker_steamid)`, count, bucket.
+- **Multi-kill rounds (2K/3K/4K/Ace)** — **done, 2026-08-27.** Pure
+  aggregation of `player_death` (already parsed every sync), grouped by
+  round via the existing `_round_for` helper. Stored as
+  `telemetry.multi_kill_rounds` (`{2k, 3k, 4k, ace}` counts), displayed as
+  a single "Multi-Kill Rounds" total on the Home dashboard.
 - **Kills/damage in round wins vs. losses** — `fact_engage_decision` already
   stores `round_won` per row, and the round-bounds + round-winner pattern
   (`round_end`'s `winner` field) is already computed in multiple extraction

@@ -34,16 +34,19 @@ only way to get it is decompiling the actual map files.
    python load_map_callouts.py ./callout_export/all_callouts.json
    ```
 
-## Staleness tracking, not staleness prevention
+## Staleness tracking AND a real check (added 2026-08-27)
 
 Every row is tagged with `extracted_client_version` (from CS2's local
-`steam.inf`, `ClientVersion=`). `sync_pipeline.py`'s `parse_header()` already
-captures a matching build number in every parsed match's `game_directory` field
-(e.g. `"csgo_v2000885"`). **Nothing currently compares these automatically** —
-there's no code today that flags "this match's client version doesn't match the
-callout data's extraction version." That comparison needs to be built once
-something actually consumes `dim_map_callout` for a real judgment (the eventual
-smoke-correctness feature) — this is a known, deliberate gap, not an oversight.
+`steam.inf`, `ClientVersion=`). `sync_pipeline.py` now reads the matching
+build number out of every parsed match's own `game_directory` field (e.g.
+`"csgo_v2000885"`) and compares it against `dim_map_callout`'s
+`extracted_client_version` for that map every time a bomb plant needs
+resolving. If the match's version is newer than the stored callout data,
+it prints a `⚠️ STALE CALLOUT DATA` warning naming the map — visible in the
+watcher's logs, not silent. It does **not** block anything (the bomb-site
+resolver still runs on the old coordinates, which is still better than no
+coordinates), it just makes an actual CS2 map update to a re-extracted
+map's zones visible instead of silently assumed current.
 
 ## What this data does NOT include yet
 

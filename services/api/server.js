@@ -292,17 +292,13 @@ function rankTierInstruction(rankNew) {
   return `The player's CS Rating is ${rankNew} (Gold band, an elite-level player). Talk like a coach addressing a near-professional — assume deep game knowledge, focus on high-level nuance and marginal gains rather than fundamentals.`;
 }
 
-async function getPlayerRankInfo(steamId, matchIds) {
-  if (matchIds.length === 0) return { rankNew: null, rankTypeId: null };
-  const { data } = await supabase
-    .from('fact_adaptation_event')
-    .select('match_id, player_rank_new, player_rank_type_id')
-    .eq('steam_id64', steamId)
-    .in('match_id', matchIds)
-    .not('player_rank_new', 'is', null);
-
+// Pure lookup, no query — shared by getPlayerRankInfo (which fetches its own rows) and any
+// caller that already has fact_adaptation_event rows on hand (avoids a second, redundant
+// round-trip for data already sitting in an already-fetched result set).
+function extractRankInfo(adaptationRows, matchIds) {
   const byMatch = new Map();
-  for (const row of data || []) {
+  for (const row of adaptationRows) {
+    if (row.player_rank_new === null || row.player_rank_new === undefined) continue;
     if (!byMatch.has(row.match_id)) byMatch.set(row.match_id, row);
   }
   for (const matchId of matchIds) {
@@ -312,6 +308,17 @@ async function getPlayerRankInfo(steamId, matchIds) {
     }
   }
   return { rankNew: null, rankTypeId: null };
+}
+
+async function getPlayerRankInfo(steamId, matchIds) {
+  if (matchIds.length === 0) return { rankNew: null, rankTypeId: null };
+  const { data } = await supabase
+    .from('fact_adaptation_event')
+    .select('match_id, player_rank_new, player_rank_type_id')
+    .eq('steam_id64', steamId)
+    .in('match_id', matchIds)
+    .not('player_rank_new', 'is', null);
+  return extractRankInfo(data || [], matchIds);
 }
 
 function summarizeEconomy(rows) {
@@ -425,18 +432,23 @@ function summarizeEngage(rows) {
 }
 
 // Fetches all 6 fact tables in parallel — the one place this query set is defined. Both
-// buildFactSummary (AI Coach) and buildDashboardPayload (Insights dashboard) need it; the
-// dashboard also needs the RAW rows (for trend charts + loadout breakdown), which is why
-// this returns rows rather than baking the summarize step in — summarizeFactRows below
-// does that as a separate, reusable step instead of duplicating the fetch to get it.
+// the AI Coach endpoint and buildDashboardPayload (Insights dashboard) call this directly
+// now, then derive both the summary and the rank info from the same rows (see
+// extractRankInfo) instead of each re-fetching fact_adaptation_event a second time.
 async function fetchFactRows(steamId, matchIds) {
+  // Explicit order + a generous limit on every query — Supabase's API layer caps an
+  // unbounded response at a fixed row count by default, and real data already proves this
+  // isn't hypothetical (one user: 269 rows in fact_adaptation_event from a single match,
+  // 1,327 total across 8). Ordering by round_number means a truncated result (should the
+  // cap ever actually bind) still drops the OLDEST rounds, not an arbitrary slice.
+  const FACT_ROW_LIMIT = 10000;
   const [economy, utility, adaptation, positioning, duels, engage] = await Promise.all([
-    supabase.from('fact_economy').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_utility_throw').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_adaptation_event').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_positioning_risk').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_duel_placement').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
-    supabase.from('fact_engage_decision').select('*').eq('steam_id64', steamId).in('match_id', matchIds),
+    supabase.from('fact_economy').select('*').eq('steam_id64', steamId).in('match_id', matchIds).order('round_number').limit(FACT_ROW_LIMIT),
+    supabase.from('fact_utility_throw').select('*').eq('steam_id64', steamId).in('match_id', matchIds).order('round_number').limit(FACT_ROW_LIMIT),
+    supabase.from('fact_adaptation_event').select('*').eq('steam_id64', steamId).in('match_id', matchIds).order('round_number').limit(FACT_ROW_LIMIT),
+    supabase.from('fact_positioning_risk').select('*').eq('steam_id64', steamId).in('match_id', matchIds).order('round_number').limit(FACT_ROW_LIMIT),
+    supabase.from('fact_duel_placement').select('*').eq('steam_id64', steamId).in('match_id', matchIds).order('round_number').limit(FACT_ROW_LIMIT),
+    supabase.from('fact_engage_decision').select('*').eq('steam_id64', steamId).in('match_id', matchIds).order('round_number').limit(FACT_ROW_LIMIT),
   ]);
   return {
     economy: economy.data || [],
@@ -457,10 +469,6 @@ function summarizeFactRows(rows) {
     duels: summarizeDuels(rows.duels),
     engage: summarizeEngage(rows.engage),
   };
-}
-
-async function buildFactSummary(steamId, matchIds) {
-  return summarizeFactRows(await fetchFactRows(steamId, matchIds));
 }
 
 // --- Dashboard-only helpers: 0-100 scores, per-map breakdown, per-match trends ---
@@ -596,10 +604,8 @@ async function buildDashboardPayload(steamId) {
   const matchList = matches || [];
   const matchIds = matchList.map((m) => m.match_id);
 
-  const [rows, rankInfo] = await Promise.all([
-    fetchFactRows(steamId, matchIds),
-    getPlayerRankInfo(steamId, matchIds),
-  ]);
+  const rows = await fetchFactRows(steamId, matchIds);
+  const rankInfo = extractRankInfo(rows.adaptation, matchIds);
 
   const factSummary = summarizeFactRows(rows);
   const trends = buildTrends(matchList, rows.adaptation, rows.positioning);
@@ -687,9 +693,8 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
       };
     });
 
-    const [factSummary, rankInfo, recentHistory] = await Promise.all([
-      buildFactSummary(steamId, matchIds),
-      getPlayerRankInfo(steamId, matchIds),
+    const [rows, recentHistory] = await Promise.all([
+      fetchFactRows(steamId, matchIds),
       supabase
         .from('coaching_history')
         .select('question, response, created_at')
@@ -698,6 +703,8 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
         .limit(CONVERSATION_HISTORY_TURNS)
         .then(({ data }) => (data || []).slice().reverse()),
     ]);
+    const factSummary = summarizeFactRows(rows);
+    const rankInfo = extractRankInfo(rows.adaptation, matchIds);
 
     const conversationContext = recentHistory.length > 0
       ? recentHistory.map((h) => `Player asked: ${h.question}\nYou answered: ${h.response}`).join('\n\n')
@@ -767,25 +774,45 @@ app.post('/api/user/onboard', authenticateToken, async (req, res) => {
   }
 
   try {
+    const matchId = String(recentShareCode);
+
+    // The `users` row must exist before `matches` can reference it — matches.steam_id64 has
+    // a real foreign-key constraint (confirmed live, not assumed, while testing the fix
+    // below). This upsert has to run first regardless of what the match-claim does.
     await supabase.from('users').upsert({
       steam_id64: String(steamId),
       game_auth_code: encryptValue(String(gameAuthCode)),
       last_known_code: String(recentShareCode)
     }, { onConflict: 'steam_id64' });
 
-    // Also seed the first match into the queue
-    await supabase.from('matches').upsert({
-      match_id: String(recentShareCode),
-      steam_id64: String(steamId),
-      match_data: {
-        match_id: String(recentShareCode),
+    // A share code is meant to be private to its owner, but people do paste them
+    // elsewhere (Discord clips, forums). This used to be an application-level "check, then
+    // upsert" (two separate round-trips) — a narrow race window where two near-simultaneous
+    // requests for the same code could both pass the check before either write completed.
+    // claim_match_if_available() (a Postgres function, see migration
+    // claim_match_if_available) does the check-and-write as one atomic statement instead —
+    // verified directly against real data (a genuine new claim, a blocked cross-account
+    // claim, and a same-owner re-claim) before wiring it in here.
+    const { data: claimed, error: claimError } = await supabase.rpc('claim_match_if_available', {
+      p_match_id: matchId,
+      p_steam_id64: String(steamId),
+      p_match_data: {
+        match_id: matchId,
         telemetry: {
-          match_id: String(recentShareCode),
-          share_code: String(recentShareCode),
+          match_id: matchId,
+          share_code: matchId,
           status: 'pending_url'
         }
       }
-    }, { onConflict: 'match_id' });
+    });
+
+    if (claimError) {
+      console.error('❌ Failed to claim match during onboarding:', claimError.message);
+      return res.status(500).json({ error: 'Failed to save onboarding configuration.' });
+    }
+    if (!claimed) {
+      return res.status(409).json({ error: 'This share code is already associated with a different account.' });
+    }
 
     res.json({ success: true, message: 'Onboarding completed and first match queued!' });
   } catch (err) {

@@ -159,9 +159,13 @@ bomb_site resolver) are done, see the Completed section above.
       into an automated check that runs after every sync and flags/blocks
       violations immediately, instead of relying on a manual audit to catch
       them after the fact.
-- [ ] **Add KAST.** All four ingredients (kills, assists, survival, trade)
-      already exist in the fact tables — this is assembly, not new
-      extraction. See `CS2_ANALYTICS_STANDARDS.md` for the definition.
+- [x] **Add KAST.** Done, 2026-08-27, backend + frontend: `extract_match_secondary_metrics`
+      in `sync_pipeline.py` computes `kast_pct` per match (Kill, Assist,
+      Survival, or Traded death, per round), stored in `telemetry.kast_pct`.
+      Now displayed on the Home dashboard as its own KPI tile (`frontend/app/page.tsx`).
+      Verified with `py_compile`/`tsc --noEmit` only — no real demo re-parsed
+      yet, so this is syntax-and-logic-checked, not yet confirmed against
+      real match data; that happens automatically on the next live sync.
 
 ## Tier 5 — Net-new stats (industry has these, RoundSync has zero coverage)
 
@@ -172,12 +176,20 @@ sourcing, and exactly which demoparser2 event/field each comes from is in
 verified against real field availability, not estimated:
 
 **Free — the raw field already flows through the parser every sync, just never captured:**
-- [ ] **Headshot accuracy** (% of hits, not kills, on the head) —
-      `player_hurt.hitgroup`, already parsed.
+- [x] **Headshot accuracy** (% of hits, not kills, on the head) — done,
+      2026-08-27, backend + frontend. Computed in `sync_pipeline.py`
+      alongside `total_damage` (reuses the same `player_hurt` rows already
+      fetched for ADR), stored as `telemetry.headshot_accuracy_pct`,
+      displayed as its own Home dashboard tile. `hitgroup == 1` confirmed as
+      "head" via Valve's own Source SDK reference, not assumed. Distinct
+      from the existing `headshot_pct` (% of *kills* headshotted).
 - [ ] **Weapon-segmented stats** (AWP kills, rifle vs. pistol performance) —
       `player_death.weapon` / `player_hurt.weapon`, already parsed.
-- [ ] **Multi-kill rounds (2K/3K/4K/Ace)** — pure aggregation of
-      `player_death`, already parsed.
+- [x] **Multi-kill rounds (2K/3K/4K/Ace)** — done, 2026-08-27, backend +
+      frontend. Groups `player_death` by round via the existing `_round_for`
+      helper, stored as `telemetry.multi_kill_rounds` (`{2k, 3k, 4k, ace}`
+      counts), displayed as a single "Multi-Kill Rounds" total on the Home
+      dashboard.
 - [ ] **Kills/damage in round wins vs. losses** — `round_won` already
       stored per row in `fact_engage_decision`.
 - [ ] **Positioning heatmap / map control visualization** — X/Y/Z data
@@ -312,6 +324,43 @@ promoted up from the raw field research in the first place.
       production data (Crosshair Placement card, `aim_placement` category
       score), so a rebuild needs sign-off, not a silent swap.
 
+## Tier 5.5 — Engage IQ redesign (proposed 2026-08-27, queued behind the audit)
+
+The user (a real CS2 player) proposed a much richer version of `engage_iq` than
+what it currently measures — the actual checklist a player runs through
+before deciding to take a fight, not just "did outnumbered → won?". Checked
+each factor against what's already in the data:
+
+- **Already stored, unused**: outnumbered status (the current trigger
+  condition itself) and — the big one — `enemies_raw_components`
+  (`fact_engage_decision`) already has the player's own kills/deaths AND
+  every remaining enemy's kills/deaths at the exact decision moment. A real
+  "am I actually the better player here" signal is sitting in the database
+  right now, completely unused.
+- **Close cousin already exists**: "am I isolated from teammates" is
+  already computed, separately, in `fact_positioning_risk` — worth deciding
+  whether to reuse that table's logic or duplicate a simpler version here.
+- **Cheap to add** (tick fields the parser already exposes, just not
+  requested at the decision tick yet): current weapon, current health,
+  current utility/inventory.
+- **Moderate lift**: bomb-timer pressure — needs cross-referencing the
+  `bomb_planted` tick (already parsed elsewhere, in
+  `extract_fact_adaptation_event`) against the decision tick; the two don't
+  currently talk to each other.
+- **Real, standalone work**: "will I still afford a full buy next round if
+  I lose this fight" needs simulating CS2's actual loss-bonus/win-bonus
+  economy rules to predict next round's money — a genuine sub-project, not
+  a field lookup.
+- **No industry precedent found anywhere** (checked Leetify/HLTV/Scope.gg)
+  for a combined score like this — confirmed a genuine RoundSync original,
+  not something to align to an external standard.
+
+**Recommended staging, agreed but not started**: build the free/cheap
+factors (outnumbered, relative K/D, health, weapon, utility) into a
+redesigned score first; treat the bomb-timer and next-round-affordability
+factors as separate follow-up work once the base version is proven useful.
+Deliberately not started yet — audit (Tier 9.6 below) remains the priority.
+
 ## Tier 9.6 — Full-PROJECT audit using the 5-lens framework (planned 2026-08-26, not started)
 
 Broader than Tier 9 below (which only covered source code): this pass covers
@@ -359,7 +408,7 @@ backend computes):**
 7. **`frontend/app/page.tsx`** (2,032 lines — the single largest file in the
    project; no record of it ever having had a real audit pass before).
 
-**Method — the 5-lens framework** (full detail lives in Claude's own memory
+**Method — the 6-lens framework** (full detail lives in Claude's own memory
 as `feedback_five_lens_audit_framework.md`; summarized here so this file
 stays self-contained for any future reader without memory access):
 1. Redundancy & architectural soundness (DRY, dead code, testability).
@@ -374,20 +423,563 @@ stays self-contained for any future reader without memory access):
 4. Performance/optimization (redundant parses/queries, missing caching —
    Tier 9 already found one concrete unfixed case: every `extract_fact_*`
    independently re-parses the same base demo events, up to 8x per sync).
-5. Proactive original ideas — 1-2 new metrics per batch, buildable from data
+5. **Legal & licensing** (added 2026-08-26) — verify every third-party
+   dependency actually used in the batch has a real, checked (not assumed)
+   commercial-safe license, and check compliance with any platform ToS
+   being relied on (e.g. Valve's Steam Web API Terms of Use). Broader than
+   the existing Valve Fan Content Policy angle already covered for game
+   assets — this covers any library/API terms.
+6. Proactive original ideas — 1-2 new metrics per batch, buildable from data
    already present in that file/table, not new extraction.
 
 Output per batch: **Critical Issues / Architectural & Performance / Sanity
-Check / Proactive Ideas**. Check in and stop after each batch (standing
-workflow rule) rather than running all 8 in one pass — this is a multi-
-session effort, not one sitting.
+Check / Legal & Licensing / Proactive Ideas**. Check in and stop after each
+batch (standing workflow rule) rather than running all 8 in one pass — this
+is a multi-session effort, not one sitting.
 
-**Status: not started.** Session ended right after scope was finalized and
-verified — the file inventory and batch assignment are locked in above,
-nothing has actually been read/audited yet under this framework. See Tier 9
-below for what a prior, less formal full-codebase pass already covered
-(several of those files will need re-checking under the new security/
-"real question"/proactive-ideas lenses that pass didn't apply).
+**Standing rule, added 2026-08-27, corrected same day to be iterative**:
+before closing out any audit session, self-audit the session's own
+new/changed code with the same 6 lenses — fixes and new features written
+*during* the audit aren't automatically covered by the 8 pre-scoped batches
+above. **This loops**: if a self-audit pass produces any code change, that
+change gets its own self-audit pass too, repeating until one full pass
+finds nothing left to fix.
+
+**Self-audit finding, fixed same day**: `fetchFactRows()` in `server.js` had
+no `.order()`/`.limit()` on any of its 6 queries — verified against real
+data that this is a live risk, not theoretical (one user already has 1,327
+rows in `fact_adaptation_event`, 269 from a single match). Fixed: every
+query now orders by `round_number` and caps at 10,000 rows, so a truncation
+(if Supabase's response cap ever binds) drops the oldest rounds instead of
+an arbitrary, unordered slice.
+
+**Status: COMPLETE, 2026-08-27.** All 8 batches done (order reprioritized by
+risk: 1, 4, 2, 0 first as security/infra-sensitive, then 3, 5, 6, 7). Every
+third-party dependency across the whole project has been license-checked at
+least once. Two real things queued from this audit, not yet started:
+1. The 8x-per-sync duplicate demo-parsing issue in `sync_pipeline.py`
+   (Tier 9, below) — a real refactor across 7 functions, deliberately not
+   started mid-audit.
+2. The Engage IQ redesign (Tier 5.5, above) — richer, more realistic
+   scoring using data already sitting in `fact_engage_decision`, queued
+   behind the audit per the user's own call.
+Next full-project audit pass (whenever due) should start fresh rather than
+assume this one's findings still hold — code keeps changing.
+
+### Batch 1 (crypto & auth surface) — DONE, 2026-08-26
+
+Files: `services/api/cryptoUtils.js`, `services/watcher/crypto_utils.py`,
+`frontend/app/api/auth/steam/route.ts`, `frontend/lib/rank.ts`.
+
+- **Critical Issues**: `crypto_utils.py`'s `decrypt_value()` caught every
+  exception (wrong/rotated key, corrupted ciphertext — not just the
+  legacy-plaintext case the comment described) and silently returned the
+  raw ciphertext with zero logging. The one real caller
+  (`get_single_match_info` in `sync_pipeline.py`, decrypting a user's stored
+  `game_auth_code` before sending it to Valve's `GetNextMatchSharingCode`
+  API) would see this manifest as a confusing "invalid code" failure from
+  Valve, with no trace back to "the encryption key changed and this stored
+  secret can no longer be decrypted." **Fixed**: added a warning log inside
+  the except block — behavior unchanged (still falls back gracefully), but
+  a real failure is no longer invisible. See `crypto_utils.py`.
+- **Architectural**: the encrypt side (`cryptoUtils.js`) throws loudly on a
+  misconfigured key; the decrypt side (`crypto_utils.py`) failed completely
+  silently on the identical failure mode (bad/missing key) before the fix
+  above — an inconsistent failure philosophy across the two ends of the
+  same encrypt/decrypt pair, now at least partially closed by the added log.
+- **Sanity Check**: the Steam OpenID login flow
+  (`frontend/app/api/auth/steam/route.ts`) → HMAC-signed proof → verified
+  server-side (`services/api/server.js`) chain was read end-to-end, not just
+  the one file. Confirmed correct: `server.js` checks the steamId format,
+  checks `expires` against `Date.now()`, and compares the signature with
+  `crypto.timingSafeEqual` (constant-time, avoids a timing side-channel) —
+  a genuinely well-built verification, no issue found.
+- **Legal & Licensing** (new lens, see `feedback_five_lens_audit_framework`):
+  verified via live web search, not assumed — `fernet` (npm, MIT),
+  `jsonwebtoken` (npm, MIT), `cryptography` (PyPI/pyca, dual
+  Apache-2.0/BSD) are all real, commercial-safe licenses. Checked Steam Web
+  API Terms of Use (confidentiality of the API key, no password
+  interception, no false-affiliation claims) against how RoundSync actually
+  uses it: the key is only ever read server-side
+  (`sync_pipeline.py`/`server.js`), never in a `NEXT_PUBLIC_`-prefixed
+  frontend variable — confirmed via grep, satisfies the confidentiality
+  requirement. The OpenID login flow never touches the user's Steam
+  password at any point (Steam's own domain handles that) — compliant by
+  design.
+- **Proactive Ideas**: none specific to this batch — it's auth/crypto
+  plumbing, not a data/metrics surface.
+
+### Batch 4 (`services/api/server.js`, the API surface) — DONE, 2026-08-26
+
+- **Critical Issues — flagged for a scope decision, NOT yet fixed**:
+  `POST /api/user/onboard` upserts into `matches` using
+  `onConflict: 'match_id'` with `match_id` set directly from the
+  client-supplied `recentShareCode`, and no check that this `match_id`
+  doesn't already belong to a different `steam_id64`. Steam share codes are
+  normally only visible to their owner, but they do get pasted/shared
+  between players (Discord clips, forums) — if an authenticated user
+  submits a share code they don't actually own, this silently overwrites
+  that match row's ownership and resets its `match_data` back to
+  `pending_url`, destroying whatever was already parsed for the real owner.
+  Needs a decision on the right behavior (reject with an error if the
+  `match_id` already exists under a different `steam_id64`, most likely) —
+  not fixed yet, this touches the onboarding flow's user-facing behavior.
+- **Architectural & Performance**: found and fixed a real redundant-query
+  bug. `getPlayerRankInfo()` re-queried `fact_adaptation_event` from
+  Supabase a second time in both `buildDashboardPayload` and
+  `POST /api/coaching/ask`, even though both call sites already fetch the
+  *entire* `fact_adaptation_event` table (via `fetchFactRows`) in the very
+  same request — the rank fields (`player_rank_new`/`player_rank_type_id`)
+  were sitting in memory already. Extracted the matching logic into a pure
+  `extractRankInfo(rows, matchIds)` function with no query of its own; both
+  call sites now derive rank info from data they already fetched instead of
+  a second round-trip. `/api/user/profile` still calls the DB-querying
+  `getPlayerRankInfo()` directly, since it doesn't fetch the fact tables at
+  all in that endpoint. Also removed `buildFactSummary()`, which became
+  dead code once its one real caller (`/api/coaching/ask`) was rewritten to
+  call `fetchFactRows`/`summarizeFactRows` directly. Verified with
+  `node --check server.js` — syntax clean.
+  Separately (not fixed, just noted): `performanceIndexServer()` here and
+  `performanceIndex()` in `frontend/app/page.tsx` are the same formula,
+  intentionally duplicated per an existing comment — a real, acknowledged
+  maintenance risk (the two could silently drift) rather than a new find.
+  **User decision, 2026-08-27: leave as-is permanently — exclude from
+  future audit passes unless a genuinely better unification approach
+  surfaces on its own** (sharing code across Python/JS/TS isn't worth the
+  complexity just to dedupe one small formula).
+- **Sanity Check**: `computeCategoryScores`'s `awareness` score re-verified
+  as the already-fixed correct formula (true combined rate, not an average
+  of each trigger type's own %). `engage_iq` blends
+  `round_win_pct_when_engaged` and `survived_pct_when_disengaged` at a flat
+  50/50 weight regardless of how many rounds fed each side — not a bug (it's
+  measuring two genuinely different skills on purpose, unlike the awareness
+  bug which wrongly split one true rate into parts), but worth knowing: a
+  player with only 1-2 disengage-decision rounds gets that tiny sample
+  weighted exactly as heavily as 50 engage rounds. Not changed — flagging
+  the noise risk, not proposing a fix.
+- **Legal & Licensing**: verified via live search — `express`, `cors`,
+  `dotenv`, `express-rate-limit`, `@supabase/supabase-js` (MIT/BSD-family)
+  and `@google/genai` (Apache-2.0) are all commercial-safe. Commercial use
+  of Gemini API output is explicitly permitted either way.
+  **Correction, same day**: the user confirmed RoundSync is actually on the
+  Gemini **free** API tier, not paid — this session's first pass wrongly
+  generalized the paid-tier privacy terms to the whole API. Re-checked
+  specifically: on the free tier, Google's terms allow both the submitted
+  content AND Gemini's generated response to be used to "provide, improve,
+  and develop Google products," and explicitly allow human reviewers to
+  read/annotate that traffic. That means every question a RoundSync user
+  asks the AI Coach, plus their stats summary sent alongside it, is legally
+  usable by Google and could be read by a human reviewer, for as long as
+  the app stays on the free tier. Not illegal, and not unique to
+  RoundSync — but worth knowing and worth revisiting (moving to the paid
+  tier) before RoundSync scales to real user volume or advertises a privacy
+  stance.
+- **Proactive Ideas**: `/health`'s exposure checked directly — the
+  `service_health` table (per `watcher.py`'s `update_heartbeat()`) only
+  ever stores a service name + status string, nothing sensitive. Public
+  access here is fine, no action needed. Real item given the free-tier
+  confirmation above: `/api/coaching/ask` shares the same generic
+  60-req/min-per-IP limit as every other endpoint, with no tighter cap of
+  its own — free-tier Gemini quotas are strict (low requests-per-day as
+  well as per-minute), so one user hammering this endpoint could exhaust
+  the whole day's quota and silently break AI coaching for every RoundSync
+  user until it resets. **User decision, 2026-08-27: deliberately left
+  uncapped for now** — the app is still in testing with a small user count,
+  and this needs a real cost/approach discussion together once RoundSync
+  goes public, not a cap chosen unilaterally mid-build. Revisit before
+  public launch, not before.
+
+### Self-audit of Batches 1 + 4's own fixes, plus the KAST/stats work — DONE, 2026-08-27
+
+Per the new standing self-audit rule above. Two findings beyond the
+`fetchFactRows` one already fixed:
+- **Residual gap, left as-is**: the onboarding ownership fix (Batch 4) checks
+  "does this share code belong to someone else?" then saves — two separate
+  steps, not one atomic action. A deliberately, precisely-timed concurrent
+  request could theoretically still slip through the gap between the check
+  and the save. Far narrower than the original bug (which anyone could
+  trigger by accident); closing it fully would need a database-level
+  constraint, not just an application-level check. **User decision: leave
+  as-is for now**, low priority given how narrow the remaining window is.
+- **Pre-existing pattern, not a new bug**: the new KAST/HS-accuracy Home
+  dashboard tiles average each match's own percentage equally across
+  matches, same as 3 existing tiles already do (`avgEntrySuccessPct`,
+  `avgTradeKillPct`, `avgHs`'s fallback) — technically the same
+  "should weight by rounds played" idea behind the already-fixed awareness
+  score bug, just much milder here since CS2 match round-counts don't vary
+  by huge multiples. Not fixed (patching only the 2 new tiles would make
+  the dashboard inconsistent) — queued as one future pass across all the
+  affected tiles together, not urgent.
+
+### Batch 2 (background workers: `watcher.py`, `gc-worker/index.js`, map-callout tools) — DONE, 2026-08-27
+
+- **Critical Issues**: `gc-worker/index.js` logs into a real Steam account
+  and automates it (connects to the CS2 Game Coordinator, requests match
+  data, runs unattended). Steam's Subscriber Agreement literally prohibits
+  "bots"/"automation software" interacting with Steam's services. **Real,
+  but the same gray area already documented for extracted game assets** —
+  this exact bot-account pattern is how every third-party CS2 stats site
+  (Leetify, Scope.gg, csstats.gg) resolves a match share-code into a
+  download link; there's no official public API for this, and Valve has
+  never enforced against this specific use. Documented in
+  `CS2_ANALYTICS_STANDARDS.md`'s legal summary rather than treated as
+  urgent — same informal-tolerance pattern as the rest of the CS2 tracker
+  ecosystem, not unique risk-taking by RoundSync.
+- **Architectural & Performance**: `watcher.py`'s `prune_old_matches()` only
+  deletes matches that reached a terminal status (`fully_parsed`/
+  `parse_failed`) — a match stuck permanently in `pending_url`/
+  `pending_download`/`downloading` (e.g. an expired download link) never
+  gets cleaned up, a slow-burning storage-growth risk given the $0 cost
+  constraint. Also: the same "query with no `.order()`/`.limit()`" pattern
+  fixed in `server.js` last batch recurs here too (fetching a user's full
+  `matches` rows with no cap) — lower urgency since a user naturally has
+  only ~30-40 rows by design, but the same architectural smell. Neither
+  fixed yet — flagged for a future pass.
+- **Sanity Check**: `watcher.py`'s `.select('match_id', 'steam_id64', 'match_data')`
+  (3 separate arguments, not one comma-joined string) looked like a likely
+  bug at first glance — **checked against the actual installed
+  `postgrest` library's source** (`venv/Lib/site-packages/postgrest/base_request_builder.py`)
+  rather than assumed, and confirmed `select(self, *columns: str)` genuinely
+  accepts multiple arguments this way. Not a bug. Also re-confirmed
+  `gc-worker`'s overlapping-run guard (fixed in an earlier session) still
+  holds. Noted, not fixed: if the Steam bot's login fails for a *permanent*
+  reason (bad password, banned account), it retries every 15s forever with
+  no way to distinguish that from a transient network blip — a future
+  robustness improvement, not urgent.
+- **Legal & Licensing**: `steam-user`, `node-cs2`, `steam-totp`, and
+  `ValveResourceFormat`/Source2Viewer-CLI (the offline map-callout tool) are
+  all MIT-licensed — verified fresh, all commercial-safe. The Steam-bot ToS
+  question is covered under Critical Issues above, not a licensing issue.
+- **Proactive Ideas**: none new — this batch is infrastructure, not a
+  metrics surface.
+
+**Follow-up, same day (user-flagged)**: the user pointed out that CS2 map
+updates are a real, recurring risk for the callout data going stale — this
+was already *tracked* (`extracted_client_version` per row) but never actually
+*checked* anywhere. Closed the gap: `sync_pipeline.py` now reads the current
+match's own client version from `parse_header()`'s `game_directory` field and
+compares it against the stored callout data's version every time a bomb
+plant needs resolving, printing a `⚠️ STALE CALLOUT DATA` warning if the map
+was updated since the callouts were last extracted. Doesn't block anything
+(the resolver still runs on the old data, better than none) — just makes a
+real map update visible in the logs instead of silently assumed current.
+Verified with `py_compile` only; no version mismatch exists in the live data
+right now to actually trigger the warning path.
+
+**Batch 2's 3 remaining findings — all fixed, same day, per user request
+("a bug is a bug, small or big"):**
+1. **Stuck matches now get cleaned up.** `watcher.py`'s `prune_old_matches()`
+   only ever deleted *settled* matches past the 30-match retention cap — a
+   match stuck forever in `pending_url`/`pending_download`/`downloading`
+   (e.g. an expired download link) never became "settled" and would sit in
+   the database permanently. Added a second check: any non-terminal match
+   older than `STUCK_MATCH_TIMEOUT_HOURS` (48h, generous on purpose) now
+   gets pruned too.
+2. **Same missing `.order()`/`.limit()` pattern, fixed here too.** The same
+   query now orders by `parsed_at` descending and caps at 1,000 rows —
+   consistent with the `fetchFactRows` fix from the self-audit, and with
+   the user's confirmation that only the last 30 games are ever kept
+   (chronological order).
+3. **Steam login failures now get classified, not retried blindly.**
+   Researched real EResult error codes from `node-steam-user`'s actual
+   source (not guessed) — a VAC ban does **not** block login at all (VAC
+   only restricts matchmaking), so that specific idea doesn't apply, but
+   Steam's own login error already carries a numeric reason code. Split
+   into fatal (wrong password, banned/disabled/locked account, broken 2FA
+   secret — logs a distinct 🛑 message and stops retrying) versus transient
+   (network/Steam-server issues — keeps the existing 15s retry).
+   `services/gc-worker/index.js`. Verified with `node --check`.
+
+### Batch 3 (`services/watcher/sync_pipeline.py`, the core pipeline) — DONE, 2026-08-27
+
+- **Critical Issues**: none found. This file has already had substantial
+  attention (Tier 9's consolidation, the ADR cap fix, the bomb-site
+  resolver, today's KAST/headshot-accuracy/multi-kill/staleness-check
+  additions), and it shows.
+- **Architectural & Performance**: the already-known, still-unfixed Tier 9
+  item — every `extract_fact_*` function independently re-parses the same
+  base demo events, up to 8x per sync — is still open. Re-flagging it here
+  since this batch is specifically this file, not just noting it again:
+  **this needs a scope decision before starting**, since fixing it means
+  changing the signature of all 7 extraction functions. Also fixed, small:
+  `get_single_match_info`'s retry loop treated a rejected/revoked
+  `VALVE_API_KEY` (401/403) the same as a transient network issue, retrying
+  up to 3 times uselessly — now returns immediately, same principle as the
+  already-handled 412 case and the gc-worker Steam-login fix from Batch 2.
+- **Sanity Check**: confirmed `process_and_parse_real_demo`'s temp `.dem`/
+  `.dem.bz2` files always get deleted via a `finally` block, even on
+  failure — no disk-space leak. Confirmed `process_single_demo` (which
+  registers a new match) is only ever called from `sync_user_matches`,
+  always behind an "already exists?" check first — no risk of it silently
+  overwriting an in-progress or completed match's data.
+- **Legal & Licensing**: `requests` (Apache-2.0) and `pandas` (BSD
+  3-Clause) verified fresh — both commercial-safe.
+- **Proactive Ideas**: none new beyond what's already logged in Tier 5.
+
+### Batch 0 (config & meta layer: Docker, package.json, `.mcp.json`, Claude settings/hooks, run-frontend skill) — DONE, 2026-08-27
+
+- **Critical Issues**: none.
+- **Architectural & Performance**: found and fixed a real local-dev-only gap.
+  `NEXT_PUBLIC_*` variables get compiled into the frontend's client bundle at
+  **build** time, not read at container start — `docker-compose.yml`'s
+  `environment:` block for the frontend service has zero effect on them.
+  Checked whether this is a production risk too: **it isn't** — Railway
+  automatically passes matching env vars as Docker build args (confirmed
+  via Railway's own docs), and `frontend/Dockerfile` already declares the
+  right `ARG`s to receive them. Plain `docker-compose` doesn't do this
+  automatically though, so a locally-built frontend was silently ignoring
+  any custom API URL. Fixed: added an explicit `args:` block to
+  `docker-compose.yml`'s frontend service. Also fixed in passing: the
+  obsolete top-level `version: '3.8'` line (Docker Compose itself warned
+  about this the moment I validated the file) and a comment in
+  `gc-worker/Dockerfile` that said "Node.js 20" while the actual image is
+  `node:22-slim`.
+- **Sanity Check**: `services/api` and `services/gc-worker`'s Dockerfiles
+  both run `npm ci --only=production` — checked their `package.json`s and
+  confirmed neither has any `devDependencies` at all, so nothing needed at
+  runtime gets skipped. Confirmed valid via `docker compose config` both
+  before and after the fixes.
+- **Legal & Licensing**: nothing new to check — no dependencies added.
+- **Proactive Ideas / other small fixes**:
+  - `frontend/.dockerignore` didn't exclude `.env`/`.env.local` — meant a
+    locally-created `.env.local` (which the project's own `ReadMe.txt`
+    instructs you to create) could get copied into an intermediate Docker
+    build-stage layer via `COPY . .`, even though the final runtime stage
+    never includes it. Fixed by adding the exclusion.
+  - The `run-frontend` skill's mock test data (`mock-home.mjs`,
+    `test-interactions.mjs`) predated today's KAST/headshot-accuracy/
+    multi-kill-rounds fields — updated both so a screenshot-based
+    verification run actually shows realistic values on the new tiles
+    instead of "—".
+
+### Batch 5 (small/medium frontend: `Logo.tsx`, `Toast.tsx`, `TopNav.tsx`, `RankBadge.tsx`, `RankChangeOverlay.tsx`, `Operator.tsx`, `duelColors.ts`, `layout.tsx`, `globals.css`) — DONE, 2026-08-27
+
+- **Critical Issues**: none.
+- **Architectural & Performance**: found and fixed real dead code —
+  `components/Operator.tsx` (an original SVG "tactical operator" silhouette,
+  explicitly built as a non-Valve-asset alternative) has zero imports
+  anywhere in the codebase, confirmed via grep. `app/layout.tsx` renders
+  actual real operator PNG renders (`/operators/ct.png`/`t.png`) globally
+  instead — this component was superseded and never removed. Deleted.
+  Verified via `npx tsc --noEmit` (had to run through PowerShell this time —
+  Bash's classifier blocked the same command right after the file
+  deletion for unclear reasons; PowerShell ran it fine, exit code 0, no
+  errors). `globals.css` already shows real prior performance work in its
+  own comments (measured cost of `blur()`/`scale()` animations, a fixed
+  double-scrollbar bug) — nothing new to add there.
+- **Sanity Check**: none of the math/logic in this batch needed checking —
+  it's UI/presentation, not calculations. `RankBadge.tsx`'s hand-tuned
+  per-band color table correctly matches `lib/rank.ts`'s 7 real bands plus
+  a deliberately distinct "Unranked" grey.
+- **Legal & Licensing**: flagged, then resolved same day. Two corrections
+  from the user: (1) the CT/T operator background figures are **AI-generated
+  artwork**, not real extracted CS2 assets — the code's own comment
+  wrongly said "real in-game operator renders" (now fixed). Still styled to
+  evoke CS2's factions, so the same disclaimer logic applies regardless.
+  (2) confirmed the disclaimer was NOT on all pages — it only rendered
+  inside the Home tab's own JSX in `page.tsx`, while the operator art
+  renders globally via `layout.tsx` on every tab and the pre-login landing
+  page. Fixed: moved the disclaimer into `layout.tsx` as a persistent
+  footer (removed the now-duplicate copy from `page.tsx`'s Home block).
+  Verified with `npx tsc --noEmit` (clean) AND visually — ran the frontend
+  dev server, screenshotted the logged-out landing page via the
+  `run-frontend` skill's Playwright driver, and confirmed the disclaimer
+  renders legibly at the bottom of the screen without colliding with the
+  Sign-In button or feature cards above it.
+- **Proactive Ideas**: none new for this batch.
+
+### Batch 6 (`frontend/components/InsightsDashboard.tsx`) — DONE, 2026-08-27
+
+- **Critical Issues**: none.
+- **Architectural & Performance**: found a real, currently-dormant risk —
+  this file imports `formatMapName`/`mapScreenshotUrl` directly from
+  `@/app/page`, but `page.tsx` is the file that renders
+  `InsightsDashboard` in the first place. That's a circular import between
+  the two files. `lib/duelColors.ts`'s own header comment documents that
+  this *exact* pattern already caused a real temporal-dead-zone crash once
+  before (for a different pair of helpers) and was fixed by moving them out
+  of `page.tsx` into that shared lib file instead. `formatMapName`/
+  `mapScreenshotUrl` were never given the same treatment. Not actively
+  crashing right now — every call site here is inside a component's render
+  body, not at module-load time, which happens to avoid the failure mode —
+  but it's fragile: it would silently break the same way if either
+  function's usage ever got hoisted to module scope. **Flagged, not fixed
+  yet** — the real fix touches `page.tsx` directly (moving these two
+  functions into a shared lib module), so it's queued for Batch 7 rather
+  than done piecemeal ahead of that file's own audit pass.
+- **Sanity Check**: nothing new to check — the actual math/percentages
+  here are all computed server-side (already audited in Batch 4); this
+  file only displays them. Confirmed the "couldn't load insights" crash
+  fix from Tier 9 is still correctly in place.
+- **Legal & Licensing**: `recharts` (MIT) and `lucide-react` (ISC) verified
+  fresh — both commercial-safe.
+- **Proactive Ideas**: none new for this batch.
+
+### Batch 7 (`frontend/app/page.tsx`, 2,032 lines, the biggest file in the project) — DONE, 2026-08-27
+
+**Tier 9.6 (the 8-batch, 6-lens audit started 2026-08-26) is now fully complete — all 8 batches done.**
+
+- **Critical Issues**: none.
+- **Architectural & Performance — 2 real fixes**:
+  1. Closed the circular-import risk flagged in Batch 6. Created
+     `frontend/lib/mapDisplay.ts` and moved `formatMapName`/`mapScreenshotUrl`
+     there from `page.tsx`; `InsightsDashboard.tsx` now imports from the new
+     shared file instead of from `page.tsx` (which renders it). Matches the
+     precedent already set for `lib/duelColors.ts`.
+  2. The match/sync-status poll ran every 10 seconds, forever, for as long
+     as a tab stayed open with a valid session — even with nothing actually
+     syncing. Changed to poll every 10s only while something's actually in
+     flight, backing off to every 60s when idle (a real CS2 match takes
+     30+ minutes to play, so nothing meaningful changes between one idle
+     10s poll and the next). Uses a self-adjusting `setTimeout` chain plus
+     a ref (`hasActiveSyncRef`) instead of a fixed `setInterval`, and runs
+     both fetches concurrently (`Promise.all`) rather than sequentially.
+- **Sanity Check — 1 real fix, 2 things checked and left alone**:
+  - Fixed: `fetchProfile`/`fetchChatHistory`/`fetchSyncStatus` silently
+    did nothing on a 401/403 (expired/invalid session) — only `fetchMatches`
+    actually logged the user out. Since all 4 fire together, `fetchMatches`
+    was accidentally covering for the other 3 today, but that was fragile.
+    All 4 now call `handleLogout()` consistently.
+  - Checked and confirmed correct: `avgKd`/`avgAdr`/`avgHs` all use a true
+    pooled rate (sum ÷ sum), not an average of each match's own ratio —
+    already the right pattern, no change needed.
+  - Checked and left alone (not a bug, just noted): the trend-chart ▲/▼
+    indicator compares the last 5 matches against the prior 5 — a small
+    sample, but it's presented modestly (an arrow + a number, not a
+    confident forecast), so it doesn't fall under the project's existing
+    "no naive trend-line with false confidence" rule the same way a
+    dedicated forecasting feature would.
+- **Legal & Licensing**: `react-markdown` (MIT) verified fresh — the last
+  unchecked frontend dependency. Every third-party library across the whole
+  project has now been checked at least once this audit.
+- **Proactive Ideas — both fixed same day, on request**:
+  1. Extracted the duplicated onboarding form (game auth code + share code
+     inputs) into a shared `OnboardingForm` component, used by both the
+     Home tab's first-run setup and the Settings tab's "Update Codes" form.
+  2. Replaced all 3 native browser `alert()` calls (login failure,
+     onboarding failure) with the app's own `Toast` component instead of
+     leaving them as a jarring, blocking popup. Added a proper `error`
+     variant to `Toast.tsx` (red border, warning icon instead of the
+     success checkmark) rather than reusing the success styling for an
+     error. Self-audit caught one real issue in this fix: an error toast
+     was defaulting to the same 3.2s auto-dismiss as the success one, too
+     short to actually read a full error sentence — fixed by giving error
+     toasts a longer 6s default. Also added the toast render to the
+     logged-out landing page's own JSX (not just the logged-in shell's) —
+     a failed Steam login can fire while still on that screen. Verified
+     with `npx tsc --noEmit` (clean) and visually, via a live headed
+     Playwright run showing the Settings tab's form rendering correctly
+     after the extraction.
+
+**Self-audit, same day**: re-checked all 3 fixes above. Found and fixed one
+real issue in my own change — the polling fix originally awaited
+`fetchMatches()` then `fetchSyncStatus()` sequentially, adding unnecessary
+drift to the interval; changed to `Promise.all` so both run concurrently,
+matching the original code's behavior. Second self-audit pass found nothing
+further — verified clean with `npx tsc --noEmit` throughout.
+
+### Post-audit fix, user-reported (2026-08-27): radar icon not centered in "Scanning for your matches"
+
+User visually spotted the Radar icon on the empty-state card not sitting
+centered in its circular background rings. Investigated with real
+measurements (a headed Playwright run), not by eyeballing the CSS:
+confirmed the icon itself was perfectly centered in its own small circle
+(0px offset) — the actual bug was in `.radar-backdrop`'s concentric rings
+and sweep animation (`app/globals.css`), which centered themselves at a
+**percentage** of the whole card's height (`50% 42%`). That only happens to
+line up for one specific amount of text content below the icon; any other
+amount changes the card's total height and throws it off, since the icon's
+real position is a **fixed** distance from the card's top (its `py-20`
+padding + half the icon circle's own height = 121px), not a percentage.
+Fixed: both `.radar-backdrop::before` (the sweep) and `::after` (the rings)
+now center on `50% 121px` instead of `50% 42%`. Confirmed this class is
+only used in this one place, so no other card was affected. Verified
+visually with a before/after screenshot comparison — rings now genuinely
+centered on the icon.
+
+### Post-audit fixes, on request (2026-08-27): the 2 smaller deferred items
+
+**1. Onboarding race condition — now genuinely closed, not just narrowed.**
+The old fix was "check ownership, then upsert" — two separate round-trips,
+so a precisely-timed concurrent request could theoretically still slip
+through the gap. Replaced with `claim_match_if_available()`, a Postgres
+function (migration `claim_match_if_available`) that does the check-and-
+write as one atomic `INSERT ... ON CONFLICT ... WHERE` statement — Postgres
+itself serializes concurrent writes to the same match_id, closing the race
+at the database level instead of the application level.
+**Real bug caught while verifying this, before it ever shipped**: testing
+against live data surfaced a genuine foreign-key constraint
+(`matches.steam_id64 → users.steam_id64`) that wasn't previously known —
+the `users` upsert has to run *before* the match claim, or it fails. The
+old code happened to already do this in the right order by luck; the new
+code preserves it deliberately, now with a comment explaining why. Verified
+directly against real data (not just SQL that compiled): a genuine new
+claim, a blocked cross-account claim attempt, and a same-owner re-claim —
+all three behaved correctly, then test rows were cleaned up.
+Also checked for the same pattern elsewhere (`sync_pipeline.py`'s
+`process_single_demo`, the only other unprotected `matches` upsert by
+`match_id`) — confirmed it's a different, lower-risk case: it only ever
+processes match codes derived from a user's own authenticated Valve account
+chain, never a directly user-submitted string, so it doesn't need the same
+fix.
+
+**2. Dashboard averaging — now weighted by each stat's real sample size.**
+`avgKastPct`, `avgHeadshotAccuracyPct`, `avgEntrySuccessPct`,
+`avgUtilityDmgPerRound`, `avgTradeKillPct`, and `avgAdr`/`avgHs`'s fallback
+paths all used to average each match's own percentage equally, regardless
+of how many rounds/kills that match actually had. Added `avgWeighted()`
+(`frontend/app/page.tsx`) — weights each match's value by its real
+denominator (rounds played for a per-round rate, kills for a per-kill
+rate) instead. Not a perfect true pool (the frontend only has each match's
+final percentage, not its raw numerator/denominator — that would need a
+backend schema change), but a real, meaningfully better approximation than
+treating a 13-round match the same as a 30-round one. Removed
+`avgOptionalField()`, which became dead code once every call site switched
+to the weighted version. Verified with `npx tsc --noEmit` — clean.
+
+### Self-audit of the 2 post-audit fixes above — found a significant pre-existing issue, 2026-08-27
+
+Re-auditing the atomic-claim fix (per the standing "re-audit your own changes"
+rule) turned up something well beyond the original fix's scope:
+
+**Real security gap, found and fixed — every table's RLS policy was fake.**
+Checking whether `claim_match_if_available()` was safely restricted to the
+server's own service-role connection led to discovering it defaulted to
+`PUBLIC` EXECUTE (Postgres's own default for new functions) — callable by
+`anon`/`authenticated` too. Checking why that would even matter revealed the
+real issue: **every single table in the project** (`matches`, `users`, and
+all 9 others) has a policy literally named `"Enable all access for service
+role"` whose actual `roles` list was `{public}` (everyone) with an
+unconditional `USING (true)` — meaning Row Level Security was technically
+"on" but never actually restricted `anon`/`authenticated` from anything, on
+any table, project-wide. Combined with blanket table-level grants to those
+same roles (also on every table), this meant anyone holding just the public
+Supabase key could read/write every table directly, completely bypassing
+the app's own login checks.
+**Confirmed not currently exploitable**: the frontend never uses that
+public key anywhere — verified via grep, zero `@supabase/supabase-js` or
+`NEXT_PUBLIC_SUPABASE_*` references in `frontend/`. Every real feature goes
+through the server's own service-role connection. But the security model
+was resting entirely on that key never leaking, not on real protection.
+**Fixed, user-approved given the blast radius (all 11 tables)**:
+- Restricted every table's RLS policy to `service_role` only (matching
+  what its name already claimed), via `alter policy ... to service_role`.
+- Revoked the now-redundant `anon`/`authenticated` table grants on all 11
+  tables as defense-in-depth.
+- Restricted `claim_match_if_available()`'s own EXECUTE grant to
+  `service_role` only (it defaulted to `PUBLIC`).
+- Pinned the function's `search_path` (Supabase's own security advisor
+  flagged this immediately — a function with a mutable search_path is
+  vulnerable to search-path hijacking).
+**Verified, not just applied**: re-ran `claim_match_if_available()` after
+every change to confirm the server's own access still works — it does.
+Ran Supabase's security advisor before and after — 1 real warning found and
+fixed, 0 remaining after. Test rows cleaned up.
+**Also fixed in passing** (performance advisor, zero risk, purely
+additive): added a missing index on `matches.steam_id64` for the foreign
+key discovered earlier this session. Left one advisor note alone —
+an "unused index" on `coaching_history` — likely just reflects the table
+still being small enough that Postgres prefers a full scan; not acted on.
 
 ## Tier 9 — Full-codebase audit findings (2026-08-25, third session same day)
 

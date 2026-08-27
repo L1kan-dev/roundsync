@@ -39,6 +39,25 @@ function connectToSteam() {
   });
 }
 
+// EResult codes (verified against DoctorMcKay/node-steam-user's real enum, not guessed) that
+// mean the login will NEVER succeed by simply retrying — a wrong/rotated password, a banned/
+// disabled/locked account, or a broken STEAM_SHARED_SECRET producing bad 2FA codes. Retrying
+// these every 15s forever accomplishes nothing and risks Steam flagging repeated failed
+// logins as suspicious. Anything else (network blip, Steam servers down) keeps retrying.
+const FATAL_LOGIN_ERESULTS = new Set([
+  5,   // InvalidPassword
+  17,  // Banned
+  43,  // AccountDisabled
+  51,  // Suspended
+  63,  // AccountLogonDenied — needs a human to approve this device/IP via email
+  73,  // AccountLockedDown
+  85,  // AccountLoginDeniedNeedTwoFactor
+  88,  // TwoFactorCodeMismatch — STEAM_SHARED_SECRET is likely wrong or was rotated
+  89,  // TwoFactorActivationCodeMismatch
+  105, // IPBanned — retrying from the same IP won't help
+  114, // AccountDeleted
+]);
+
 // Steam & GC Authentication Lifecycle
 user.on('loggedOn', () => {
   console.log('✅ Logged into Steam successfully. Requesting CS2 license...');
@@ -54,10 +73,21 @@ user.on('loggedOn', () => {
 });
 
 user.on('error', (err) => {
-  console.error(`❌ Steam login error: ${err.message} (eresult: ${err.eresult}). Retrying in 15 seconds...`);
   isConnecting = false;
   isGcReady = false;
   stopPolling();
+
+  if (FATAL_LOGIN_ERESULTS.has(err.eresult)) {
+    console.error(
+      `🛑 FATAL Steam login error: ${err.message} (eresult: ${err.eresult}). This will not ` +
+      `fix itself by retrying — check STEAM_USERNAME/STEAM_PASSWORD/STEAM_SHARED_SECRET, or ` +
+      `whether this account needs manual re-approval on Steam. Stopping automatic reconnects; ` +
+      `restart this service once the underlying issue is fixed.`
+    );
+    return;
+  }
+
+  console.error(`❌ Steam login error: ${err.message} (eresult: ${err.eresult}). Retrying in 15 seconds...`);
   setTimeout(connectToSteam, 15000);
 });
 

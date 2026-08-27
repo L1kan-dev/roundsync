@@ -66,6 +66,23 @@ docker-compose up -d --build frontend
 docker-compose stop frontend
 ```
 
+## Headed by default, AND left open long enough to actually watch
+
+All three Playwright scripts here (`driver.mjs`, `mock-home.mjs`,
+`test-interactions.mjs`) launch **headed** (a visible browser window) by
+default, and now also pause for `WATCH_SECONDS` (default 15s) before closing
+— the user wants to watch verification happen live, not just get a
+screenshot after the fact, and a headed window that closes 1-2 seconds
+after opening is functionally the same as headless (found 2026-08-27: the
+first version of this fix launched headed but closed almost immediately,
+and the user couldn't actually see anything happen in that window before
+it vanished). Set `HEADLESS=true` to opt back into headless for a
+constrained environment (CI, a container with no real display) — this also
+skips the watch-pause automatically. Set `WATCH_SECONDS` to a different
+value for a longer/shorter look. Don't hardcode `chromium.launch()` with no
+options, or an immediate `browser.close()` right after the screenshot, in
+any new script added to this skill — both silently break this expectation.
+
 ## Gotchas
 
 - **`chromium-cli` is not installed in this environment.** Don't

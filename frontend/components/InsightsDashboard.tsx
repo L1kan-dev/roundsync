@@ -5,7 +5,7 @@ import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tool
 import {
   Loader2, Coins, Flame, Ear, Users, MapPinned, Crosshair, MessageCircleQuestion,
 } from 'lucide-react';
-import { formatMapName, mapScreenshotUrl } from '@/app/page';
+import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { shadeHex, Bar3DShape, ctTAccent, hexToRgba, duelLerp } from '@/lib/duelColors';
 
 // Every panel on this page picks up one flat "duel" color from which side of the page it

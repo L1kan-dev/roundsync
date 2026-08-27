@@ -1,10 +1,17 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from supabase import create_client
 from sync_pipeline import process_and_parse_real_demo, sync_user_matches
 
 MATCH_RETENTION_LIMIT = 30
+
+# A match stuck this long in a non-terminal status (pending_url/pending_download/downloading —
+# e.g. a download link that expired before ever being processed) never reaches "settled" and
+# would otherwise sit in the database forever, since the retention cap below only prunes
+# settled matches. Generous on purpose: real processing takes minutes, not days, so this only
+# ever catches genuinely abandoned rows, not slow-but-still-working ones.
+STUCK_MATCH_TIMEOUT_HOURS = 48
 
 def init_supabase():
     url = os.getenv("SUPABASE_URL")
@@ -67,10 +74,24 @@ def _match_sort_key(row):
             return 0.0
     return 0.0
 
+def _hours_since(iso_timestamp) -> float:
+    """Hours elapsed since a Supabase timestamptz string, or 0.0 if missing/unparseable —
+    treated as 'not stuck yet' rather than crashing the whole prune pass over one bad row."""
+    if not iso_timestamp:
+        return 0.0
+    try:
+        then = datetime.fromisoformat(str(iso_timestamp).replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - then).total_seconds() / 3600
+    except Exception:
+        return 0.0
+
+
 def prune_old_matches():
-    """Keeps only the MATCH_RETENTION_LIMIT most recent settled matches per user,
-    deleting older ones to bound database storage as richer per-match data gets
-    added later. Never touches matches still in flight (pending/downloading)."""
+    """Keeps only the MATCH_RETENTION_LIMIT most recent settled matches per user, deleting
+    older ones to bound database storage. Also deletes matches stuck in a non-terminal status
+    (pending_url/pending_download/downloading) for more than STUCK_MATCH_TIMEOUT_HOURS — e.g. a
+    download link that expired before ever being processed — which the settled-only retention
+    check alone would never clean up, since a stuck row never becomes 'settled'."""
     try:
         users_res = supabase.table("users").select("steam_id64").execute()
         for user in users_res.data or []:
@@ -78,9 +99,17 @@ def prune_old_matches():
             if not steam_id:
                 continue
 
+            # Ordered + capped, not unbounded — same fix already applied to server.js's
+            # fetchFactRows, here for the same reason: an unbounded query can be silently
+            # truncated by Supabase's API layer. Ascending (OLDEST first), not descending —
+            # this function's whole job is finding old/stuck junk to delete, so if the 1000-row
+            # cap ever actually binds, it should be the newest rows that get left out, not the
+            # oldest ones this function exists to find.
             matches_res = supabase.table("matches") \
                 .select("match_id, match_data, parsed_at") \
                 .eq("steam_id64", steam_id) \
+                .order("parsed_at") \
+                .limit(1000) \
                 .execute()
             rows = matches_res.data or []
 
@@ -88,15 +117,23 @@ def prune_old_matches():
                 r for r in rows
                 if ((r.get("match_data") or {}).get("telemetry") or {}).get("status") in ("fully_parsed", "parse_failed")
             ]
-            if len(settled) <= MATCH_RETENTION_LIMIT:
-                continue
+            to_delete = []
+            if len(settled) > MATCH_RETENTION_LIMIT:
+                settled.sort(key=_match_sort_key, reverse=True)
+                to_delete.extend(r["match_id"] for r in settled[MATCH_RETENTION_LIMIT:])
 
-            settled.sort(key=_match_sort_key, reverse=True)
-            to_delete = [r["match_id"] for r in settled[MATCH_RETENTION_LIMIT:]]
+            stuck = [
+                r for r in rows
+                if ((r.get("match_data") or {}).get("telemetry") or {}).get("status") not in ("fully_parsed", "parse_failed")
+                and _hours_since(r.get("parsed_at")) > STUCK_MATCH_TIMEOUT_HOURS
+            ]
+            to_delete.extend(r["match_id"] for r in stuck)
 
             if to_delete:
                 supabase.table("matches").delete().in_("match_id", to_delete).execute()
-                print(f"🗑️ Pruned {len(to_delete)} old match(es) for {steam_id}, keeping the most recent {MATCH_RETENTION_LIMIT}")
+                print(f"🗑️ Pruned {len(to_delete)} match(es) for {steam_id} "
+                      f"({len(to_delete) - len(stuck)} over the {MATCH_RETENTION_LIMIT}-match "
+                      f"retention cap, {len(stuck)} stuck >{STUCK_MATCH_TIMEOUT_HOURS}h)")
     except Exception as e:
         print(f"⚠️ Error pruning old matches: {e}")
 

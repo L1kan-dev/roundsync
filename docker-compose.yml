@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   api:
     build:
@@ -45,6 +43,15 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # NEXT_PUBLIC_* variables get compiled into the client bundle at BUILD time, not
+      # read at container startup — the `environment:` block below has zero effect on
+      # them. Railway passes its own env vars as build args automatically (confirmed via
+      # Railway's own docs), but plain docker-compose does not; without these, a locally
+      # built frontend silently ignores any custom API URL and falls back to the
+      # hardcoded localhost default in the code instead.
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:3001
+        - NEXT_PUBLIC_APP_URL=http://localhost:3000
     ports:
       - "3000:3000"
     environment:

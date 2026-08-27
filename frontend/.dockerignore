@@ -1,3 +1,11 @@
 node_modules
 .next
 npm-debug.log
+
+# Secrets — without this, a locally-created .env.local would get copied into the
+# Docker build context (COPY . . in the Dockerfile) and could end up baked into an
+# intermediate build-stage image layer, even though the final runtime stage only
+# copies specific pre-built folders and wouldn't itself contain it.
+.env
+.env.local
+.env*.local

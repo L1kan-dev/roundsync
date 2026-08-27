@@ -10,13 +10,21 @@
 //
 // Env:
 //   FRONTEND_URL — base URL of the running frontend (default http://localhost:3000)
+//   WATCH_SECONDS — how long to leave the headed window open before closing it
+//     (default 15s). Opening headed and then closing it 1-2 seconds later — as the
+//     first version of this fix did — defeats the whole point: a human can't actually
+//     look at anything that fast. Found 2026-08-27 when the user pointed out the window
+//     closed before they could see it.
 
 import { chromium } from 'playwright';
 
 const [, , rawPath = '/', outFile = 'screenshot.png', waitFor = 'body'] = process.argv;
 const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-const browser = await chromium.launch({ args: ['--no-sandbox'] });
+// Headed by default — the user wants to watch verification happen live, not just receive a
+// screenshot after the fact (standing preference). Set HEADLESS=true to opt back into
+// headless for a constrained environment (CI, a container with no real display).
+const browser = await chromium.launch({ headless: process.env.HEADLESS === 'true', args: ['--no-sandbox'] });
 const page = await (await browser.newContext()).newPage();
 
 const consoleErrors = [];
@@ -33,5 +41,11 @@ await page.screenshot({ path: outFile, fullPage: true });
 console.log('SCREENSHOT:', outFile);
 console.log('CONSOLE_ERRORS_COUNT:', consoleErrors.length);
 consoleErrors.forEach((e) => console.log('ERR:', e));
+
+if (process.env.HEADLESS !== 'true') {
+  const watchSeconds = process.env.WATCH_SECONDS !== undefined ? Number(process.env.WATCH_SECONDS) : 15;
+  console.log(`Leaving the window open for ${watchSeconds}s so you can actually look at it...`);
+  await page.waitForTimeout(watchSeconds * 1000);
+}
 
 await browser.close();

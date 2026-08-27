@@ -1,6 +1,7 @@
 import bz2
 import math
 import os
+import re
 import tempfile
 import time
 import requests
@@ -1112,6 +1113,7 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
         "utility_dmg_per_round": None,
         "clutches_won": None,
         "trade_kill_pct": None,
+        "kast_pct": None,
     }
     try:
         freeze_end_df = parse_event(parser, "round_freeze_end")
@@ -1229,6 +1231,44 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
                         trade_kills += 1
                         break
             metrics["trade_kill_pct"] = round(100 * trade_kills / len(my_kills), 1)
+
+        # --- 5. KAST % — per round, did target get a Kill, an Assist, Survive to round end,
+        # or die but get Traded (a teammate killed their killer within TRADE_KILL_WINDOW_TICKS)?
+        # All four ingredients reuse data/logic already computed elsewhere in this file (kills
+        # via deaths_df, the trade window via TRADE_KILL_WINDOW_TICKS) — assembly, not new
+        # extraction, per CS2_ANALYTICS_STANDARDS.md's KAST entry.
+        assist_col = "assister_steamid" if "assister_steamid" in deaths_df.columns else None
+        kast_rounds = 0
+        for start_tick, end_tick, _winner in round_bounds.values():
+            round_deaths = deaths_df[(deaths_df["tick"] >= start_tick) & (deaths_df["tick"] <= end_tick)]
+
+            got_kill = not round_deaths[round_deaths["attacker_steamid"].astype(str) == target].empty
+            got_assist = (
+                assist_col is not None
+                and not round_deaths[round_deaths[assist_col].astype(str) == target].empty
+            )
+            target_death = round_deaths[round_deaths["user_steamid"].astype(str) == target]
+            survived = target_death.empty
+
+            was_traded = False
+            if not survived:
+                death_row = target_death.sort_values("tick").iloc[0]
+                death_tick = int(death_row["tick"])
+                attacker = str(death_row["attacker_steamid"])
+                target_team = _team_for(team_snap, freeze_ticks, target, death_tick)
+                revenge_kills = deaths_df[
+                    (deaths_df["user_steamid"].astype(str) == attacker)
+                    & (deaths_df["tick"] > death_tick) & (deaths_df["tick"] <= death_tick + TRADE_KILL_WINDOW_TICKS)
+                ]
+                for _, r in revenge_kills.iterrows():
+                    killer = str(r["attacker_steamid"])
+                    if _team_for(team_snap, freeze_ticks, killer, death_tick) == target_team:
+                        was_traded = True
+                        break
+
+            if got_kill or got_assist or survived or was_traded:
+                kast_rounds += 1
+        metrics["kast_pct"] = round(100 * kast_rounds / len(round_bounds), 1)
     except Exception as e:
         print(f"⚠️ Warning parsing match secondary metrics: {e}")
     return metrics
@@ -1266,6 +1306,12 @@ def get_single_match_info(steam_id64: str, auth_code: str, match_code: str, retr
                 return {"is_valid": True, "next_code": "n/a"}
             elif response.status_code == 412:
                 print("Valve API returned 412: Precondition Failed (Invalid code or expired key).")
+                return {"is_valid": False, "next_code": "n/a"}
+            elif response.status_code in (401, 403):
+                # A bad/revoked VALVE_API_KEY won't fix itself by retrying — same "don't retry
+                # a permanent failure" principle as the 412 case above and the gc-worker Steam
+                # login fix. Small impact here (3 attempts max, not forever), but still real.
+                print(f"Valve API returned {response.status_code}: API key rejected — not retrying.")
                 return {"is_valid": False, "next_code": "n/a"}
             else:
                 time.sleep(1)
@@ -1351,9 +1397,16 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         parser = DemoParser(dem_path)
 
         map_name = None
+        match_client_version = None
         try:
             header = parser.parse_header()
             map_name = header.get("map_name")
+            # e.g. "csgo_v2000885" -> 2000885 — same version number
+            # tools/extract_map_callouts.py tags dim_map_callout rows with, so the two can be
+            # compared below instead of just tracked separately (see tools/README.md).
+            version_match = re.search(r"_v(\d+)", header.get("game_directory") or "")
+            if version_match:
+                match_client_version = int(version_match.group(1))
         except Exception as e:
             print(f"⚠️ Warning parsing header: {e}")
 
@@ -1365,7 +1418,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             try:
                 callout_res = (
                     supabase_client.table("dim_map_callout")
-                    .select("callout_name, origin_x, origin_y, origin_z")
+                    .select("callout_name, origin_x, origin_y, origin_z, extracted_client_version")
                     .eq("map_name", map_name)
                     .ilike("callout_name", "%bombsite%")
                     .execute()
@@ -1379,6 +1432,25 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                      row["origin_x"], row["origin_y"], row["origin_z"])
                     for row in callout_res.data
                 ]
+                # Staleness CHECK, not just tracking — closes the gap tools/README.md flagged as
+                # "known, not built yet". CS2 map updates can move/rename callout zones; this
+                # doesn't block anything (still uses the old coordinates, better than none), but
+                # makes a real map update visible in the logs instead of silently trusting
+                # possibly-outdated geometry.
+                if match_client_version:
+                    callout_versions = {
+                        row["extracted_client_version"] for row in callout_res.data
+                        if row.get("extracted_client_version")
+                    }
+                    stale_versions = {v for v in callout_versions if v < match_client_version}
+                    if stale_versions:
+                        print(
+                            f"⚠️ STALE CALLOUT DATA for {map_name}: extracted at version(s) "
+                            f"{sorted(stale_versions)}, but this match is version "
+                            f"{match_client_version} (newer). Bomb-site resolution may be using "
+                            f"outdated zone coordinates — re-run tools/extract_map_callouts.py "
+                            f"and tools/load_map_callouts.py."
+                        )
             except Exception as e:
                 print(f"⚠️ Warning fetching bombsite callouts for {map_name}: {e}")
 
@@ -1415,13 +1487,44 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             print(f"⚠️ Warning parsing deaths: {e}")
 
         total_damage = 0.0
+        headshot_accuracy_pct = None
         try:
             hurt_df = parse_event(parser, "player_hurt")
             if not hurt_df.empty and "attacker_steamid" in hurt_df.columns and "dmg_health" in hurt_df.columns:
                 user_damage = hurt_df[hurt_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
                 total_damage = capped_damage_sum(user_damage)
+                # % of HITS on the head, not % of kills headshotted (that's headshot_pct below) —
+                # hitgroup 1 = head, the standard Source-engine hitgroup enum (confirmed via
+                # Valve SDK's shareddefs.h; unchanged since CS:S/CS:GO, still used in CS2).
+                if "hitgroup" in user_damage.columns and not user_damage.empty:
+                    head_hits = len(user_damage[user_damage["hitgroup"] == 1])
+                    headshot_accuracy_pct = round(100 * head_hits / len(user_damage), 1)
         except Exception as e:
             print(f"⚠️ Warning parsing damage: {e}")
+
+        # Rounds where target got a 2/3/4/5(ace)-kill — pure aggregation of deaths_df, already
+        # parsed above; grouped by round via the same _round_for helper every fact_* extractor uses.
+        multi_kill_rounds = None
+        try:
+            if not deaths_df.empty and "attacker_steamid" in deaths_df.columns and not freeze_end_df.empty:
+                multi_kill_freeze_ticks = sorted(freeze_end_df["tick"].tolist())
+                user_kills_for_multi = deaths_df[deaths_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
+                kills_per_round = {}
+                for _, k in user_kills_for_multi.iterrows():
+                    rnd = _round_for(multi_kill_freeze_ticks, int(k["tick"]))
+                    kills_per_round[rnd] = kills_per_round.get(rnd, 0) + 1
+                multi_kill_rounds = {"2k": 0, "3k": 0, "4k": 0, "ace": 0}
+                for count in kills_per_round.values():
+                    if count == 2:
+                        multi_kill_rounds["2k"] += 1
+                    elif count == 3:
+                        multi_kill_rounds["3k"] += 1
+                    elif count == 4:
+                        multi_kill_rounds["4k"] += 1
+                    elif count >= 5:
+                        multi_kill_rounds["ace"] += 1
+        except Exception as e:
+            print(f"⚠️ Warning parsing multi_kill_rounds: {e}")
 
         calculated_kd = round(total_kills / max(1, total_deaths), 2)
         headshot_pct = round((headshots / max(1, total_kills)) * 100, 1) if total_kills > 0 else 0.0
@@ -1529,6 +1632,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "utility_dmg_per_round": secondary_metrics["utility_dmg_per_round"],
                 "clutches_won": secondary_metrics["clutches_won"],
                 "trade_kill_pct": secondary_metrics["trade_kill_pct"],
+                "kast_pct": secondary_metrics["kast_pct"],
+                "headshot_accuracy_pct": headshot_accuracy_pct,
+                "multi_kill_rounds": multi_kill_rounds,
                 "processing_seconds": round(time.time() - start_time, 1)
             }
         }
