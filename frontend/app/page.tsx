@@ -1715,7 +1715,7 @@ export default function Home() {
                     recentLosses={recentLosses}
                     onAskMatch={(m) => {
                       const t = m.match_data.telemetry;
-                      promptCoach(`What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS.`);
+                      promptCoach(`What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kills}/${t.deaths}/${t.assists ?? '?'} (K/D/A), ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS.`);
                     }}
                   />
 
@@ -1894,7 +1894,7 @@ export default function Home() {
                 const bg = mapScreenshotUrl(t.map);
                 const matchRankBand = rankBand(t.rank_at_match_start);
                 const index = performanceIndex(t);
-                const matchPrompt = `What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS, with a performance index of ${index}/100.`;
+                const matchPrompt = `What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kills}/${t.deaths}/${t.assists ?? '?'} (K/D/A), ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS, with a performance index of ${index}/100.`;
                 return (
                   <div
                     key={m.match_id}
