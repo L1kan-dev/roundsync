@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { shadeHex, Bar3DShape, ctTAccent, hexToRgba, duelLerp } from '@/lib/duelColors';
+import { STAT_GLOSSARY } from '@/lib/statGlossary';
 
 // Every panel on this page picks up one flat "duel" color from which side of the page it
 // sits on (left = CT cyan, right = T amber, full-width = neutral grey) — and everything
@@ -130,11 +131,12 @@ function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color, onAsk }:
 // click target now, firing a prompt specific to that exact stat (not the card it lives
 // in) — e.g. "Time to damage (won)" asks a different question than "Engagements" right
 // next to it, even though both live inside the same Crosshair Placement card.
-function StatTile({ label, value, color, onAsk }: { label: string; value: string; color: string; onAsk: () => void }) {
+function StatTile({ label, value, color, onAsk, title }: { label: string; value: string; color: string; onAsk: () => void; title?: string }) {
   return (
     <button
       type="button"
       onClick={onAsk}
+      title={title}
       className="chip3d border border-[var(--edge)] rounded-xl p-4 text-center cursor-pointer transition-transform hover:-translate-y-0.5"
       style={{ '--c': color } as CSSProperties}
     >
@@ -649,6 +651,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     value={`${factSummary.positioning.isolated_commitments}`}
                     color={SIDE_LEFT}
                     onAsk={() => onAskCoach(`I've made ${factSummary.positioning?.isolated_commitments} isolated pushes. Am I pushing alone too often?`)}
+                    title={STAT_GLOSSARY.isolatedPush}
                   />
                   <StatTile
                     label="Deaths that were tradeable"
@@ -671,6 +674,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     value={`${factSummary.engage.outnumbered_moments}`}
                     color={SIDE_RIGHT}
                     onAsk={() => onAskCoach(`I've been outnumbered ${factSummary.engage?.outnumbered_moments} times. What should I generally do in that situation?`)}
+                    title={STAT_GLOSSARY.outnumberedMoment}
                   />
                   <StatTile
                     label="Chose to engage"

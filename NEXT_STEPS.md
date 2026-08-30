@@ -118,7 +118,7 @@ files per awpy's docs, rather than waiting indefinitely.
 **Band 7 — Bigger UX asks, real value but bigger scope.**
 - [x] Match-detail drill-down page — DONE, 2026-08-31. New route `frontend/app/matches/[matchId]/page.tsx`, reached via a "View Details" button on each Matches-tab card. Backed by two new endpoints (`GET /api/matches/:matchId`, `GET /api/matches/:matchId/rounds`), both ownership-checked against `req.user.steamId`. Overview section finally surfaces `weapon_segmented_stats`/`kills_damage_by_round_outcome`/`kill_distance_buckets` — all three were computed and stored since 2026-08-30 (Tier 5) but had no UI anywhere until this page. Round-by-round section groups this player's own rows from `fact_duel_placement`/`fact_positioning_risk`/`fact_engage_decision` by round — deliberately NOT a full 10-player round-result timeline (no round-winner field is persisted anywhere; round_end is only ever parsed transiently in sync_pipeline.py to derive other stats). Extracted `performanceIndex`/`formatMatchDate`/the `Match`/`Telemetry` types into `frontend/lib/matchStats.ts`, shared with `page.tsx`, rather than duplicating them into the new page.
 - [x] Recent Matches carousel — missing fields — DONE, 2026-08-30
-- [x] Full metrics placement review — DONE, 2026-08-31. Full inventory of every metric across Home/Matches/Insights/Coach found the tab structure itself already sound (Home = aggregate/recent, Matches = per-match cards, Insights = deeper analytical breakdowns, Coach computes nothing new) — no metric needed relocating. But it surfaced a real computation-method bug: `buildMapBreakdown()` (`services/api/server.js`) averaged each match's own `kd_ratio`/`adr`/`headshot_pct` directly instead of pooling by real per-map totals — same "average the percentages instead of pooling the real counts" bug class as the already-fixed awareness-score issue. Verified with a concrete example: a 3-1 match + a 20-18 match on one map used to report K/D 2.1 (skewed by the small-sample outlier), now correctly reports 1.2 (pooled kills/deaths). Also found `/api/matches`'s `.limit(50)` was dead margin — `watcher.py`'s `MATCH_RETENTION_LIMIT` caps the database at 30 matches/user regardless, so it never actually served a 50-match window; aligned to 30 to match Insights/Coach and remove the false impression of a cross-tab data-window mismatch.
+- [x] Full metrics placement review — DONE, 2026-08-31. Full inventory of every metric across Home/Matches/Insights/Coach found the tab structure itself already sound (Home = aggregate/recent, Matches = per-match cards, Insights = deeper analytical breakdowns, Coach computes nothing new) — no metric needed relocating. But it surfaced a real computation-method bug: `buildMapBreakdown()` (`services/api/server.js`) averaged each match's own `kd_ratio`/`adr`/`headshot_pct` directly instead of pooling by real per-map totals — same "average the percentages instead of pooling the real counts" bug class as the already-fixed awareness-score issue. Verified with a concrete example: a 3-1 match + a 20-18 match on one map used to report K/D 2.1 (skewed by the small-sample outlier), now correctly reports 1.2 (pooled kills/deaths). Also found `/api/matches`'s `.limit(50)` was dead margin — `watcher.py`'s `MATCH_RETENTION_LIMIT` caps the database at 30 matches/user regardless, so it never actually served a 50-match window; aligned to 30 to match Insights/Coach and remove the false impression of a cross-tab data-window mismatch. **Follow-up, same day:** user directly flagged tooltip/caption inconsistency across pages. Extracted `frontend/lib/statGlossary.ts` as the single source for every non-obvious stat's explanation (Trade Kill %, Entry Success %, KAST, ADR, HS Accuracy, Utility Dmg/Rd, Clutches Won, Isolated Push, Outnumbered Moment), wired into `page.tsx`, `matches/[matchId]/page.tsx`, and `InsightsDashboard.tsx`. Deliberately did NOT add tooltips to self-evident stats (Kills, Deaths, Rounds Played) — the other half of the same report was that captions/tooltips weren't everywhere necessary. Real bug caught along the way: both Performance Index hover-tooltips (Home + Matches) still described the OLD 3-input formula (K/D/ADR/HS%) — stale ever since the 6-input redesign (Tier 10 below, 2026-08-30) — now state the real weights.
 - [x] Rank badge visual redesign — DONE, 2026-08-27
 - [x] Rank-change celebration effects — DONE, 2026-08-31. User confirmed they didn't know `RankChangeOverlay.tsx`'s effects already existed; watched both live (headed Playwright, not just screenshots — see `feedback_local_dev_testing_windows.md`), then asked for the takeover to feel bigger/louder. Real bug found along the way: the badge's own number and the takeover's number both jumped straight to the new value with zero animation — extracted a shared `useCountUp` hook (`frontend/lib/useCountUp.ts`) used by both `RankBadge.tsx` (badge glow + count-up) and the takeover. Bigger miss caught by the user directly: the takeover never rendered the actual CS2 rank badge SVG asset at all, just plain number text — replaced with a real `<RankBadge>` instance, same asset the profile tile uses. Particle burst bumped from a single 1.1s wave to two staggered 2.2s waves (`rank-particle-burst` in `globals.css`) since a single fast burst had already fully faded before a viewer's eyes settled on the takeover.
 - Parse-time ETA
@@ -464,26 +464,24 @@ User found these by actually running the app locally. The bugs/clarity
 issues (Band 1 above) are all fixed — full detail in `NEXT_STEPS_ARCHIVE.md`.
 These feature requests/redesigns are still open:
 
-- [ ] **Full metrics placement review.** Re-evaluate every metric against
-      *which page it actually belongs on* — Home vs. Matches vs. Insights
-      vs. Coach — and flag anywhere different granularities get mixed on
-      the same card/page. A real design pass, not a quick fix.
-- [ ] **Add a time estimate for match parsing** — either per-match ETA or
-      a total estimate for everything still queued, using the existing
-      `avgSeconds` data already tracked in sync-status.
-- [ ] **Rank-change celebration effects** — user wants a big effect on
-      crossing into a new rank band and a smaller one for an in-band
-      rank-up/down, both directions. **Note for whoever picks this up**:
-      `RankBandTakeover` (full-screen, band-crossing) and `RankDeltaBadge`
-      (small pill, same-band) already exist in
-      `components/RankChangeOverlay.tsx` and are already wired into
-      `page.tsx` — confirm with the user whether this request means "I
-      didn't know this existed, show me" vs. "the existing effect needs to
-      look/feel better," rather than assuming it needs building from
-      scratch.
-- [ ] **Match-detail drill-down page** — a real per-match view (overview,
-      round-by-round, etc.), not just the current summary card. RoundSync
-      currently has no single-match detail view at all.
+- [x] **Full metrics placement review — DONE, 2026-08-31.** Full detail in
+      Band 7's summary entry above. Tab structure itself was already sound;
+      surfaced a real `buildMapBreakdown()` K/D-pooling bug and a dead
+      `.limit(50)` vs. the real 30-match retention cap. Follow-up from the
+      same review: tooltip/caption wording was inconsistent across pages
+      (Performance Index's hover tooltip still described the OLD 3-input
+      formula after the 6-input redesign) — fixed, extracted
+      `frontend/lib/statGlossary.ts` as the single source for stat wording.
+- [x] **Add a time estimate for match parsing — DONE, 2026-08-30.** Full
+      detail in Band 7's summary entry above. Total + per-match-remaining
+      ETA in the sync progress panel, from the existing `avgSeconds`.
+- [x] **Rank-change celebration effects — DONE, 2026-08-31.** Full detail
+      in Band 7's summary entry above. Confirmed with the user: "show me
+      what exists first," not build-from-scratch. Real gaps found once
+      shown live: neither number animated, and the fullscreen takeover
+      never rendered the actual rank badge SVG asset at all.
+- [x] **Match-detail drill-down page — DONE, 2026-08-31.** Full detail in
+      Band 7's summary entry above.
 - [x] **Recent Matches carousel cards need more stats — and the actual
       time played, not just the date — DONE, 2026-08-30.** `assists` never
       existed as a real backend stat at all — `player_death`'s

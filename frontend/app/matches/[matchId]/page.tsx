@@ -8,6 +8,7 @@ import { RankBadge } from '@/components/RankBadge';
 import { rankBand } from '@/lib/rank';
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { type Telemetry, performanceIndex, formatMatchDate } from '@/lib/matchStats';
+import { STAT_GLOSSARY } from '@/lib/statGlossary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -181,20 +182,20 @@ export default function MatchDetailPage() {
         <section>
           <h2 className="font-display text-lg font-bold mb-3">Overview</h2>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <StatTile label="K/D" value={t.kd_ratio} title="Kills-to-deaths ratio" />
+            <StatTile label="K/D" value={t.kd_ratio} title={STAT_GLOSSARY.kd} />
             <StatTile label="Kills" value={t.kills} />
             <StatTile label="Deaths" value={t.deaths} />
             <StatTile label="Assists" value={t.assists ?? '—'} />
-            <StatTile label="ADR" value={t.adr} title="Average damage per round" />
-            <StatTile label="Headshot %" value={`${t.headshot_pct}%`} />
-            <StatTile label="Performance" value={`${index}/100`} title="Blended index — see Home dashboard for methodology" />
+            <StatTile label="ADR" value={t.adr} title={STAT_GLOSSARY.adr} />
+            <StatTile label="Headshot %" value={`${t.headshot_pct}%`} title={STAT_GLOSSARY.hsPct} />
+            <StatTile label="Performance" value={`${index}/100`} title={STAT_GLOSSARY.performanceIndex} />
             <StatTile label="Rounds Played" value={t.rounds_played ?? '—'} />
-            <StatTile label="KAST %" value={t.kast_pct != null ? `${t.kast_pct}%` : '—'} title="Kill, Assist, Survive, or Traded" />
-            <StatTile label="HS Accuracy" value={t.headshot_accuracy_pct != null ? `${t.headshot_accuracy_pct}%` : '—'} title="% of hits landed on the head" />
-            <StatTile label="Trade Kill %" value={t.trade_kill_pct != null ? `${t.trade_kill_pct}%` : '—'} />
-            <StatTile label="Entry Success %" value={t.entry_success_pct != null ? `${t.entry_success_pct}%` : '—'} />
-            <StatTile label="Utility Dmg/Rd" value={t.utility_dmg_per_round != null ? t.utility_dmg_per_round : '—'} />
-            <StatTile label="Clutches Won" value={t.clutches_won ?? '—'} />
+            <StatTile label="KAST %" value={t.kast_pct != null ? `${t.kast_pct}%` : '—'} title={STAT_GLOSSARY.kast} />
+            <StatTile label="HS Accuracy" value={t.headshot_accuracy_pct != null ? `${t.headshot_accuracy_pct}%` : '—'} title={STAT_GLOSSARY.hsAccuracy} />
+            <StatTile label="Trade Kill %" value={t.trade_kill_pct != null ? `${t.trade_kill_pct}%` : '—'} title={STAT_GLOSSARY.tradeKillPct} />
+            <StatTile label="Entry Success %" value={t.entry_success_pct != null ? `${t.entry_success_pct}%` : '—'} title={STAT_GLOSSARY.entrySuccessPct} />
+            <StatTile label="Utility Dmg/Rd" value={t.utility_dmg_per_round != null ? t.utility_dmg_per_round : '—'} title={STAT_GLOSSARY.utilityDmgPerRound} />
+            <StatTile label="Clutches Won" value={t.clutches_won ?? '—'} title={STAT_GLOSSARY.clutchesWon} />
           </div>
         </section>
 
@@ -312,7 +313,9 @@ export default function MatchDetailPage() {
                             : 'Survived'}
                         </span>
                       )}
-                      {decision?.is_isolated && <span className="text-[var(--amber)]">Isolated</span>}
+                      {decision?.is_isolated && (
+                        <span className="text-[var(--amber)]" title={STAT_GLOSSARY.isolatedPush}>Isolated</span>
+                      )}
                       {decision && (
                         <span>
                           {decision.enemies_alive}v{decision.teammates_alive + 1} at decision

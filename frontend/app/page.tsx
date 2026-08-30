@@ -16,6 +16,7 @@ import { rankBand, rankBandIndex, RANK_BANDS, LAST_KNOWN_RANK_KEY } from '@/lib/
 import { ctTAccent, shadeHex, Bar3DShape, duelLerp } from '@/lib/duelColors';
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { type Match, performanceIndex, formatMatchDate } from '@/lib/matchStats';
+import { STAT_GLOSSARY } from '@/lib/statGlossary';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -620,7 +621,7 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
                   <p className="text-[8px] text-[var(--text-dim)] mt-1 truncate">{formatMatchDate(t)}</p>
                 </div>
                 <div className="grid grid-cols-4 gap-x-1 gap-y-1 text-center mt-0.5">
-                  <div title="Kills-to-deaths ratio">
+                  <div title={STAT_GLOSSARY.kd}>
                     <p className="font-tel text-xs font-extrabold leading-none" style={{ color: accent }}>{t.kd_ratio}</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">K/D</p>
                   </div>
@@ -636,15 +637,15 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.assists ?? '—'}</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Assists</p>
                   </div>
-                  <div>
+                  <div title={STAT_GLOSSARY.adr}>
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.adr}</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">ADR</p>
                   </div>
-                  <div>
+                  <div title={STAT_GLOSSARY.hsPct}>
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.headshot_pct}%</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">HS</p>
                   </div>
-                  <div className="col-span-2" title="Performance Index">
+                  <div className="col-span-2" title={STAT_GLOSSARY.performanceIndex}>
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--amber)]">{performanceIndex(t)}/100</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Performance</p>
                   </div>
@@ -782,11 +783,16 @@ export default function Home() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [showTopicWheel, setShowTopicWheel] = useState(false);
 
+  // Both tooltips used to describe the OLD 3-input formula (K/D/ADR/HS%) — stale ever since
+  // the 6-input redesign (NEXT_STEPS.md Tier 10, 2026-08-30) added KAST/trade-kill%/
+  // multi-kill bonus. Caught during the 2026-08-31 tooltip-consistency pass; now matches
+  // STAT_GLOSSARY.performanceIndex's wording (the shorter title= version elsewhere) plus the
+  // real weights for the richer hover-tooltip context these two get.
   const performanceTooltip = useHoverTooltip(
-    'Performance Index: a single 0-100 score blending your K/D ratio, damage per round, and headshot percentage. Click to ask the coach about it.'
+    `${STAT_GLOSSARY.performanceIndex} (ADR/KAST 30% each, K/D 15%, trade-kill% 10%, multi-kill bonus 8%, HS% 7%). Click to ask the coach about it.`
   );
   const matchPerformanceTooltip = useHoverTooltip(
-    'Performance: a single 0-100 score blending K/D ratio, damage per round, and headshot percentage for this match.'
+    `${STAT_GLOSSARY.performanceIndex}, for this match.`
   );
 
   const fetchProfile = useCallback(async (token: string) => {
@@ -1429,6 +1435,7 @@ export default function Home() {
                   onClick={() => promptCoach(`My average K/D over my last ${parsedMatches.length} games is ${avgKd}. Is that good for my rank, and what's dragging it down?`)}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
+                  title={STAT_GLOSSARY.kd}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Target className="w-4 h-4 text-[var(--cyan)]" />
@@ -1441,6 +1448,7 @@ export default function Home() {
                   onClick={() => promptCoach(`My average ADR over my last ${parsedMatches.length} games is ${avgAdr}. What's the biggest thing holding my damage output back?`)}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
+                  title={STAT_GLOSSARY.adr}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Zap className="w-4 h-4 text-[var(--amber)]" />
@@ -1453,6 +1461,7 @@ export default function Home() {
                   onClick={() => promptCoach(`My headshot percentage is ${avgHs}%. How can I improve it?`)}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
+                  title={STAT_GLOSSARY.hsPct}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Crosshair className="w-4 h-4 text-[var(--cyan)]" />
@@ -1469,6 +1478,7 @@ export default function Home() {
                   onClick={() => promptCoach('How is my entry success rate — am I trading my life for enough value when I open a site?')}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(0, 4) } as CSSProperties}
+                  title={STAT_GLOSSARY.entrySuccessPct}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <LogIn className="w-3.5 h-3.5 text-[var(--cyan)]" />
@@ -1481,6 +1491,7 @@ export default function Home() {
                   onClick={() => promptCoach('Is my utility damage per round low? What am I doing wrong with my grenades?')}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
+                  title={STAT_GLOSSARY.utilityDmgPerRound}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Flame className="w-3.5 h-3.5 text-[var(--amber)]" />
@@ -1493,6 +1504,7 @@ export default function Home() {
                   onClick={() => promptCoach("Walk me through my clutch rounds — what am I doing right or wrong when I'm the last one alive?")}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
+                  title={STAT_GLOSSARY.clutchesWon}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Users className="w-3.5 h-3.5 text-[var(--cyan)]" />
@@ -1505,6 +1517,7 @@ export default function Home() {
                   onClick={() => promptCoach("My trade kill percentage feels low — which of my deaths had a teammate nearby who could have traded but didn't?")}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
+                  title={STAT_GLOSSARY.tradeKillPct}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Repeat className="w-3.5 h-3.5 text-[var(--amber)]" />
@@ -1521,6 +1534,7 @@ export default function Home() {
                   onClick={() => promptCoach('My KAST is what it is — which rounds am I contributing nothing at all, no kill, no assist, no survival, no trade?')}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(0, 3) } as CSSProperties}
+                  title={STAT_GLOSSARY.kast}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--cyan)]" />
@@ -1533,6 +1547,7 @@ export default function Home() {
                   onClick={() => promptCoach('Of all my shots that actually land, what fraction are hitting the head versus body? Is my crosshair placement the issue?')}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 3) } as CSSProperties}
+                  title={STAT_GLOSSARY.hsAccuracy}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Target className="w-3.5 h-3.5 text-[var(--amber)]" />
@@ -1884,7 +1899,7 @@ export default function Home() {
 
                     <div className="chip3d p-4.5" style={{ borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}>
                       <div className="grid grid-cols-3 gap-2 text-center mb-3.5">
-                        <div title="Kills-to-deaths ratio">
+                        <div title={STAT_GLOSSARY.kd}>
                           <p className="font-tel font-bold text-lg" style={{ color: accent }}>{t.kd_ratio}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">K/D</p>
                         </div>
@@ -1900,11 +1915,11 @@ export default function Home() {
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.assists ?? '—'}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Assists</p>
                         </div>
-                        <div>
+                        <div title={STAT_GLOSSARY.adr}>
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.adr}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">ADR</p>
                         </div>
-                        <div>
+                        <div title={STAT_GLOSSARY.hsPct}>
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.headshot_pct}%</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">HS</p>
                         </div>
