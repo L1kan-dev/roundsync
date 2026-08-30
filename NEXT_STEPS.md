@@ -92,10 +92,10 @@ All 4 came from actually using the live app — full detail in archive, Tier
 - [x] Tier 9: 8x-per-sync duplicate parsing — fixed, all 7 extraction functions now share one pre-parse
 - [x] Tier 9.5: `fact_duel_placement` rebuild onto `fire_bullets`/`player_bullet_hit` — done together with Tier 9
 
-**Band 5 — Cheap correctness tweaks, align to published definitions.**
-- Trade-kill window 3s → 4s
-- Flash assist: add HLTV's 1.1s minimum
-- Clutch won: exclude "fake" clutches
+**Band 5 — Cheap correctness tweaks, align to published definitions. DONE, 2026-08-30.**
+- [x] Trade-kill window 3s → 4s (`TRADE_KILL_WINDOW_TICKS`) — feeds `fact_positioning_risk`'s trade check, `trade_kill_pct`, and KAST.
+- [x] Flash assist: add HLTV's 1.1s minimum blind duration (`FLASH_ASSIST_MIN_BLIND_SECONDS`) before crediting a kill on a blinded victim.
+- [x] Clutch won: exclude "fake" T-side clutches per HLTV's 2024 adjusted-clutch-requirements rule (verified against hltv.org/news/40818) — disqualified if more than one teammate was still alive at CTs' last realistic chance to start defusing (5s before detonation with a kit, 10s without; standard 40s C4 timer). Needed a new `bomb_planted` parse, added to the Tier 9 shared pre-parse and threaded into `extract_match_secondary_metrics` as `bomb_planted_df`. CT-side clutches aren't covered by this rule (not part of HLTV's published fix).
 
 **Band 6 — Bigger builds, sequenced by shared dependency.**
 Tier 2's Time to Damage and reaction-time rebuilds both need a real
@@ -141,11 +141,14 @@ resolver) are done. Full detail in `NEXT_STEPS_ARCHIVE.md`.
       0.5s), define "reacted" as first tick crossing a yaw/movement
       threshold, store in ms instead of seconds.
 
-## Tier 3 — Align to the stricter published version
+## Tier 3 — Align to the stricter published version — DONE, 2026-08-30
 
-- [ ] **Flash assist**: add HLTV's ~1.1s minimum blind-duration threshold.
-- [ ] **Trade-kill window**: 3s → 4s to match Leetify's published window.
-- [ ] **Clutch won**: exclude "fake" clutches (round already unwinnable for
+All three shipped together as Band 5. See Band 5 above for the real
+implementation detail (constants changed, the bomb-timer fake-clutch logic).
+
+- [x] **Flash assist**: add HLTV's ~1.1s minimum blind-duration threshold.
+- [x] **Trade-kill window**: 3s → 4s to match Leetify's published window.
+- [x] **Clutch won**: exclude "fake" clutches (round already unwinnable for
       the other side before the last-alive moment), per HLTV's 2024
       adjustment.
 

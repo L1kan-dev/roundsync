@@ -141,6 +141,10 @@ def extract_fact_economy(parser, target_steam_id64: str, freeze_ticks: list) -> 
 # itself (no explicit tick-rate field found in parse_header()'s output).
 TICK_RATE = 64.0
 
+# HLTV's minimum blind duration for a flash to count toward a "flash assist" kill
+# (hltv.org/news/34796) — below this, the victim wasn't meaningfully impaired.
+FLASH_ASSIST_MIN_BLIND_SECONDS = 1.1
+
 GRENADE_DETONATE_EVENTS = {
     "flashbang_detonate": "flashbang",
     "hegrenade_detonate": "hegrenade",
@@ -243,10 +247,11 @@ def extract_fact_utility_throw(parser, target_steam_id64: str, freeze_ticks: lis
                             (death_df["user_steamid"].astype(str) == victim)
                             & (death_df["tick"] >= b["tick"]) & (death_df["tick"] <= window_end)
                         ]
-                        for _, k in kills_on_victim.iterrows():
-                            killer = str(k["attacker_steamid"])
-                            if killer != target and _team_for(team_snap, freeze_ticks, killer, t["tick"]) == thrower_team:
-                                flash_assist = True
+                        if duration >= FLASH_ASSIST_MIN_BLIND_SECONDS:
+                            for _, k in kills_on_victim.iterrows():
+                                killer = str(k["attacker_steamid"])
+                                if killer != target and _team_for(team_snap, freeze_ticks, killer, t["tick"]) == thrower_team:
+                                    flash_assist = True
 
             elif t["type"] in ("hegrenade", "molotov", "incendiary") and not hurt_df.empty:
                 keywords = {"hegrenade": "hegrenade", "molotov": "molotov|inferno", "incendiary": "incendiary|inferno"}[t["type"]]
@@ -718,7 +723,8 @@ CS2_UNITS_PER_METER = 52.49
 TEAMMATE_TRADE_DISTANCE_UNITS = round(15 * CS2_UNITS_PER_METER, -2)   # ≈ 800
 ENEMY_CONTESTED_RANGE_UNITS = round(30 * CS2_UNITS_PER_METER, -2)     # ≈ 1500
 POSITIONING_SAMPLE_INTERVAL_TICKS = int(TICK_RATE * 0.5)
-TRADE_KILL_WINDOW_TICKS = int(TICK_RATE * 3)
+# 4s matches Leetify's published trade-kill window (was 3s — NEXT_STEPS.md Band 5).
+TRADE_KILL_WINDOW_TICKS = int(TICK_RATE * 4)
 
 
 def extract_fact_positioning_risk(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, death_df) -> list:
@@ -1130,14 +1136,14 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
     return rows
 
 
-def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df) -> dict:
+def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df, bomb_planted_df) -> dict:
     """Four Home-dashboard KPI tiles, computed once per match from data already parsed here
-    (freeze_ticks/round_end_df/deaths_df are all passed in so this doesn't re-run parse_event()
-    a second time for events every other extract_fact_* function already shares — Tier 9).
-    Every value defaults to None and is left out of the telemetry blob by the caller when it
-    couldn't be computed — same optional-field/graceful-fallback pattern as total_damage/
-    headshots/rounds_played already use, so older already-parsed matches just show nothing for
-    a tile instead of a fake zero."""
+    (freeze_ticks/round_end_df/deaths_df/bomb_planted_df are all passed in so this doesn't
+    re-run parse_event() a second time for events every other extract_fact_* function already
+    shares — Tier 9). Every value defaults to None and is left out of the telemetry blob by the
+    caller when it couldn't be computed — same optional-field/graceful-fallback pattern as
+    total_damage/headshots/rounds_played already use, so older already-parsed matches just show
+    nothing for a tile instead of a fake zero."""
     target = str(target_steam_id64)
     metrics = {
         "entry_success_pct": None,
@@ -1192,8 +1198,54 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
                 t += POSITIONING_SAMPLE_INTERVAL_TICKS
         alive_snap = parser.parse_ticks(["team_num", "is_alive"], ticks=sorted(sample_ticks))
 
+        # "Fake" clutch exclusion (HLTV's 2024 "adjusted clutch requirements",
+        # hltv.org/news/40818): a T-side clutch doesn't count if the bomb already made the
+        # round's outcome a foregone conclusion before the player was even down to their last
+        # life — i.e. more than one teammate was still alive at CTs' last realistic chance to
+        # start defusing (5s before detonation with a kit, 10s without). Standard CS2 C4 timer
+        # is 40s. CT-side clutches (defusing solo) aren't covered by this rule.
+        BOMB_TIMER_SECONDS = 40
+        DEFUSE_WINDOW_WITH_KIT_SECONDS = 5
+        DEFUSE_WINDOW_NO_KIT_SECONDS = 10
+
+        plant_tick_by_round = {}
+        if bomb_planted_df is not None and not bomb_planted_df.empty and "tick" in bomb_planted_df.columns:
+            for _, p in bomb_planted_df.iterrows():
+                rnd = _round_for(freeze_ticks, int(p["tick"]))
+                if rnd is not None and rnd not in plant_tick_by_round:
+                    plant_tick_by_round[rnd] = int(p["tick"])
+
+        detonation_by_round = {
+            rnd: plant_tick + int(BOMB_TIMER_SECONDS * TICK_RATE)
+            for rnd, plant_tick in plant_tick_by_round.items()
+        }
+        deadline_ticks = set()
+        for detonation_tick in detonation_by_round.values():
+            deadline_ticks.add(detonation_tick - int(DEFUSE_WINDOW_WITH_KIT_SECONDS * TICK_RATE))
+            deadline_ticks.add(detonation_tick - int(DEFUSE_WINDOW_NO_KIT_SECONDS * TICK_RATE))
+        defuse_snap = (
+            parser.parse_ticks(["team_num", "is_alive", "has_defuser"], ticks=sorted(deadline_ticks))
+            if deadline_ticks else pd.DataFrame()
+        )
+
+        def is_fake_t_clutch(round_number) -> bool:
+            if round_number not in detonation_by_round or defuse_snap.empty:
+                return False
+            detonation_tick = detonation_by_round[round_number]
+            kit_check_tick = detonation_tick - int(DEFUSE_WINDOW_WITH_KIT_SECONDS * TICK_RATE)
+            kit_rows = defuse_snap[
+                (defuse_snap["tick"] == kit_check_tick) & (defuse_snap["team_num"] == 3) & (defuse_snap["is_alive"])
+            ]
+            any_defuser = bool(kit_rows["has_defuser"].any()) if not kit_rows.empty else False
+            window_seconds = DEFUSE_WINDOW_WITH_KIT_SECONDS if any_defuser else DEFUSE_WINDOW_NO_KIT_SECONDS
+            deadline_tick = detonation_tick - int(window_seconds * TICK_RATE)
+            ts_alive_at_deadline = defuse_snap[
+                (defuse_snap["tick"] == deadline_tick) & (defuse_snap["team_num"] != 3) & (defuse_snap["is_alive"])
+            ]
+            return len(ts_alive_at_deadline) > 1
+
         clutches_won = 0
-        for start_tick, end_tick, winner in round_bounds.values():
+        for round_number, (start_tick, end_tick, winner) in round_bounds.items():
             round_snap = alive_snap[(alive_snap["tick"] >= start_tick) & (alive_snap["tick"] <= end_tick)]
             if round_snap.empty:
                 continue
@@ -1216,6 +1268,8 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
                 if teammates_alive == 0 and enemies_alive >= 1:
                     was_clutch = True
                     break
+            if was_clutch and target_team == "T" and is_fake_t_clutch(round_number):
+                was_clutch = False
             if was_clutch:
                 clutches_won += 1
         metrics["clutches_won"] = clutches_won
@@ -1543,6 +1597,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         fire_bullets_df = pd.DataFrame()
         bullet_hit_df = pd.DataFrame()
         slot_to_steamid = {}
+        bomb_planted_df = pd.DataFrame()
         try:
             round_end_df = parse_event(parser, "round_end")
             fire_df = parse_event(parser, "weapon_fire")
@@ -1550,8 +1605,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             bullet_hit_df = parse_event(parser, "player_bullet_hit")
             bullet_damage_df = parse_event(parser, "bullet_damage")
             slot_to_steamid = _build_slot_to_steamid_map(bullet_hit_df, bullet_damage_df)
+            bomb_planted_df = parse_event(parser, "bomb_planted")
         except Exception as e:
-            print(f"⚠️ Warning parsing shared round_end/weapon_fire/fire_bullets/player_bullet_hit: {e}")
+            print(f"⚠️ Warning parsing shared round_end/weapon_fire/fire_bullets/player_bullet_hit/bomb_planted: {e}")
 
         # Rounds where target got a 2/3/4/5(ace)-kill — pure aggregation of deaths_df, already
         # parsed above; grouped by round via the same _round_for helper every fact_* extractor uses.
@@ -1586,7 +1642,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         # unranked/other modes — the frontend shows "—" for that match's rank pill in that case.
         _rank_new_unused, rank_at_match_start, _rank_type_unused = _get_player_rank(parser, target_steam_id64)
 
-        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df)
+        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df, bomb_planted_df)
 
         fact_economy_rows = extract_fact_economy(parser, target_steam_id64, freeze_ticks)
         if fact_economy_rows:

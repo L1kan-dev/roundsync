@@ -67,10 +67,10 @@ Implementing these means *matching a known definition*, not inventing one.
 - **KAST** (assemble from data already collected) → §KAST
 - **True Time to Damage** (visibility-anchored, ms, median, ≥1s excluded) → §Time to Damage
 - **Reaction time** (ms, tick-level, ~190-300ms scale) → §Reaction time
-- **Trade kill %** (align window to 4s) → §Trade kill %
+- **Trade kill %** (window aligned to 4s — DONE, 2026-08-30) → §Trade kill %
 - **Entry/opening duel success** (already correct) → §Entry / opening duel success
-- **Flash assist** (add HLTV's 1.1s minimum) → §Flash assist
-- **Clutch won** (add "fake clutch" exclusion) → §Clutch won
+- **Flash assist** (HLTV's 1.1s minimum added — DONE, 2026-08-30) → §Flash assist
+- **Clutch won** ("fake clutch" exclusion added — DONE, 2026-08-30) → §Clutch won
 - **Utility damage per round** (already correct) → §Utility damage per round
 - **Headshot accuracy** (% of hits, not kills) → §Full industry inventory
 - **Weapon-segmented stats** (AWP/rifle/pistol splits) → §Full industry inventory
@@ -234,9 +234,10 @@ be setting its own methodology, not matching one.
 - **Purpose**: measures whether a player capitalizes on the moment an enemy
   is most vulnerable.
 - **Measurement**: percentage; window is the key design parameter.
-- **RoundSync verdict**: **already have it**, window is 3s vs Leetify's 4s
-  — changing `TRADE_KILL_WINDOW_TICKS` to 4s would make it directly
-  comparable to Leetify's published figure.
+- **RoundSync verdict**: **fixed, 2026-08-30** — `TRADE_KILL_WINDOW_TICKS`
+  changed 3s → 4s, now directly comparable to Leetify's published figure.
+  Feeds `fact_positioning_risk`'s trade check, `trade_kill_pct`, and KAST —
+  all three share the one constant.
 - **Legal**: generic concept, safe.
 - **Sources**: [blog.scope.gg/trade-kills-en](https://blog.scope.gg/trade-kills-en/), [csgo-guides.com/gameplay/trading](https://csgo-guides.com/gameplay/trading), [leetify.com/blog/what-is-leetify-rating](https://leetify.com/blog/what-is-leetify-rating/)
 
@@ -259,9 +260,9 @@ be setting its own methodology, not matching one.
   excludes "half-blind" cases under ~1.1 seconds.
 - **Purpose**: credits utility usage that leads to a kill.
 - **Measurement**: count / percentage of flashes.
-- **RoundSync verdict**: **already have it, matches Valve's own looser
-  definition.** Doesn't have HLTV's 1.1s minimum — add it to match HLTV's
-  stricter number.
+- **RoundSync verdict**: **fixed, 2026-08-30** — added
+  `FLASH_ASSIST_MIN_BLIND_SECONDS = 1.1`; a kill on a blinded victim only
+  credits the flash assist if the blind duration met that minimum.
 - **Legal**: generic concept, safe.
 - **Sources**: [hltv.org/news/34796](https://www.hltv.org/news/34796/using-flashbang-statistics-effectively)
 
@@ -273,8 +274,13 @@ be setting its own methodology, not matching one.
   moment).
 - **Purpose**: identifies late-round, high-pressure performers.
 - **Measurement**: count, sometimes by 1v1/1v2/.../1v5 (1v1≈50%, 1v2≈15-22%, 1v3≈5-8%, 1v4≈1-2%).
-- **RoundSync verdict**: **already have it, baseline definition only.**
-  Doesn't implement HLTV's "fake clutch" exclusion — low priority.
+- **RoundSync verdict**: **fixed, 2026-08-30** — implements HLTV's real
+  rule (confirmed against the source article, not guessed): a T-side clutch
+  is disqualified if more than one teammate was still alive at CTs' last
+  realistic chance to start defusing (5s before detonation with a kit, 10s
+  without; standard 40s C4 timer). Needed a new `bomb_planted` parse,
+  folded into the Tier 9 shared pre-parse. CT-side clutches aren't covered
+  by HLTV's published fix, so left untouched.
 - **Legal**: generic concept, safe.
 - **Sources**: [hltv.org/news/40818](https://www.hltv.org/news/40818/introducing-adjusted-clutch-requirements), [hltv.org/stats/players/13514/clutch](https://www.hltv.org/stats/players/13514/clutch)
 
