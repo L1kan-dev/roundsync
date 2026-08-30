@@ -133,12 +133,19 @@ app.get('/api/matches', authenticateToken, async (req, res) => {
   const steamId = req.user.steamId;
 
   try {
+    // Aligned to watcher.py's MATCH_RETENTION_LIMIT (30) — a metrics-placement review
+    // 2026-08-31 found this used to say 50 while the Insights dashboard and AI Coach
+    // (server.js's buildDashboardPayload/api/coaching/ask) both used 30, which looked like a
+    // real cross-tab data-window mismatch until watcher.py's retention cap was checked: the
+    // database never actually holds more than 30 matches per user regardless of what any
+    // query here asks for, so 50 was dead margin, not a real 50-match window. Matching the
+    // real cap removes the false impression of an inconsistency for anyone reading this file.
     const { data: matches, error } = await supabase
       .from('matches')
       .select('match_id, match_data, parsed_at')
       .eq('steam_id64', steamId)
       .order('parsed_at', { ascending: false })
-      .limit(50);
+      .limit(30);
 
     if (error) {
       console.error('❌ Failed to fetch matches:', error.message);
@@ -658,27 +665,41 @@ function performanceIndexServer(t) {
   return Math.round(score * 100);
 }
 
+// K/D, ADR, and HS% below are pooled/weighted by their real per-map totals, not a naive
+// average of each match's own ratio — same "don't average the percentages, pool the real
+// counts" principle as the client's avgWeighted() in page.tsx (which this used to disagree
+// with: this function used to average per-match kd_ratio/adr/headshot_pct directly, so a map
+// played in a handful of matches could show a materially different K/D here than Home's own
+// tile for the SAME underlying matches, not just a different number of matches — an actual
+// computation-method mismatch caught during a metrics-placement review, not just a different
+// window size). Performance Index stays a simple average, matching Home's own tile (it's
+// already a bounded 0-100 score, not a rate with a real denominator to pool).
 function buildMapBreakdown(matchList) {
   const byMap = new Map();
   for (const m of matchList) {
     const t = m.match_data?.telemetry || {};
     const map = m.map || t.map;
     if (!map || t.kd_ratio === undefined || t.kd_ratio === null) continue;
-    if (!byMap.has(map)) byMap.set(map, { map, games: 0, kdSum: 0, adrSum: 0, hsSum: 0, perfSum: 0 });
+    if (!byMap.has(map)) {
+      byMap.set(map, { map, games: 0, killSum: 0, deathSum: 0, dmgSum: 0, roundSum: 0, hsSum: 0, killWeightSum: 0, perfSum: 0 });
+    }
     const entry = byMap.get(map);
     entry.games += 1;
-    entry.kdSum += t.kd_ratio || 0;
-    entry.adrSum += t.adr || 0;
-    entry.hsSum += t.headshot_pct || 0;
+    entry.killSum += t.kills || 0;
+    entry.deathSum += t.deaths || 0;
+    entry.dmgSum += (t.adr || 0) * (t.rounds_played || 0);
+    entry.roundSum += t.rounds_played || 0;
+    entry.hsSum += (t.headshot_pct || 0) * (t.kills || 0);
+    entry.killWeightSum += t.kills || 0;
     entry.perfSum += performanceIndexServer(t);
   }
   return Array.from(byMap.values())
     .map((e) => ({
       map: e.map,
       games: e.games,
-      avg_kd: round1(e.kdSum / e.games),
-      avg_adr: round1(e.adrSum / e.games),
-      avg_hs_pct: round1(e.hsSum / e.games),
+      avg_kd: round1(e.killSum / Math.max(1, e.deathSum)),
+      avg_adr: round1(e.roundSum > 0 ? e.dmgSum / e.roundSum : 0),
+      avg_hs_pct: round1(e.killWeightSum > 0 ? e.hsSum / e.killWeightSum : 0),
       avg_performance: round1(e.perfSum / e.games),
     }))
     .sort((a, b) => b.games - a.games);
