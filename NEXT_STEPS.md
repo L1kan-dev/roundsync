@@ -125,7 +125,7 @@ files per awpy's docs, rather than waiting indefinitely.
 - [x] AI Coach adaptive prompt framing — DONE, 2026-08-31. User feedback, direct quote: "you tend to think the players using the application is not good... what about if a high rank player wants to improve? ... having a mindset of the player is bad makes high rank players question the questions more." Every hardcoded-deficiency `promptCoach()` call across Home/Matches/Insights assumed the player was underperforming regardless of their actual number. Chose "full pass, adaptive framing" (user's explicit choice over a narrower fix). New `frontend/lib/promptTone.ts`: `statTier()`/`adaptivePrompt()` classify a stat as weak/neutral/strong against real published benchmarks (web-searched 2026-08-31, sourced inline in the file: K/D, ADR, headshot%, KAST, entry-success%, utility-dmg/round from pley.gg/cs2bet.io/blog.cs2.ad/leetify/recoilanalytics/faceitfinder; RoundSync's own `performanceIndex` scale is explicitly flagged as an internal convention, not external research). No benchmark exists for trade-kill%, clutches-won, multi-kill counts, or headshot-accuracy(vs-kill%) — those stay neutrally worded instead of getting a fabricated threshold. Applied across ~10 `page.tsx` prompts (Performance Index, K/D, ADR, HS%, Entry Success%, Utility Dmg/Rd, KAST, plus both per-match "what went wrong" prompts on the carousel and Matches cards, which branch on that match's own performance index) and ~2 adaptive + ~7 neutrally-reworded prompts in `InsightsDashboard.tsx`. Verified live (headed Playwright, mocked a K/D-1.8/ADR-100/HS-55%/KAST-80 player): K/D prompt now reads "already strong — what's the next-level habit that separates this from elite?" instead of presuming a deficiency.
 
 **Band 8 — Research-only, no build attached yet.**
-- Tier 12: player-wanted-gaps research
+- [x] Tier 12: player-wanted-gaps research — DONE, 2026-08-31, see Tier 12 below. Findings moved to `IDEAS.md` items 7-9, not a build queue yet.
 - Tier 6: Round Swing / win-probability-added academic line
 - Cheat detection (Tier 7) — flagged as a product-risk decision, needs explicit sign-off before research time goes toward it.
 
@@ -407,14 +407,24 @@ math validity + the "real question" test, performance, legal/licensing,
 and proactive original-idea generation. Applies to every RoundSync code
 change now, not just formal audits.
 
-## Tier 12 — Research queue: what players actually want that existing trackers don't offer
+## Tier 12 — Research queue: what players actually want that existing trackers don't offer — DONE, 2026-08-31
 
-A real research task, not a quick lookup — deliberately queued for its own
-session. Goal: find genuine gaps in what Leetify/HLTV/Scope.gg/csstats.gg/
-tracker.gg currently offer, driven by what real players actually say they
-want, not by guessing at features.
+Ran the survey method below via a dedicated research pass. **Real tooling
+constraint hit:** Reddit and HLTV forums were blocked to the research
+tool's web access (403s) — substituted Steam Community discussions
+(including Leetify's own 191k-member Steam group), Trustpilot reviews of
+Leetify/Scope.gg, and tracker.gg's own public feedback board. Still real
+player-voiced sources, just thinner coverage than a full Reddit sweep
+would give — noted so this isn't mistaken for a complete survey later.
 
-**Suggested method, for whoever picks this up:**
+All surviving findings, sourced and cross-verified against each tracker's
+current shipped feature set, moved to `IDEAS.md` items 7-9 (highest
+confidence: async annotated demo review, automated buy-decision quality
+scoring, explainable round-level rating attribution) plus a "weaker/
+unsourced candidates" note for the rest, per this tier's own step 4 below.
+Nothing here jumped straight to a build queue — that was deliberate.
+
+**Method used:**
 1. Search real player-voiced sources (Reddit, Steam community discussions,
    existing trackers' own feedback threads), not marketing pages.
 2. Compile a raw list with sources, same rigor as `CS2_ANALYTICS_STANDARDS.md`'s
@@ -422,9 +432,6 @@ want, not by guessing at features.
 3. Cross-verify each item against what major trackers actually currently
    ship — a "gap" from 2 years ago might already be built by now.
 4. Whatever survives goes into `IDEAS.md`, not straight into a build queue.
-
-Not started. This is explicitly a research-first task — don't skip to "here's
-what I think players want" without the actual survey step above.
 
 ## Tier 11 — Lifetime stats via Steam Web API — DONE, 2026-08-27
 

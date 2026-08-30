@@ -101,3 +101,54 @@ enemy-visibility primitive Tier 2's true-accuracy rebuild is blocked on
 (Mirage Top-Mid-to-Sniper-Window) the user proposed as a frontend display
 idea is not yet built — that's a presentation layer on top of the now-real
 backend data, open for whoever picks up the frontend side.
+
+## 7. Async, timestamped demo review/annotation (from Tier 12 research, 2026-08-31)
+
+Real, player-voiced gap — sourced from `NEXT_STEPS.md` Tier 12's research
+pass (Reddit/HLTV were blocked to the research tool; sourced instead via
+Steam Community discussions, Trustpilot reviews, and tracker.gg's own
+public feedback board — real player-voiced channels, just thinner coverage
+than a full Reddit sweep). A third-party source (insights.gg) states
+plainly that a demo "can't be commented on asynchronously," which is why
+teams currently export to separate clip tools (ClutchKings.gg, DEMO-SLAP)
+just to get shareable, commentable review material. None of Leetify/
+csstats.gg/Scope.gg/tracker.gg ship native in-tool, per-round commenting —
+they do match summaries and highlight clips, not threaded annotation.
+**Feasibility: buildable from demo data + a review UI, no ML or population
+data needed** — and it fits RoundSync's existing coaching-facts direction
+directly. Highest-confidence item from the Tier 12 research pass.
+
+## 8. Automated economy/buy-decision quality scoring (from Tier 12 research, 2026-08-31)
+
+Real third-party demand: a dedicated Overwolf "Economy Tool" exists
+specifically because mainstream trackers show money/round-type state but
+don't grade whether a given buy (eco/force/quasi) was actually the right
+call. Not currently shipped as an automated per-round judgment by Leetify/
+csstats.gg/Scope.gg. **Feasibility: fully buildable from demo data alone**
+(money, round type, loss-bonus state) — no ML needed. Note: RoundSync
+already has a related but different heuristic,
+`buy_decisions_against_team_economy_pct` (see `NEXT_STEPS.md` Tier 6's
+"Optimal Spending Error" note) — this idea is closer to a real per-round
+"was this buy correct" verdict, not the same thing.
+
+## 9. Explainable, round-level rating attribution instead of an opaque score (from Tier 12 research, 2026-08-31)
+
+Leetify Trustpilot reviewers report the rating "feels hit and miss" even
+with a category breakdown already shown — the complaint is about
+*trusting/understanding* the number, not the number's accuracy. Gap is a
+round-by-round "why this score" attribution, not just a static category
+split. Directly relevant to RoundSync's own Performance Index (Tier 10,
+`NEXT_STEPS.md`) — since that's already a documented weighted blend,
+surfacing *which* component drove a given match's score (not just the
+final number) may be a cheap extension once picked up.
+
+**Weaker/unsourced candidates from the same research pass, kept for
+completeness, not yet worth building on:** unified FACEIT+Premier+MM
+identity (real demand elsewhere, but RoundSync is already demo-source-
+agnostic so this isn't really a gap for it); skill-matched teammate finder
+(old 2022 thread, needs population data RoundSync doesn't have); crosshair-
+placement-as-a-first-class-metric (likely already covered via HS% proxy
+elsewhere); automatic role segmentation (no direct player quote found,
+speculative); custom/scrim demo ingestion (inferred from tooling, not a
+direct complaint, and likely moot since RoundSync already ingests any raw
+`.dem` file regardless of source).
