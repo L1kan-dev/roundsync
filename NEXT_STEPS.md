@@ -97,14 +97,23 @@ All 4 came from actually using the live app — full detail in archive, Tier
 - [x] Flash assist: add HLTV's 1.1s minimum blind duration (`FLASH_ASSIST_MIN_BLIND_SECONDS`) before crediting a kill on a blinded victim.
 - [x] Clutch won: exclude "fake" T-side clutches per HLTV's 2024 adjusted-clutch-requirements rule (verified against hltv.org/news/40818) — disqualified if more than one teammate was still alive at CTs' last realistic chance to start defusing (5s before detonation with a kit, 10s without; standard 40s C4 timer). Needed a new `bomb_planted` parse, added to the Tier 9 shared pre-parse and threaded into `extract_match_secondary_metrics` as `bomb_planted_df`. CT-side clutches aren't covered by this rule (not part of HLTV's published fix).
 
-**Band 6 — Bigger builds, sequenced by shared dependency.**
+**Band 6 — Bigger builds, sequenced by shared dependency. BLOCKED
+upstream, 2026-08-30.**
 Tier 2's Time to Damage and reaction-time rebuilds both need a real
-player-visibility primitive. **`awpy` evaluated 2026-08-30 — real, usable,
-low-risk (see Tier 6 below and `CS2_ANALYTICS_STANDARDS.md`'s Academic/
-open-source layer section for the full verdict).** Not yet installed —
-integrating it (adding the dependency, running `awpy get tris`, wiring
-`VisibilityChecker` into the pipeline) is the next actual build step,
-pending the user's go-ahead.
+player-visibility primitive. `awpy` looked like the answer (real API,
+MIT, built on the same `demoparser2` already in use) — but real testing
+2026-08-30 found its own asset pipeline is currently broken: `awpy get
+tris` 404s against every build ID tried, including the newest one awpy's
+own CI has published, so the library can't actually serve the map data
+`VisibilityChecker` needs right now. Not a RoundSync mistake — confirmed
+upstream. Reverted the `requirements.txt`/`Dockerfile` changes that had
+been added for this (a broken `RUN awpy get tris` step would have failed
+the watcher service's Docker build in production). Full trail in
+`CS2_ANALYTICS_STANDARDS.md`'s Academic/open-source layer section. **Next
+step for whoever picks this back up: re-check whether `awpy get tris`
+works again before resuming** — if still broken, the workaround is
+building `.tri` mesh files locally from the game's own installed map
+files per awpy's docs, rather than waiting indefinitely.
 
 **Band 7 — Bigger UX asks, real value but bigger scope.**
 - Match-detail drill-down page
@@ -285,14 +294,18 @@ actual lift, cheapest first:
 ## Tier 6 — Academic/open-source layer (legally cleanest path to anything HLTV-Impact-like)
 
 - [x] **Evaluate `awpy` (MIT license, github.com/pnxenopoulos/awpy) — DONE,
-      2026-08-30.** Real, usable, low-risk: runs on top of the same
-      `demoparser2` `sync_pipeline.py` already uses (not a second parser to
-      reconcile), exposes `awpy.visibility.VisibilityChecker.is_visible(p1,
-      p2)` at ~65-177μs/check with a one-time per-map BVH build (744ms-9.6s),
-      covers CS2's current competitive map pool. Full findings in
-      `CS2_ANALYTICS_STANDARDS.md`. **Not yet installed/integrated** — next
-      step is adding the dependency and wiring it into Tier 2's TTD/
-      reaction-time rebuild, pending go-ahead.
+      2026-08-30, verdict: BLOCKED upstream.** Design is sound: runs on top
+      of the same `demoparser2` `sync_pipeline.py` already uses, exposes
+      `awpy.visibility.VisibilityChecker.is_visible(p1, p2)` at
+      ~65-177μs/check with a one-time per-map BVH build (744ms-9.6s), covers
+      CS2's current competitive map pool. **But real testing found `awpy get
+      tris` — the only way to get the map data the checker needs — 404s
+      against awpy's own asset mirror for every build ID tried**, including
+      the newest one their own CI has published. Confirmed a real upstream
+      bug, not a RoundSync mistake. Nothing installed in production; the
+      `requirements.txt`/`Dockerfile` changes made for this were reverted
+      the same session once the block was found. Full trail in
+      `CS2_ANALYTICS_STANDARDS.md`. Re-check before resuming.
 - [ ] Nav-mesh data as a possibly more reliable path to bombsite resolution
       than the manual callout-centroid approach — not yet evaluated in
       detail (visibility was the priority check).

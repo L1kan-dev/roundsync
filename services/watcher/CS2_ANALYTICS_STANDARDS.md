@@ -480,11 +480,37 @@ URL.
     smoke blocking a would-be sightline just correctly produces no
     visibility event, which is the right outcome) but worth remembering if
     it's ever used for something claiming smoke-awareness.
-  - **Verdict: real, usable, low-risk dependency to add.** Unlocks Tier 2's
-    TTD/reaction-time rebuild and Tier 5's raw/spray accuracy off one
-    shared primitive, exactly as the Dependency Map in `NEXT_STEPS.md`
-    predicted. Not yet installed/integrated — this entry is the research
-    verdict, not a build confirmation.
+  - **UPDATE, same session, 2026-08-30: `awpy get tris` is actually
+    broken right now — verdict downgraded from "usable" to "blocked
+    upstream."** Caught by real testing, not assumed from the docs: set up
+    an isolated Python 3.12 venv (awpy requires `<3.14`, this machine's
+    default `python` is 3.14.7), `pip install awpy` succeeded cleanly, but
+    `awpy get tris` fails with a live HTTP 404 against
+    `https://awpycs.com/17595823/tris.zip` — the exact URL awpy's own code
+    builds from its hardcoded `CURRENT_BUILD_ID`. Chased further before
+    concluding this: awpy's GitHub has an automated CI process that opens
+    "artifacts/NNNNNNN" PRs on every CS2 patch (newest found: build
+    24074625), but (a) the `main` branch's shipped `CURRENT_BUILD_ID`
+    constant is still the stale `17595823` from March 2025 — those CI PRs
+    never update it — and (b) probing the mirror directly with `curl`
+    against 5 different build IDs, including the newest CI-tracked one,
+    returned 404 every time. No GitHub Releases exist as a fallback
+    either (checked, zero releases published). **This is a real bug in
+    `awpy`'s own asset pipeline, not a RoundSync integration mistake** —
+    the library is currently unable to serve the one file
+    (`VisibilityChecker`) actually needs to function, for anyone.
+  - **Verdict: real dependency, sound design, MIT-licensed — but not
+    currently installable-and-usable.** The rest of this evaluation (API
+    shape, performance numbers, licensing, demoparser2 compatibility)
+    still stands and should hold once the upstream mirror is fixed. **Do
+    not add `awpy` to `requirements.txt` or `Dockerfile` until `awpy get
+    tris` actually succeeds against a real, fresh install** — a Docker
+    build step calling it would break the watcher service's deploy
+    outright. Re-check this before resuming Tier 2's TTD rebuild; if
+    still broken, consider filing the same kind of upstream issue as
+    `reference_hookify_plugin_broken` (memory), or building the .tri mesh
+    files locally from the game's own installed map files as awpy's docs
+    describe, as a workaround.
 - **"Valuing Player Actions in Counter-Strike: Global Offensive"**
   (Xenopoulos et al., IEEE Big Data 2020, arxiv.org/abs/2011.01324) —
   published, open framework valuing every in-game action by win-probability
