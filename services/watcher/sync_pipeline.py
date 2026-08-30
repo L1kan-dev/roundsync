@@ -340,6 +340,15 @@ WALK_SPEED_THRESHOLD_UPS = 80.0
 RUNNING_AUDIBLE_RANGE_UNITS = 1000.0
 WALKING_AUDIBLE_RANGE_UNITS = 900.0
 
+# 34% of a rifle's max run speed is the real CS2 threshold below which a shot fires with zero
+# movement-inaccuracy penalty (researched 2026-08-31, cross-checked against multiple independent
+# sources describing the exact same 34%/~88 ups figure, including NextFrag's shipped "counter-
+# strafe clean shot %" demo-analysis metric — not a RoundSync guess). Scoped to rifle-class
+# weapons only, matching the same rifle-only convention Leetify uses for its published spray-
+# accuracy stat (see CS2_ANALYTICS_STANDARDS.md) — other weapon classes have different max
+# speeds this threshold wasn't verified against.
+COUNTER_STRAFE_ACCURATE_SPEED_UPS = 88.0
+
 
 def _angle_diff(a: float, b: float) -> float:
     """Signed shortest distance between two angles in degrees, handling the -180/180 wraparound."""
@@ -1215,7 +1224,7 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
     return rows
 
 
-def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df, bomb_planted_df, hurt_df) -> dict:
+def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df, bomb_planted_df, hurt_df, fire_df, fire_bullets_df) -> dict:
     """Home-dashboard/Insights KPI tiles, computed once per match from data already parsed here
     (freeze_ticks/round_end_df/deaths_df/bomb_planted_df/hurt_df are all passed in so this
     doesn't re-run parse_event() a second time for events every other extract_fact_* function
@@ -1233,6 +1242,7 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
         "weapon_segmented_stats": None,
         "kills_damage_by_round_outcome": None,
         "kill_distance_buckets": None,
+        "counter_strafe_clean_shot_pct": None,
     }
     try:
         if not freeze_ticks or round_end_df.empty or "round" not in round_end_df.columns:
@@ -1528,6 +1538,59 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
                 if bool(kill.get("headshot")):
                     kill_distance_buckets[bucket]["headshots"] += 1
         metrics["kill_distance_buckets"] = kill_distance_buckets
+
+        # --- 9. Counter-strafe clean shot % — rifle-only (matches Leetify's rifle-only scoping
+        # for its analogous spray-accuracy stat). "Clean" = the shooter's own real ground speed
+        # at the instant of firing was at/under COUNTER_STRAFE_ACCURATE_SPEED_UPS, the actual
+        # CS2 movement-inaccuracy threshold. Speed is computed from real position deltas (one
+        # tick before the shot vs. fire_bullets' own exact position at the shot), not a raw
+        # velocity tick field — same reasoning as RUN_SPEED_THRESHOLD_UPS above: raw velocity
+        # fields are known to silently drop from bulk parse_ticks() calls.
+        #
+        # Deliberately NOT excluding airborne shots via fire_bullets' player_inair field —
+        # verified against a real match (2026-08-31) that it comes back NaN for every row, never
+        # populated. That's not just "unavailable" — bool(float('nan')) is True in Python, so an
+        # earlier version of this code silently treated every single shot as airborne and skipped
+        # it, which is why this stat first came back None on a real player with 16 real rifle
+        # shots. Cross-checked two independent ways to confirm player_inair itself is the broken
+        # part, not this player's actual movement: the player's own Z position was completely
+        # flat (no jump arc at all) during every one of those "airborne" shots, and
+        # bullet_damage's separate in_air field said False for the one matching tick. Known
+        # limitation left in place rather than silently patched over: a real jump-shot (its own,
+        # separate inaccuracy penalty, unrelated to ground movement) can still register as
+        # "clean" here if the player's horizontal speed happened to be low mid-jump — no
+        # alternative airborne signal was verified as reliable in the time available, so this
+        # stat is honestly scoped to "ground-movement speed at time of fire" only, not full
+        # movement-inaccuracy state. Revisit if a real per-tick Z-velocity heuristic ever gets
+        # verified against real jump data (staircases/ramps make this non-trivial to get right).
+        if not fire_df.empty and "user_steamid" in fire_df.columns and not fire_bullets_df.empty:
+            my_rifle_fires = fire_df[
+                (fire_df["user_steamid"].astype(str) == target)
+                & (fire_df["weapon"].astype(str).apply(_classify_weapon_by_name) == "rifle")
+            ]
+            if not my_rifle_fires.empty:
+                my_fire_bullets = fire_bullets_df[fire_bullets_df["user_steamid"].astype(str) == target]
+                shot_ticks = sorted(int(t) for t in my_rifle_fires["tick"].unique())
+                prev_ticks = sorted(set(t - 1 for t in shot_ticks))
+                prev_pos = parser.parse_ticks(["X", "Y"], ticks=prev_ticks) if prev_ticks else pd.DataFrame()
+
+                clean_shots, total_shots = 0, 0
+                for tick in shot_ticks:
+                    shot_row = my_fire_bullets[my_fire_bullets["tick"] == tick]
+                    if shot_row.empty:
+                        continue
+                    shot_row = shot_row.iloc[0]
+                    prow = prev_pos[(prev_pos["tick"] == tick - 1) & (prev_pos["steamid"].astype(str) == target)]
+                    if prow.empty:
+                        continue
+                    dx = float(shot_row["origin_x"]) - float(prow.iloc[0]["X"])
+                    dy = float(shot_row["origin_y"]) - float(prow.iloc[0]["Y"])
+                    speed_ups = ((dx ** 2 + dy ** 2) ** 0.5) * TICK_RATE
+                    total_shots += 1
+                    if speed_ups <= COUNTER_STRAFE_ACCURATE_SPEED_UPS:
+                        clean_shots += 1
+                if total_shots > 0:
+                    metrics["counter_strafe_clean_shot_pct"] = round(100 * clean_shots / total_shots, 1)
     except Exception as e:
         print(f"⚠️ Warning parsing match secondary metrics: {e}")
     return metrics
@@ -1826,7 +1889,10 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         # unranked/other modes — the frontend shows "—" for that match's rank pill in that case.
         _rank_new_unused, rank_at_match_start, _rank_type_unused = _get_player_rank(parser, target_steam_id64)
 
-        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df, bomb_planted_df, hurt_df)
+        secondary_metrics = extract_match_secondary_metrics(
+            parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df, bomb_planted_df, hurt_df,
+            fire_df, fire_bullets_df
+        )
 
         fact_economy_rows = extract_fact_economy(parser, target_steam_id64, freeze_ticks)
         if fact_economy_rows:
@@ -1934,6 +2000,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "weapon_segmented_stats": secondary_metrics["weapon_segmented_stats"],
                 "kills_damage_by_round_outcome": secondary_metrics["kills_damage_by_round_outcome"],
                 "kill_distance_buckets": secondary_metrics["kill_distance_buckets"],
+                "counter_strafe_clean_shot_pct": secondary_metrics["counter_strafe_clean_shot_pct"],
                 "headshot_accuracy_pct": headshot_accuracy_pct,
                 "multi_kill_rounds": multi_kill_rounds,
                 "processing_seconds": round(time.time() - start_time, 1)

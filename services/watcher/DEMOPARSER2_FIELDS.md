@@ -242,7 +242,7 @@ instead. `rank_type_id` distinguishes Premier/Competitive/Wingman.
 - `player_blind`: `attacker_name/steamid`, `blind_duration`, `entityid`, `tick` — exact flash-effectiveness data category 2 needs.
 - `bullet_damage`: per-shot ballistics — `aim_punch_x/y/z`, `distance`, `inaccuracy_air/move/total`, `no_scope`, `num_penetrations`, `shoot_ang_x/y/z`, `recoil_index`, attacker/victim.
 - `player_bullet_hit`: `attacker_slot`, `damage`, `hit_group`, `is_kill`, `penetration_count`, `round` (!), `victim_pos_x/y/z`, `victim_slot` — **has `round` directly on the row and full victim position, richer than `weapon_fire` for category 5 (crosshair placement)**.
-- `fire_bullets`: `angles_x/y/z` (shooter's exact aim), `origin_x/y/z`, `player_inair`, `player_scoped`, `recoil_index`, `spread`, `round`, `weapon_id` — this is the real per-shot view-angle source, richer than assumed.
+- `fire_bullets`: `angles_x/y/z` (shooter's exact aim), `origin_x/y/z`, `player_inair` (**confirmed broken 2026-08-31 — see correction below**), `player_scoped`, `recoil_index`, `spread`, `round`, `weapon_id` — this is the real per-shot view-angle source, richer than assumed.
 - `other_death`: same shape as player_death but for killing props/entities, not players — low coaching value.
 
 **Economy/purchases:**
@@ -323,7 +323,19 @@ values came back (not just that the call didn't error):
 - **Player data (105 fields tested): confirmed working with real values** —
   `balance`, `start_balance`, `cash_spent_this_round`, `rank`, `comp_wins`,
   `has_defuser`, `has_helmet`, `armor_value`, `round_start_equip_value`,
-  position/velocity, etc. all returned real per-player values.
+  position, etc. all returned real per-player values. **`velocity`/
+  `velocity_X/Y/Z` correction, 2026-08-31:** this line previously listed
+  velocity alongside position as "confirmed working," but that wasn't
+  actually re-verified against a real demo for a real use case — it was a
+  generic bulk-sweep pass, not a check that the values were sane/non-null
+  in practice. This file's own code (`RUN_SPEED_THRESHOLD_UPS`'s comment in
+  `sync_pipeline.py`) already stated raw velocity fields are known to
+  silently drop from bulk `parse_ticks()` calls, which directly contradicted
+  this line — caught while building counter-strafing quality
+  (`NEXT_STEPS.md` Tier 5), which needed real shooter velocity and used the
+  already-proven position-delta technique instead of trusting this claim.
+  Treat `velocity`/`velocity_X/Y/Z` as unverified, not confirmed, until
+  someone actually checks it against a real demo and updates this note.
 - **Weapon (21 tested): confirmed working.**
 - **Game State (41 tested): confirmed working** — including
   `round_win_reason`, `ct_losing_streak`/`t_losing_streak`,
@@ -415,3 +427,34 @@ needed — this is what makes it the right tool for building the slot map
 above, even though `player_bullet_hit` is still the richer source for the
 duel-placement rebuild itself (it has `victim_pos_x/y/z`, which
 `bullet_damage` doesn't).
+
+## FOURTH CRAWL (2026-08-31) — `fire_bullets.player_inair` confirmed broken; `velocity`/`velocity_X/Y/Z` downgraded to unverified
+
+Found while building counter-strafing quality (`NEXT_STEPS.md` Tier 5).
+
+**`fire_bullets.player_inair` is `NaN` on every row, confirmed against a real
+downloaded match** — not a schema typo, the field genuinely returns from
+`parser.parse_event("fire_bullets", ...)` but every value is null. This
+matters more than a normal "field unavailable" gap because of a Python
+gotcha: `bool(float('nan'))` evaluates to `True`, so code written as `if
+row.get("player_inair", False): skip()` silently skips *every* row instead
+of erroring or skipping none — the failure is invisible unless the output
+is checked against real data. Confirmed the field itself is the broken
+part (not real player behavior) two independent ways on the same real
+match: the player's own Z-position was completely flat (no jump arc) during
+every one of the falsely-flagged ticks, and `bullet_damage`'s own, separate
+`in_air` column correctly said `False` for the matching tick. **Do not rely
+on `fire_bullets.player_inair` for anything until re-verified working on a
+different real match** — `bullet_damage.in_air` is the trustworthier
+sibling field when a hit actually connects, but it only exists on rows
+where a bullet landed, not on every shot fired.
+
+**`velocity`/`velocity_X/Y/Z`'s "confirmed working" status (THIRD CRAWL
+section, bulk-sweep note above) is downgraded to unverified**, for the same
+reason flagged 2026-08-30 in `sync_pipeline.py`'s `RUN_SPEED_THRESHOLD_UPS`
+comment: that bulk sweep only checked the call didn't error and returned
+*some* non-null values across 105 fields in one pass, not that this
+specific field is reliable for a real per-shot use case. Given
+`player_inair` just failed exactly this way on a field that also "passed"
+a bulk sweep, don't extend "was in the 105-tested list" to "is safe to
+build a real feature on" without a targeted re-check first.

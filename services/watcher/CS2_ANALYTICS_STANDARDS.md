@@ -320,10 +320,35 @@ extraction).
   extraction, needs `weapon_fire` matched against `player_hurt` plus
   enemy-visibility determination (same missing primitive as TTD, Tier 2).
   Spray accuracy reuses the existing `BURST_GAP_TICKS` burst grouping.
-- **Counter-strafing quality** — needs shooter velocity at each
-  `weapon_fire` tick. No raw velocity field in bulk `parse_ticks()`, but a
-  proven workaround exists: compute speed from position deltas, same
-  technique `_find_enemy_audible_triggers` already uses.
+- **Counter-strafing quality** — **done, 2026-08-31.**
+  `telemetry.counter_strafe_clean_shot_pct`. Rifle-only (matches Leetify's
+  own rifle-only scoping for spray accuracy, right above). Real CS2
+  movement-accuracy threshold confirmed via web research: 88 units/s (34%
+  of a rifle's max run speed) — cross-checked across multiple independent
+  sources, including NextFrag's shipped "counter-strafe clean shot %" demo
+  metric, not a RoundSync guess. Shooter velocity at each `weapon_fire`
+  tick computed from real position deltas (one tick before the shot vs.
+  `fire_bullets`' own exact origin at the shot), same technique
+  `_find_enemy_audible_triggers` already uses — deliberately NOT the raw
+  `velocity`/`velocity_X/Y/Z` tick field (see the note below this list;
+  `DEMOPARSER2_FIELDS.md`'s claim that it's "confirmed working" was never
+  actually re-verified against a real demo for this use case, and this
+  file's own code already carried a comment saying raw velocity fields are
+  known to silently drop from bulk `parse_ticks()` calls — the
+  already-proven position-delta path was used instead of trusting the
+  unverified claim). **Real bug caught during real-data verification, same
+  day:** the first version also tried excluding airborne shots via
+  `fire_bullets.player_inair`, which turned out to be `NaN` on every row of
+  a real downloaded match — combined with Python's `bool(float('nan')) ==
+  True`, every shot was silently getting treated as airborne and skipped,
+  so the stat first came back `None` on a player with 16 real rifle shots.
+  Confirmed via the player's own (flat) Z-trajectory and `bullet_damage`'s
+  separate `in_air` field (`False`) that the player's real movement was
+  fine and `player_inair` itself was the broken part. Fixed by dropping the
+  airborne exclusion — see `DEMOPARSER2_FIELDS.md`'s `player_inair`
+  correction for the field-level detail, and `NEXT_STEPS.md`'s entry for
+  the known limitation this leaves (a real jump-shot can still register as
+  "clean" if horizontal speed was low mid-jump).
 
 **Utility:**
 - **[CT] Smokes that stopped a push** — needs smoke position/timing

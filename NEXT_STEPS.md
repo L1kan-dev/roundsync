@@ -99,7 +99,9 @@ All 4 came from actually using the live app — full detail in archive, Tier
 
 **Band 6 — Bigger builds, sequenced by shared dependency. BLOCKED
 upstream, 2026-08-30.**
-Tier 2's Time to Damage and reaction-time rebuilds both need a real
+Tier 2's Time to Damage and reaction-time rebuilds, plus Tier 5's spray
+accuracy / raw accuracy (both need "was the enemy visible" gating per
+Leetify's own definition, confirmed 2026-08-31), all need a real
 player-visibility primitive. `awpy` looked like the answer (real API,
 MIT, built on the same `demoparser2` already in use) — but real testing
 2026-08-30 found its own asset pipeline is currently broken: `awpy get
@@ -218,11 +220,60 @@ actual lift, cheapest first:
       `extract_fact_utility_throw` is now captured as
       `fact_utility_throw.self_blind_duration` (new nullable column,
       migration applied) instead of being discarded via `continue`.
-- [ ] **Spray accuracy** — reuses the existing `BURST_GAP_TICKS` burst
-      grouping from `extract_fact_duel_placement`.
-- [ ] **Counter-strafing quality** — reuses the existing position-delta
-      speed calculation from `_find_enemy_audible_triggers`, applied to the
-      shooter instead of the target.
+- [ ] **Spray accuracy** — **moved out of "Cheap," was miscategorized.**
+      Verified 2026-08-31 against Leetify's own published definition (real
+      web research, not assumed): a spray is 3+ shots, and spray accuracy
+      only counts shots fired *while the enemy was spotted/visible* —
+      the same missing enemy-visibility primitive Tier 2/Band 6 needs,
+      currently blocked upstream (`awpy get tris` 404s, see Band 6). The
+      `BURST_GAP_TICKS` grouping (already in `extract_fact_duel_placement`)
+      only solves the "what counts as one spray" half of this, not the
+      "was the enemy actually visible" half — building it without that gate
+      would silently ship a different, weaker metric (hit-rate during any
+      3+ shot burst) under the "spray accuracy" label. Blocked on the same
+      dependency as Tier 2 until `awpy`'s asset pipeline is fixed or a
+      local `.tri`-mesh workaround is built — see Band 6 for the real
+      status. `CS2_ANALYTICS_STANDARDS.md` already correctly flagged this
+      dependency (line ~319); this file just hadn't matched it until now.
+- [x] **Counter-strafing quality** — DONE, 2026-08-31. New
+      `telemetry.counter_strafe_clean_shot_pct` (rifle-only, matching
+      Leetify's own rifle-only scoping for its analogous spray-accuracy
+      stat). "Clean" = the shooter's real ground speed at the instant of
+      firing was at/under the real CS2 movement-accuracy threshold — 88
+      units/s (34% of a rifle's max run speed), confirmed 2026-08-31 via
+      real web research cross-checking multiple independent sources
+      including NextFrag's shipped "counter-strafe clean shot %" demo
+      metric, not guessed. New `COUNTER_STRAFE_ACCURATE_SPEED_UPS` constant
+      in `sync_pipeline.py`. Speed computed from real position deltas (one
+      tick before the shot vs. `fire_bullets`' own exact origin at the shot
+      tick) — same convention `RUN_SPEED_THRESHOLD_UPS` already uses,
+      deliberately NOT the raw `velocity`/`velocity_X/Y/Z` tick fields,
+      since those are known to silently drop from bulk `parse_ticks()`
+      calls (an existing code comment already flagged this; resolves a
+      contradiction found in `DEMOPARSER2_FIELDS.md`'s bulk-field-sweep
+      note, which had claimed velocity "confirmed working" — that claim
+      wasn't re-verified against a real demo and the safer, already-proven
+      position-delta path was used instead).
+
+      **Real bug caught during real-data verification, same day:** an
+      earlier version tried to exclude airborne shots via
+      `fire_bullets.player_inair`, which came back `NaN` for every single
+      row in a real downloaded match — not just unavailable, but actively
+      wrong, since `bool(float('nan'))` is `True` in Python, so every shot
+      was silently treated as airborne and skipped, and the stat came back
+      `None` even for a player with 16 real rifle shots. Confirmed the
+      field itself was the broken part (not the player's real movement) two
+      independent ways: the player's own Z position was completely flat
+      during every one of those "airborne" ticks, and `bullet_damage`'s own
+      separate `in_air` field said `False` for the matching tick. Fix:
+      dropped the airborne exclusion entirely rather than trust the broken
+      field — verified against the same real match afterward, now correctly
+      returns `100.0` (16/16 clean shots), matching an independent manual
+      recomputation. Known, documented limitation left in place rather than
+      silently patched over: a real jump-shot (its own separate inaccuracy
+      penalty) could still register as "clean" if horizontal speed happened
+      to be low mid-jump — no reliable alternative airborne signal was
+      verified in the time available.
 - [ ] **Per-scenario clutch win rate** (1v1/../1v5, not lumped together) —
       small extraction change: persist `enemies_alive` at the clutch moment
       in `extract_match_secondary_metrics`, currently only a counter
