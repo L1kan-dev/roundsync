@@ -139,6 +139,45 @@ files per awpy's docs, rather than waiting indefinitely.
 - [x] Rank-change celebration effects — DONE, 2026-08-31. User confirmed they didn't know `RankChangeOverlay.tsx`'s effects already existed; watched both live (headed Playwright, not just screenshots — see `feedback_local_dev_testing_windows.md`), then asked for the takeover to feel bigger/louder. Real bug found along the way: the badge's own number and the takeover's number both jumped straight to the new value with zero animation — extracted a shared `useCountUp` hook (`frontend/lib/useCountUp.ts`) used by both `RankBadge.tsx` (badge glow + count-up) and the takeover. Bigger miss caught by the user directly: the takeover never rendered the actual CS2 rank badge SVG asset at all, just plain number text — replaced with a real `<RankBadge>` instance, same asset the profile tile uses. Particle burst bumped from a single 1.1s wave to two staggered 2.2s waves (`rank-particle-burst` in `globals.css`) since a single fast burst had already fully faded before a viewer's eyes settled on the takeover.
 - [x] Parse-time ETA — DONE, 2026-08-30. Full detail in Tier 10 below (was a stale duplicate entry here, left `[ ]` after Tier 10 was already marked done — fixed).
 - [x] AI Coach adaptive prompt framing — DONE, 2026-08-31. User feedback, direct quote: "you tend to think the players using the application is not good... what about if a high rank player wants to improve? ... having a mindset of the player is bad makes high rank players question the questions more." Every hardcoded-deficiency `promptCoach()` call across Home/Matches/Insights assumed the player was underperforming regardless of their actual number. Chose "full pass, adaptive framing" (user's explicit choice over a narrower fix). New `frontend/lib/promptTone.ts`: `statTier()`/`adaptivePrompt()` classify a stat as weak/neutral/strong against real published benchmarks (web-searched 2026-08-31, sourced inline in the file: K/D, ADR, headshot%, KAST, entry-success%, utility-dmg/round from pley.gg/cs2bet.io/blog.cs2.ad/leetify/recoilanalytics/faceitfinder; RoundSync's own `performanceIndex` scale is explicitly flagged as an internal convention, not external research). No benchmark exists for trade-kill%, clutches-won, multi-kill counts, or headshot-accuracy(vs-kill%) — those stay neutrally worded instead of getting a fabricated threshold. Applied across ~10 `page.tsx` prompts (Performance Index, K/D, ADR, HS%, Entry Success%, Utility Dmg/Rd, KAST, plus both per-match "what went wrong" prompts on the carousel and Matches cards, which branch on that match's own performance index) and ~2 adaptive + ~7 neutrally-reworded prompts in `InsightsDashboard.tsx`. Verified live (headed Playwright, mocked a K/D-1.8/ADR-100/HS-55%/KAST-80 player): K/D prompt now reads "already strong — what's the next-level habit that separates this from elite?" instead of presuming a deficiency.
+- [x] **AI Coach missing round-by-round data — FIXED, 2026-08-31.** Real bug,
+      caught by the user directly asking the Coach for a round-by-round
+      breakdown of their most recent match and being told that data didn't
+      exist — even though the match-detail drill-down page (above) already
+      serves exactly this data. Root cause: `/api/coaching/ask`
+      (`services/api/server.js`) only ever built `factSummary`, a
+      cross-match AGGREGATE of `fact_duel_placement`/`fact_positioning_risk`/
+      `fact_engage_decision` percentages, and never gave the model any
+      single match's real per-round breakdown — so the model was being
+      technically honest given what it was actually handed, not
+      hallucinating. Fix: extracted the drill-down page's own grouping logic
+      into `fetchRoundByRoundForMatch()` (shared with
+      `GET /api/matches/:matchId/rounds`, removing the prior duplication)
+      and now also fetch it for the player's single most recent match,
+      adding it to the Coach's prompt as real per-round data. Verified
+      against live production data (read-only SQL check, not assumed): the
+      most recent match has 40 duel rows/19 positioning rows/7 engage rows,
+      so the fix has real data to serve, not an empty array. Deliberately
+      scoped to the MOST RECENT match only, not all 30 — sending every
+      match's raw per-round rows every request would balloon prompt size/
+      Gemini cost for little benefit when the player usually means "my last
+      game." **Explicitly NOT the full fix — user pushed back on this same
+      day**, correctly: the Coach needs to answer about ANY match/round the
+      player references, not only the most recent one. Agreed direction for
+      tomorrow (Band 0): an Always/Topic split, same shape this project
+      already uses for its own memory/doc tiering — an "always" cheap
+      cross-match summary (what `factSummary`/`matchSummaries` already are)
+      plus "topic" data fetched ONLY on demand for whichever specific match/
+      round the question actually needs. The real mechanism for this on
+      Gemini is function-calling/tool-use: give the model callable tools
+      (e.g. "list recent matches," "get round-by-round for match X") instead
+      of the server pre-guessing which match to stuff into the prompt —
+      this is what keeps cost down, since a token is only spent on a
+      match's data when the model actually decided it needed it that turn,
+      not on all 30 every request. Real design work still needed before
+      building: how the model references "which match" back to the server
+      (index? match_id? by map+date?), how many tool-call round-trips are
+      acceptable cost/latency-wise, and how this interacts with
+      `conversationContext`'s existing multi-turn history.
 
 **Band 8 — Research-only, no build attached yet.**
 - [x] Tier 12: player-wanted-gaps research — DONE, 2026-08-31, see Tier 12 below. Findings moved to `IDEAS.md` items 7-9, not a build queue yet.

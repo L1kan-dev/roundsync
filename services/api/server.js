@@ -235,6 +235,37 @@ app.get('/api/matches/:matchId', authenticateToken, async (req, res) => {
 // persisted anywhere — round_end is only ever parsed transiently in sync_pipeline.py to
 // derive OTHER stats, never stored itself) — this is honestly scoped to "what happened to
 // the tracked player, round by round," which every one of these tables already captures.
+//
+// Extracted 2026-08-31 so /api/coaching/ask can reuse it — until this fix, the AI Coach only
+// ever received cross-match AGGREGATE percentages (summarizeFactRows), never a single match's
+// real round-by-round breakdown, so it would correctly (if confusingly) tell the player it
+// didn't have round-by-round data even though this exact data already existed and already
+// powers the match-detail page's own "Round by round" section. Real bug, caught by the user
+// actually asking the Coach for a round-by-round breakdown and getting refused.
+async function fetchRoundByRoundForMatch(steamId, matchId) {
+  const [duels, positioning, engage] = await Promise.all([
+    supabase.from('fact_duel_placement').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
+    supabase.from('fact_positioning_risk').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
+    supabase.from('fact_engage_decision').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
+  ]);
+
+  const roundNumbers = new Set([
+    ...(duels.data || []).map((r) => r.round_number),
+    ...(positioning.data || []).map((r) => r.round_number),
+    ...(engage.data || []).map((r) => r.round_number),
+  ]);
+
+  return Array.from(roundNumbers)
+    .sort((a, b) => a - b)
+    .map((round_number) => ({
+      round_number,
+      duels: (duels.data || []).filter((r) => r.round_number === round_number)
+        .sort((a, b) => a.engagement_tick - b.engagement_tick),
+      positioning: (positioning.data || []).filter((r) => r.round_number === round_number),
+      engage_decisions: (engage.data || []).filter((r) => r.round_number === round_number),
+    }));
+}
+
 app.get('/api/matches/:matchId/rounds', authenticateToken, async (req, res) => {
   const steamId = req.user.steamId;
   const { matchId } = req.params;
@@ -251,28 +282,7 @@ app.get('/api/matches/:matchId/rounds', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Match not found.' });
     }
 
-    const [duels, positioning, engage] = await Promise.all([
-      supabase.from('fact_duel_placement').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
-      supabase.from('fact_positioning_risk').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
-      supabase.from('fact_engage_decision').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
-    ]);
-
-    const roundNumbers = new Set([
-      ...(duels.data || []).map((r) => r.round_number),
-      ...(positioning.data || []).map((r) => r.round_number),
-      ...(engage.data || []).map((r) => r.round_number),
-    ]);
-
-    const rounds = Array.from(roundNumbers)
-      .sort((a, b) => a - b)
-      .map((round_number) => ({
-        round_number,
-        duels: (duels.data || []).filter((r) => r.round_number === round_number)
-          .sort((a, b) => a.engagement_tick - b.engagement_tick),
-        positioning: (positioning.data || []).filter((r) => r.round_number === round_number),
-        engage_decisions: (engage.data || []).filter((r) => r.round_number === round_number),
-      }));
-
+    const rounds = await fetchRoundByRoundForMatch(steamId, matchId);
     res.json({ rounds });
   } catch (err) {
     console.error('❌ Unexpected error fetching match rounds:', err.message);
@@ -941,7 +951,9 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
       };
     });
 
-    const [rows, recentHistory] = await Promise.all([
+    const mostRecentMatch = matchList[0] || null;
+
+    const [rows, recentHistory, mostRecentMatchRounds] = await Promise.all([
       fetchFactRows(steamId, matchIds),
       supabase
         .from('coaching_history')
@@ -950,6 +962,15 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
         .order('created_at', { ascending: false })
         .limit(CONVERSATION_HISTORY_TURNS)
         .then(({ data }) => (data || []).slice().reverse()),
+      // Real per-round breakdown for the single most recent match only — NOT every match, to
+      // keep the prompt from ballooning across up to 30 matches' worth of raw fact rows. This
+      // is the exact same data fetchRoundByRoundForMatch already builds for the match-detail
+      // drill-down page's "Round by round" section, just handed to the model too now. Before
+      // this fix the Coach only ever saw factSummary's cross-match AGGREGATE percentages and
+      // had no single-match, per-round data at all — real bug, caught 2026-08-31 when a player
+      // asked for a round-by-round breakdown of their most recent match and got told the data
+      // didn't exist, even though this exact endpoint already serves it on the frontend.
+      mostRecentMatch ? fetchRoundByRoundForMatch(steamId, mostRecentMatch.match_id) : Promise.resolve([]),
     ]);
     const factSummary = summarizeFactRows(rows);
     const rankInfo = extractRankInfo(rows.adaptation, matchIds);
@@ -973,7 +994,7 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
     Here is the recent conversation with this player, most recent last, for continuity:
     ${conversationContext}
 
-    The two JSON blocks below use raw internal field names (snake_case) so they stay compact
+    The JSON blocks below use raw internal field names (snake_case) so they stay compact
     — NEVER repeat a raw field name back to the player in your response. Always translate it
     to the player-facing term instead: "kd_ratio" -> "K/D ratio", "adr" -> "ADR", any field
     ending in "_pct" -> its plain-English name with a "%" sign on the number (e.g.
@@ -985,9 +1006,20 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
     Here is a summary of the player's last ${matchSummaries.length} matches:
     ${JSON.stringify(matchSummaries)}
 
-    Here is a statistical summary of the player's decision-making patterns, computed from
-    round-by-round data across those same matches (already aggregated for you, not raw event logs):
+    Here is a statistical summary of the player's decision-making patterns, computed by
+    AGGREGATING round-by-round data across ALL of those matches together (this is a
+    cross-match average/percentage, not any single match's own breakdown):
     ${JSON.stringify(factSummary)}
+
+    ${mostRecentMatch ? `Here is the REAL, actual round-by-round breakdown of the player's
+    MOST RECENT match only (map: ${mostRecentMatch.map || 'unknown'}) — one entry per round,
+    each with this player's own duels ("duels"), positioning risk moments ("positioning"), and
+    outnumbered-engagement decisions ("engage_decisions") that round. This IS real per-round
+    demo telemetry — if the player asks for a round-by-round analysis of their last/most
+    recent match, this is that data; do not claim round-by-round data doesn't exist. An empty
+    array for a given round/category just means nothing of that type happened that round for
+    this player (e.g. no duel = no gunfight with an opening shot that round), not missing data:
+    ${JSON.stringify(mostRecentMatchRounds)}` : ''}
 
     Player's Question / Request: ${question}
 
