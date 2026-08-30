@@ -153,6 +153,11 @@ async function processPendingMatches() {
       const outcomeId = telemetry.outcome_id;
       const token = telemetry.token;
 
+      // Skip a match still backing off from a recent failed attempt, instead of re-hitting
+      // the GC on every single 5s poll tick regardless of how recently it failed.
+      const nextRetryAt = telemetry.next_retry_at ? new Date(telemetry.next_retry_at).getTime() : 0;
+      if (nextRetryAt > Date.now()) continue;
+
       console.log(`🔍 Resolving match: ${dbMatchId} (Code: ${shareCode || matchIdCode})`);
 
       try {
@@ -160,20 +165,33 @@ async function processPendingMatches() {
 
         console.log(`📦 Successfully retrieved GC match details for ${dbMatchId}`);
 
-        // Note: roundstatsall[i].map is the MAP NAME (e.g. "de_mirage"), not a URL — confirmed
-        // via the real protobuf schema audit (see project docs). A fallback here that read
-        // from it would silently store a map name as a "download URL", failing confusingly
-        // later instead of at the source — removed rather than left in as a broken fallback.
+        // Valve's GC repurposes the LAST round's "map" field to carry the demo download URL
+        // instead of a map name (every other round's "map" is the real map name) — an
+        // undocumented quirk, confirmed against Valve's own current protobuf schema (no
+        // matchurl/url field exists anywhere in a real response) and a real, independent
+        // open-source tool (claabs/cs-demo-downloader) doing this exact same GC lookup. See
+        // CS2_ANALYTICS_STANDARDS.md's "Game Coordinator match resolution" section. Validated
+        // with startsWith('http') so a genuine map name can never be mistaken for a URL.
+        const lastRoundMap = gcData.roundstatsall && gcData.roundstatsall.length > 0
+          ? gcData.roundstatsall[gcData.roundstatsall.length - 1].map
+          : null;
+
         const directUrl =
           gcData.matchurl ||
           gcData.match_url ||
           gcData.url ||
           (gcData.watchablematchinfo && (gcData.watchablematchinfo.matchurl || gcData.watchablematchinfo.match_url)) ||
-          (gcData.match && (gcData.match.matchurl || gcData.match.match_url));
+          (gcData.match && (gcData.match.matchurl || gcData.match.match_url)) ||
+          (lastRoundMap && lastRoundMap.startsWith('http') ? lastRoundMap : null);
 
         if (directUrl) {
+          // Strip the backoff-tracking fields before this telemetry gets persisted — they'd
+          // otherwise ride along into every downstream stage (sync_pipeline.py spreads
+          // existing_telemetry forward all the way to the final 'fully_parsed' row) and sit
+          // in permanent storage forever, for every match that ever needed even one retry.
+          const { resolve_attempts, next_retry_at, ...telemetryWithoutBackoffState } = telemetry;
           const updatedTelemetry = {
-            ...telemetry,
+            ...telemetryWithoutBackoffState,
             match_id: matchIdCode ? matchIdCode.toString() : telemetry.match_id,
             outcome_id: outcomeId ? outcomeId.toString() : telemetry.outcome_id,
             token: token ? parseInt(token, 10) : telemetry.token,
@@ -194,15 +212,45 @@ async function processPendingMatches() {
           }
         } else {
           console.warn(`⚠️ No direct URL found in GC response for ${dbMatchId}`);
+          await persistBackoff(dbMatchId, currentMatchData, telemetry);
         }
       } catch (gcErr) {
         console.error(`❌ GC Resolution failed for match ${dbMatchId}:`, gcErr.message);
+        await persistBackoff(dbMatchId, currentMatchData, telemetry);
       }
     }
   } catch (err) {
     console.error('❌ Polling error:', err.message);
   } finally {
     isProcessingMatches = false;
+  }
+}
+
+const MAX_BACKOFF_MS = 5 * 60 * 1000; // never wait longer than 5 minutes between retries
+
+// Called whenever a match fails to resolve (no URL found, or the GC request itself errored).
+// Spaces out retries with exponential backoff instead of hammering the GC every 5s forever —
+// a genuinely stuck match (expired code, GC has no data for it) would otherwise get hit up to
+// ~34,000 times before watcher.py's 48h stuck-match cleanup ever removes it.
+async function persistBackoff(dbMatchId, currentMatchData, telemetry) {
+  const attempts = (telemetry.resolve_attempts || 0) + 1;
+  const delayMs = Math.min(5000 * 2 ** attempts, MAX_BACKOFF_MS);
+  const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+
+  const { error } = await supabase
+    .from('matches')
+    .update({
+      match_data: {
+        ...currentMatchData,
+        telemetry: { ...telemetry, resolve_attempts: attempts, next_retry_at: nextRetryAt }
+      }
+    })
+    .eq('match_id', dbMatchId);
+
+  if (error) {
+    console.error(`❌ Failed to persist backoff for ${dbMatchId}:`, error.message);
+  } else {
+    console.log(`⏳ ${dbMatchId}: attempt ${attempts} failed, retrying in ${Math.round(delayMs / 1000)}s`);
   }
 }
 

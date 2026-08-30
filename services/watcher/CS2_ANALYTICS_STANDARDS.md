@@ -2,10 +2,12 @@
 
 Research log for every stat RoundSync computes (or is considering computing),
 checked against how the wider CS2 analytics community (HLTV, Leetify, FACEIT,
-Scope.gg, csstats.gg) actually defines and measures it. Built during the
-2026-08-25 data audit session — see the "RoundSync Data Audit" artifact for
-the full bug list this research fed into. Check here before re-researching
-any of these terms.
+Scope.gg, csstats.gg) actually defines and measures it. Check here before
+re-researching any of these terms. **Trimmed 2026-08-28** — the research
+*process* behind several findings (rank badge pixel-measurement, the full
+Google AI Mode fact-checking trail) moved to
+`CS2_ANALYTICS_STANDARDS_ARCHIVE.md`, on-demand only; every verdict and
+reusable fact below is unchanged and complete on its own.
 
 Format per metric: **Calculation** (industry-standard definition) · **Purpose**
 (what question it answers) · **Measurement** (unit/scale/aggregation) ·
@@ -37,13 +39,13 @@ None of this is a legal opinion — it's engineering-level diligence. If
 RoundSync ships a public composite score, a real IP/trademark check before
 launch is the safe move, not this doc.
 
-**Added 2026-08-27 — the Steam bot account itself.** `services/gc-worker`
-logs into a real Steam account and automates it (connects to CS2's Game
-Coordinator, requests match data, runs unattended). Steam's Subscriber
-Agreement prohibits "bots"/"automation software" interacting with Steam's
-services, read literally. In practice, this is the *only* way to resolve a
-match share-code into a downloadable demo link — there's no official public
-API for it — and every third-party CS2 stats site (Leetify, Scope.gg,
+**The Steam bot account itself.** `services/gc-worker` logs into a real
+Steam account and automates it (connects to CS2's Game Coordinator,
+requests match data, runs unattended). Steam's Subscriber Agreement
+prohibits "bots"/"automation software" interacting with Steam's services,
+read literally. In practice, this is the *only* way to resolve a match
+share-code into a downloadable demo link — there's no official public API
+for it — and every third-party CS2 stats site (Leetify, Scope.gg,
 csstats.gg) runs the same kind of bot account to do exactly this. Valve has
 never enforced against this specific use. Same category of finding as the
 extracted-assets gray area above: real on paper, informally tolerated
@@ -78,17 +80,19 @@ Implementing these means *matching a known definition*, not inventing one.
 - **Kills/damage in round wins vs. losses** → §Full industry inventory
 - **Trade-kill funnel** (opportunity/attempt/success) → §Full industry inventory
 - **Per-scenario clutch win rate** (1v1..1v5) → §Full industry inventory
-- **Eco-frags / equipment value diff** → §Found via cross-checking Google AI Mode's answer
-- **Kill distance** → §Found via cross-checking Google AI Mode's answer
-- **CT/T side splits** → §Found by fetching AI Mode's actual cited sources
-- **Reconstructed duel context** (peek order) → §Found by fetching AI Mode's actual cited sources
+- **Eco-frags / equipment value diff** → §Full industry inventory
+- **Kill distance** → §Full industry inventory
+- **CT/T side splits** → §Full industry inventory
+- **Reconstructed duel context** (peek order) — no rigorous published
+  methodology, real derived-metric category per NextFrag's own product
+  (full source trail in `CS2_ANALYTICS_STANDARDS_ARCHIVE.md`)
 - **Heatmap / map control visualization** (data exists, frontend work) → §Full industry inventory
 - **Rank-tier label** (color band for a CS Rating number) → §Bracket comparison
 - **`awpy` as reference or dependency** (MIT) → §Academic / open-source layer
 - **Win-probability action-valuation methodology, Optimal Spending Error, Plus/Minus rating** — open academic foundations, legal to build from → §Academic / open-source layer
 - **Cheat-detection model itself** (CC BY 4.0 + open-source) — legal to use; see Not Allowed below for how it must be *presented* → §Cheat detection
 - **Lifetime stats via Steam Web API** (career K/D, win rate, per-weapon accuracy, etc. — DONE, 2026-08-27) → §Lifetime stats via Steam Web API
-- **Premier rank badge visual redesign** (real shape/color/number-formatting research, verified against a screenshot + gameplay recording — research done, component build in progress) → §Premier rank badge
+- **Premier rank badge visual redesign** — DONE, 2026-08-27, shipped. Full research process in `CS2_ANALYTICS_STANDARDS_ARCHIVE.md`.
 
 ### 🔧 Must build ourselves — no real external standard exists, or the data doesn't exist yet
 
@@ -97,7 +101,7 @@ be setting its own methodology, not matching one.
 
 - **Self-flash duration** — no published external definition; simple to
   build (data already captured then discarded) but the metric itself is a
-  RoundSync original → §Found via cross-checking Google AI Mode's answer
+  RoundSync original.
 - **[CT] Smokes that stopped a push** — no defined formula anywhere, must
   invent the correlation logic → §Full industry inventory
 - **Unused utility value on death** — no rigorous standard for "value" →
@@ -162,18 +166,14 @@ be setting its own methodology, not matching one.
 ## ADR — Average Damage per Round
 
 - **Calculation**: total damage dealt ÷ rounds played. **Each individual hit
-  is capped at 100 damage** (a target's max HP) before summing — an AWP hit
-  that calculates to 400 raw damage still only contributes 100, since you
-  can't remove more than one life's worth of health from one person.
+  is capped at 100 damage** (a target's max HP) before summing.
 - **Purpose**: consistency measure, less swingy than K/D since it counts
   near-misses (damage without a kill) too.
 - **Measurement**: integer/float, per round, capped per hit at 100.
-- **RoundSync verdict**: **fixed, 2026-08-25 (second session).** Was
-  summing raw uncapped `dmg_health`; now capped at all 3 confirmed sites
-  via a shared `capped_damage_sum()` helper in `sync_pipeline.py`. Only
-  affects matches synced from this fix onward — historical matches keep
-  their old uncapped value (CDN links expire, can't re-parse). See
-  `NEXT_STEPS.md`'s Completed section for the full before/after.
+- **RoundSync verdict**: **fixed, 2026-08-25.** Was summing raw uncapped
+  `dmg_health`; now capped at all 3 confirmed sites via a shared
+  `capped_damage_sum()` helper in `sync_pipeline.py`. Only affects matches
+  synced from this fix onward.
 - **Legal**: open, generic term. Safe.
 - **Sources**: [esports.net](https://www.esports.net/wiki/guides/cs2-adr-explained/), [thunderpick.io](https://thunderpick.io/blog/adr-in-cs2-everything-you-need-to-know), [daddyskins.com](https://daddyskins.com/blog/counterpedia/cs2-stats-explained-adr-kda-kast/)
 
@@ -183,127 +183,98 @@ be setting its own methodology, not matching one.
   assist, survive to round end, or die but get traded (teammate kills their
   killer within a short window)? Count of qualifying rounds ÷ total rounds.
 - **Purpose**: "how often did you contribute something," a floor-level
-  consistency stat — the idea it was built to fix is that raw K/D can look
-  bad for a player who dies a lot but almost always dies *usefully* (already
-  traded, already got the trade kill, etc).
+  consistency stat.
 - **Measurement**: percentage, per-round boolean OR'd across 4 conditions.
 - **RoundSync verdict**: **backend built, 2026-08-27.** Computed per-round
   in `extract_match_secondary_metrics` (`sync_pipeline.py`), stored as
-  `telemetry.kast_pct`. All four ingredients came from data/logic already
-  in the file — kills/assists from `player_death`'s own columns, survival
-  from the absence of a death row that round, traded death from the same
-  `TRADE_KILL_WINDOW_TICKS` trade-window logic already used for
-  `trade_kill_pct` (applied in the other direction: was target's own
-  killer avenged by a teammate). Displayed on the Home dashboard as its
-  own KPI tile as of the same day.
+  `telemetry.kast_pct`, displayed on the Home dashboard.
 - **Legal**: introduced by HLTV in 2017 as part of Rating 2.0, but the KAST
-  metric itself (unlike the overall Rating formula) is not proprietary —
-  it's now published independently by FACEIT, Leetify, Vandal, and others.
-  Safe to compute and display under its own name.
+  metric itself is not proprietary — published independently by FACEIT,
+  Leetify, Vandal, and others.
 - **Sources**: [daddyskins.com](https://daddyskins.com/blog/counterpedia/cs2-stats-explained-adr-kda-kast/), [cs2bet.io](https://www.cs2bet.io/cs2-stats/)
 
 ## Time to Damage (TTD)
 
 - **Calculation**: time from the moment an enemy becomes *visible* to you, to
-  the moment you deal damage to them. Leetify explicitly excludes any
-  instance ≥1 second (treated as "trigger discipline," not a real quick-draw
-  duel) and reports the **median** of the sample, not the mean, specifically
-  to resist outlier skew.
-- **Purpose**: pure aim-speed/target-acquisition metric — how fast your
-  crosshair-to-kill process is once an enemy is in view.
+  the moment you deal damage to them. Leetify excludes any instance ≥1
+  second (treated as "trigger discipline") and reports the **median**, not
+  the mean, to resist outlier skew.
+- **Purpose**: pure aim-speed/target-acquisition metric.
 - **Measurement**: **milliseconds**. Elite players: 100-200ms.
 - **RoundSync verdict**: **have a field with this name, but it measures
   something else.** Current `time_to_damage_seconds` runs from *your own
   first shot* to your first hit — skips the visibility/reaction phase
-  entirely, stored in seconds, mean-aggregated, no outlier exclusion. To
-  become real TTD needs line-of-sight/visibility detection between the two
-  players each tick — a real feature, not a patch. Cheaper interim option:
-  rename to something honest like "burst-to-hit time" until rebuilt.
-- **Legal**: the concept (reaction-to-damage timing) is generic. Leetify's
-  specific branded stat name and their exact enemy-visibility algorithm are
-  theirs — don't call RoundSync's version "Leetify Time to Damage."
+  entirely. Needs line-of-sight/visibility detection between players each
+  tick — a real feature, not a patch.
+- **Legal**: the concept is generic. Leetify's specific branded stat name
+  and their exact algorithm are theirs — don't call RoundSync's version
+  "Leetify Time to Damage."
 - **Sources**: [leetify.com/blog/enemy-actually-spotted](https://leetify.com/blog/enemy-actually-spotted/), [leetify.com/blog/aim-stat-calculation-hitboxes-improved](https://leetify.com/blog/aim-stat-calculation-hitboxes-improved/)
 
 ## Reaction time (to sound/sight cues)
 
-- **Calculation**: time from a specific stimulus (enemy sound cue — e.g.
-  bomb-plant beep, footsteps — or an enemy becoming visible) to the first
-  measurable response (view-angle change, movement).
-- **Purpose**: situational-awareness/game-sense proxy, distinct from raw
-  click-reflex tests.
-- **Measurement**: **milliseconds**. Typical range 190-300ms depending on
-  skill/hardware; sub-150ms considered elite.
+- **Calculation**: time from a specific stimulus (enemy sound cue or an
+  enemy becoming visible) to the first measurable response (view-angle
+  change, movement).
+- **Purpose**: situational-awareness/game-sense proxy.
+- **Measurement**: **milliseconds**. Typical range 190-300ms; sub-150ms
+  considered elite.
 - **RoundSync verdict**: **have a comparable concept, wrong scale.** Current
-  `reaction_time_seconds` samples in fixed 0.5s steps across a 0-3s window —
-  10-20x coarser than the real metric. To align: sample every tick after the
-  trigger (not every 0.5s), define "reacted" as first tick crossing a
-  yaw/movement threshold, store in ms.
+  `reaction_time_seconds` samples in fixed 0.5s steps — 10-20x coarser than
+  the real metric. To align: sample every tick, define "reacted" as first
+  tick crossing a yaw/movement threshold, store in ms.
 - **Legal**: generic concept, safe.
 - **Sources**: [insider-gaming.com](https://insider-gaming.com/what-is-reaction-time-and-does-it-make-you-better-at-cs2-or-valorant/)
 
 ## Trade kill %
 
 - **Calculation**: of a player's kills, what % avenged a teammate's death
-  within a short window (the enemy they killed had just killed a teammate).
-  Leetify's kill-chain grouping uses a **4-second** window.
+  within a short window. Leetify's kill-chain grouping uses a **4-second**
+  window.
 - **Purpose**: measures whether a player capitalizes on the moment an enemy
-  is most vulnerable (reloading/repositioning after a kill).
-- **Measurement**: percentage; window is the key design parameter (community
-  range observed: 3-5 seconds depending on the tool).
-- **RoundSync verdict**: **already have it**, window is 3s vs Leetify's 4s —
-  close enough to be defensible, but changing `TRADE_KILL_WINDOW_TICKS` to
-  4s would make the number directly comparable to Leetify's published figure.
-- **Legal**: generic concept, safe. The specific 4-second constant isn't
-  ownable, just Leetify's calibration choice.
-- **Sources**: [blog.scope.gg/trade-kills-en](https://blog.scope.gg/trade-kills-en/), [csgo-guides.com/gameplay/trading](https://csgo-guides.com/gameplay/trading), [leetify.com/blog/what-is-leetify-rating](https://leetify.com/blog/what-is-leetify-rating/) (the actual source of the 4-second kill-chain figure)
+  is most vulnerable.
+- **Measurement**: percentage; window is the key design parameter.
+- **RoundSync verdict**: **already have it**, window is 3s vs Leetify's 4s
+  — changing `TRADE_KILL_WINDOW_TICKS` to 4s would make it directly
+  comparable to Leetify's published figure.
+- **Legal**: generic concept, safe.
+- **Sources**: [blog.scope.gg/trade-kills-en](https://blog.scope.gg/trade-kills-en/), [csgo-guides.com/gameplay/trading](https://csgo-guides.com/gameplay/trading), [leetify.com/blog/what-is-leetify-rating](https://leetify.com/blog/what-is-leetify-rating/)
 
 ## Entry / opening duel success
 
 - **Calculation**: first death of the round. Win if you're the attacker,
-  loss if you're the victim. Rounds you weren't involved in are excluded
-  entirely (not counted as a loss).
+  loss if you're the victim. Rounds you weren't involved in are excluded.
 - **Purpose**: single most predictive individual stat for round outcome —
   the team that wins the opening duel wins the round 70-80% of the time.
 - **Measurement**: percentage.
 - **RoundSync verdict**: **already have it, confirmed correct** — exact
-  match to the standard definition, verified line-by-line against
-  `extract_match_secondary_metrics`. No change needed.
+  match to the standard definition. No change needed.
 - **Legal**: generic concept, safe.
 - **Sources**: [recoilanalytics.com](https://recoilanalytics.com/blog/cs2-opening-duels-guide), [cs2bet.io/glossary/opening-duel](https://www.cs2bet.io/glossary/opening-duel/)
 
 ## Flash assist
 
 - **Calculation**: a teammate (not you) kills an enemy while that enemy is
-  actively blinded by your flash — window scales to the real blind duration,
-  not a fixed window. HLTV's stricter published version additionally
-  excludes "half-blind" cases under ~1.1 seconds as too weak to have
-  meaningfully helped.
-- **Purpose**: credits utility usage that leads to a kill, even when someone
-  else gets it.
+  actively blinded by your flash. HLTV's stricter version additionally
+  excludes "half-blind" cases under ~1.1 seconds.
+- **Purpose**: credits utility usage that leads to a kill.
 - **Measurement**: count / percentage of flashes.
 - **RoundSync verdict**: **already have it, matches Valve's own looser
-  definition** (correctly excludes the thrower's own kills, correctly scales
-  to real blind duration). Doesn't have HLTV's 1.1s minimum — add it if the
-  goal is to match HLTV's stricter, more meaningful published number.
+  definition.** Doesn't have HLTV's 1.1s minimum — add it to match HLTV's
+  stricter number.
 - **Legal**: generic concept, safe.
 - **Sources**: [hltv.org/news/34796](https://www.hltv.org/news/34796/using-flashbang-statistics-effectively)
 
 ## Clutch won
 
 - **Calculation**: last player alive on their team, 1+ enemies still alive,
-  round won. HLTV's 2024 "adjusted clutch requirements" additionally exclude
-  "fake" clutches (round was already unwinnable for the other side before
-  the last-alive moment, e.g. mopping up survivors after the bomb already
-  exploded) and add detection for clutches where the clutcher didn't
-  personally get the final kill (teammates finished via defusal, etc — not
-  applicable to RoundSync's solo-tracked-player design anyway).
+  round won. HLTV's 2024 "adjusted clutch requirements" additionally
+  exclude "fake" clutches (round already unwinnable before the last-alive
+  moment).
 - **Purpose**: identifies late-round, high-pressure performers.
-- **Measurement**: count, sometimes broken down by 1v1/1v2/.../1v5 (win rate
-  drops sharply per additional enemy: 1v1≈50%, 1v2≈15-22%, 1v3≈5-8%,
-  1v4≈1-2%).
+- **Measurement**: count, sometimes by 1v1/1v2/.../1v5 (1v1≈50%, 1v2≈15-22%, 1v3≈5-8%, 1v4≈1-2%).
 - **RoundSync verdict**: **already have it, baseline definition only.**
-  Doesn't implement HLTV's "fake clutch" exclusion. Low priority — affects a
-  small number of edge-case rounds.
+  Doesn't implement HLTV's "fake clutch" exclusion — low priority.
 - **Legal**: generic concept, safe.
 - **Sources**: [hltv.org/news/40818](https://www.hltv.org/news/40818/introducing-adjusted-clutch-requirements), [hltv.org/stats/players/13514/clutch](https://www.hltv.org/stats/players/13514/clutch)
 
@@ -312,9 +283,8 @@ be setting its own methodology, not matching one.
 - **Calculation**: total grenade damage (HE + molotov/incendiary) ÷ rounds
   played.
 - **Purpose**: measures utility usage effectiveness beyond just flashes.
-- **Measurement**: damage points per round. Community benchmark: a dedicated
-  support player averages 5-10/round; 200 total utility damage across a map
-  is roughly "worth" two extra kills.
+- **Measurement**: damage points per round. Community benchmark: a
+  dedicated support player averages 5-10/round.
 - **RoundSync verdict**: **already have it, confirmed in realistic range**
   (0.7-8.4 observed across 8 matches). No change needed.
 - **Legal**: generic concept, safe.
@@ -322,568 +292,248 @@ be setting its own methodology, not matching one.
 
 ## Full industry inventory — what exists that RoundSync doesn't have at all
 
-The metrics above are the ones RoundSync already computes (checked for
-correctness). This section is the other half of the question: a survey of
-Leetify's, HLTV's, and Scope.gg's published stat catalogs, checked against
-what RoundSync has *zero* coverage of. Not yet individually legal-checked —
-same general pattern applies (mechanical stats over public data = open), but
-verify before shipping anything using another tool's specific branded name.
-
-Each entry below now includes **how it's actually obtained** — the specific
-demoparser2 event/field it comes from, and whether that event is already
-being parsed every sync (cheap: capture + aggregate) or not (real new
-extraction work). Corrects a couple of lift estimates from the first pass.
+Survey of Leetify's, HLTV's, and Scope.gg's published stat catalogs,
+checked against what RoundSync has *zero* coverage of. Each entry includes
+how it's actually obtained — the demoparser2 event/field it comes from, and
+whether that event is already parsed every sync (cheap) or not (real new
+extraction).
 
 **Aim/mechanics:**
-- **Headshot accuracy** (% of *hits*, not kills, landing on the head) —
-  **done, 2026-08-27.** `player_hurt` already carries a `hitgroup` field
-  (confirmed `1 == head` via Valve's own Source SDK reference — the same
-  enum has been stable since CS:S), and `player_hurt` is already parsed
-  every sync for ADR. Computed as `telemetry.headshot_accuracy_pct` in
-  `sync_pipeline.py`, displayed on the Home dashboard. Different from the
-  existing `headshot_pct`, which is % of *kills* headshotted, a distinct and
-  already-correct scoreboard stat.
-- **Weapon-segmented stats** (AWP kills, AWP opening kills, rifle vs. pistol
-  performance) — **cheaper than first estimated.** Both `player_death` and
-  `player_hurt` already carry a `weapon` field; both events are already
-  parsed every sync. Capture-and-aggregate, group existing kill/duel logic
-  by `weapon` instead of ignoring it.
-- **Accuracy (enemy spotted)** and **spray accuracy** — genuinely new
-  extraction. Needs `weapon_fire` (shots, already parsed in
-  `extract_fact_duel_placement`) matched against `player_hurt` (hits) *and*
-  a determination of whether an enemy was actually visible at fire time.
-  Visibility is the hard, currently-missing primitive — same one blocking
-  the true Time-to-Damage rebuild (Tier 2). Spray accuracy reuses the
-  existing `BURST_GAP_TICKS` burst-grouping logic already written for
-  duel-placement bursts.
-- **Counter-strafing quality** — needs the player's own velocity at each
-  `weapon_fire` tick. No raw velocity field is reliably available in bulk
-  `parse_ticks()` calls (already documented in the codebase's own comments
-  on `RUN_SPEED_THRESHOLD_UPS`) — but the workaround already exists and is
-  proven: compute speed from position deltas between consecutive tick
-  samples, exactly the technique `_find_enemy_audible_triggers` already
-  uses for enemy footstep detection. Same pattern, applied to the shooter
-  instead of the target.
+- **Headshot accuracy** — **done, 2026-08-27.** `player_hurt` already
+  carries `hitgroup` (`1 == head`, confirmed via Valve's Source SDK
+  reference), already parsed every sync for ADR.
+- **Weapon-segmented stats** — cheap: `player_death`/`player_hurt` already
+  carry `weapon`, already parsed. Group existing logic by weapon.
+- **Accuracy (enemy spotted)** / **spray accuracy** — genuinely new
+  extraction, needs `weapon_fire` matched against `player_hurt` plus
+  enemy-visibility determination (same missing primitive as TTD, Tier 2).
+  Spray accuracy reuses the existing `BURST_GAP_TICKS` burst grouping.
+- **Counter-strafing quality** — needs shooter velocity at each
+  `weapon_fire` tick. No raw velocity field in bulk `parse_ticks()`, but a
+  proven workaround exists: compute speed from position deltas, same
+  technique `_find_enemy_audible_triggers` already uses.
 
 **Utility:**
-- **[CT] Smokes that stopped a push** — real new extraction. Needs smoke
-  landing position/timing (`fact_utility_throw`, already have) correlated
-  against enemy movement in the following seconds (did an enemy approach
-  the smoke then stop/reroute) — genuinely nontrivial correlation logic.
-- **Unused utility value on death** — needs current grenade inventory
-  reconstructed at the death tick: `item_equip` (already parsed, tells you
-  what was bought) minus what's already in `fact_utility_throw` (already
-  thrown) at that point in the round. Buildable by combining two already-
-  parsed sources, moderate lift.
+- **[CT] Smokes that stopped a push** — needs smoke position/timing
+  correlated against enemy movement afterward — nontrivial correlation
+  logic.
+- **Unused utility value on death** — needs inventory reconstructed at
+  death tick (`item_equip` minus already-thrown `fact_utility_throw`) —
+  moderate lift.
 
-**Team play — the funnel needs one new signal, not a full rebuild:**
-- **Trade-kill funnel** (opportunity → attempt → success). *Opportunity*
-  (`teammate_within_trade_range_at_death`) and *success* (`was_traded`)
-  already exist in `fact_positioning_risk` — pure aggregation. *Attempt*
-  (did a teammate actually engage the killer, whether or not they landed
-  it) is genuinely missing — needs cross-referencing teammates'
-  `weapon_fire`/`player_hurt` against the killer within the trade window,
-  which nothing currently captures.
+**Team play:**
+- **Trade-kill funnel** — opportunity and success already exist in
+  `fact_positioning_risk`; attempt (did a teammate engage, whether or not
+  they landed it) needs cross-referencing `weapon_fire`/`player_hurt`
+  against the killer within the trade window.
 
 **Round-outcome:**
 - **Multi-kill rounds (2K/3K/4K/Ace)** — **done, 2026-08-27.** Pure
-  aggregation of `player_death` (already parsed every sync), grouped by
-  round via the existing `_round_for` helper. Stored as
-  `telemetry.multi_kill_rounds` (`{2k, 3k, 4k, ace}` counts), displayed as
-  a single "Multi-Kill Rounds" total on the Home dashboard.
-- **Kills/damage in round wins vs. losses** — `fact_engage_decision` already
-  stores `round_won` per row, and the round-bounds + round-winner pattern
-  (`round_end`'s `winner` field) is already computed in multiple extraction
-  functions. Reuses an existing pattern, doesn't need a new one.
-- **Round Swing / win-probability-added** — fundamentally different in
-  kind from everything else on this list: it needs a *trained* win-
-  probability model over round state (score, side, economy, rounds
-  remaining), not just data already sitting in one demo. Either adapt the
-  open academic methodology below, or accumulate enough of RoundSync's own
-  match history to train a simple one. Correctly the biggest lift here.
+  aggregation of `player_death`, grouped by round.
+- **Kills/damage in round wins vs. losses** — `fact_engage_decision`
+  already stores `round_won` per row — reuses an existing pattern.
+- **Round Swing / win-probability-added** — needs a *trained* win-
+  probability model, the biggest lift on this list.
 
-**Clutch — needs one new field captured, not a rebuild:**
-- **Per-scenario clutch win rate** (1v1/1v2/.../1v5 tracked separately, not
-  lumped into one `clutches_won` count) — **more than pure aggregation, as
-  first stated.** `extract_match_secondary_metrics`'s clutch-detection block
-  currently only increments a counter when `was_clutch` flips true; it
-  doesn't persist `enemies_alive` at that moment anywhere. Needs a small
-  extraction change (store the scenario, not just the boolean), not a
-  `group by` on data that doesn't exist yet.
+**Clutch:**
+- **Per-scenario clutch win rate** (1v1/../1v5 tracked separately) — needs
+  a small extraction change: persist `enemies_alive` at the clutch moment,
+  currently only a counter increment.
 
-**Positioning — genuinely zero new extraction needed:**
+**Positioning — zero new extraction needed:**
 - **Heatmaps / map control visualization** — X/Y/Z already exists in
-  `fact_positioning_risk` and `fact_duel_placement`. Nothing to extract;
-  this is pure frontend work.
+  `fact_positioning_risk` and `fact_duel_placement`. Pure frontend work.
+
+**From cross-checking Google AI Mode's answer (full verification trail in
+`CS2_ANALYTICS_STANDARDS_ARCHIVE.md`):**
+- **Eco-frags / equipment value diff** — confirmed via HLTV Rating 3.0's
+  eco-adjustment. `fact_economy` has the tracked player's own equip value;
+  the enemy side needs the killer/victim's equipment value at death — real
+  new extraction, but the raw ingredient is already proven parseable.
+- **Kill distance** — reuses the existing `pos_df` position-lookup pattern
+  from `extract_fact_duel_placement`.
+- **CT/T side splits** — `fact_economy.team` already carries this, cheap to
+  add across most existing stats.
 
 **Sources**: [leetify.com/blog/leetify-stats-glossary](https://leetify.com/blog/leetify-stats-glossary/), [hltv.org/news/42485 — Introducing Rating 3.0](https://www.hltv.org/news/42485/introducing-rating-30), [blog.scope.gg — mistake identification](https://esports.gg/news/counter-strike-2/scope-gg-review/)
 
-## Lifetime stats via Steam Web API (`GetUserStatsForGame`) — a real data source, not a community-defined metric
+## Lifetime stats via Steam Web API (`GetUserStatsForGame`)
 
-Distinct from everything else in this doc: this isn't a stat RoundSync
-computes from a demo, it's Valve's own official per-account career
-totals, pulled live via `ISteamUserStats/GetUserStatsForGame` (`appid=730`,
-the existing `VALVE_API_KEY`). Verified twice, live, against a real
-account — first during the original research pass, then re-confirmed
-2026-08-27 while actually building it (see `NEXT_STEPS.md` Tier 11 for the
-full build/before-after record; this section is the research half only).
+Valve's own official per-account career totals, pulled live via
+`ISteamUserStats/GetUserStatsForGame` (`appid=730`, the existing
+`VALVE_API_KEY`). Not a stat RoundSync computes from a demo. **Built and
+shipped, 2026-08-27** — full build detail in `NEXT_STEPS_ARCHIVE.md` Tier
+11; this is the research summary.
 
-- **215 real stat fields come back.** Full career totals (kills, deaths,
-  MVPs, bomb plants/defuses, hours played), per-weapon kills/shots/hits for
-  every CS:GO-era weapon (accuracy is directly computable, not just kill
-  counts), per-map wins/rounds for an old map pool, and assorted novelty
-  fields (`total_dominations`, `total_broken_windows`).
-- **Real gotcha, confirmed live: `total_wins` is round wins, not match
-  wins.** It's roughly half of `total_rounds_played`, a sane career
-  round-win rate — computing a "win rate" against `total_matches_played`
-  with this field produces an impossible 1028%. The real match-win counter
-  is a separate field, `total_matches_won`, which correctly pairs with
-  `total_matches_played` (verified: 43.1% for the same test account, a
-  sane number). Anyone building anything else off this endpoint should use
-  `total_matches_won`, never `total_wins`, for a win rate.
+- **215 real stat fields confirmed live** — career totals, per-weapon
+  kills/shots/hits (accuracy directly computable), per-map wins/rounds for
+  an old map pool, novelty fields.
+- **Real gotcha: `total_wins` is round wins, not match wins.** Roughly half
+  of `total_rounds_played`. Computing a win rate against
+  `total_matches_played` with this field produces an impossible 1028%. The
+  real match-win counter is `total_matches_won` (verified: 43.1% for a
+  real test account, a sane number).
 - **Real gap: per-map stats are frozen to an old CS:GO-era pool.**
-  Confirmed present: `de_dust2`, `de_inferno`, `de_nuke`, `de_train`, plus
-  several retired maps. **Confirmed absent: `de_mirage`, `de_ancient`,
-  `de_anubis`, `de_overpass`** — zero lifetime data for any of them, likely
-  including some of the most-played current active-duty maps. Any feature
-  using this data must treat "no lifetime data for this map" as a real,
-  expected case.
-- **Legal**: this is the player's own account data, requested with their
-  own Steam login (via `authenticateToken`) and the project's own
-  `VALVE_API_KEY` — no different in kind from the profile-summary call
-  already made in `/api/user/profile`. No new legal question raised beyond
-  what's already covered for the Steam Web API elsewhere in this doc.
-- **Sources**: live API call, `api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v0002/`, verified directly (not from third-party documentation) against a real account, twice.
+  Confirmed absent: `de_mirage`, `de_ancient`, `de_anubis`, `de_overpass`
+  — zero lifetime data for any of them. Any feature using this must treat
+  "no lifetime data for this map" as a real, expected case.
+- **Legal**: the player's own account data, requested with their own Steam
+  login and the project's own `VALVE_API_KEY` — no new legal question
+  beyond what's already covered for the Steam Web API elsewhere in this doc.
+- **Sources**: live API call, `api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v0002/`, verified directly against a real account, twice.
 
-## Premier rank badge — real visual design, verified against a live screenshot and a real gameplay recording
+## Game Coordinator match resolution — how `gc-worker` gets a demo download link
 
-Not a stat definition — a visual-asset research pass for `RankBadge.tsx`,
-done because the user flagged rank as emotionally high-stakes and asked for
-real research before touching anything rank-related (see Claude's memory,
-`feedback_rank_requires_extra_rigor.md`). Two independent real sources used,
-not one: a user-provided screenshot of a real Gold-tier badge ("30,000"),
-and a real ~19s CS2 gameplay recording (`.mp4`, 2560x1440) the user
-provided, showing a real Light Blue-tier badge ("CS Rating 7,258").
+Not a stat — research into the Game Coordinator (GC), the live Steam-bot
+connection `services/gc-worker/index.js` uses to ask Valve "where's the
+download link for this match's demo file?" **This is the canonical,
+single home for this finding** — don't re-derive it if it comes up again
+via a `gc-worker` bug.
 
-**Shape, confirmed exact, not approximate:** the real badge's path geometry
-was pulled directly from `github.com/Juknum/counter-strike-icons`
-(auto-updates from CS2's own live game files — `premier_rating_bg.svg`),
-not eyeballed. Confirmed 3 left accent bars (a dark shadow bar layered
-between two bright ones — easy to undercount as 2 at a glance, confirmed
-by counting real pixels in the recording), and 2 semi-transparent diagonal
-glare streaks across the main face. `RankBadge.tsx`'s existing shape
-(before this pass) already matched the box outline closely, but was
-missing the 3rd bar and the glare streaks entirely.
+**The real, current Valve protobuf schema has no "download URL" field,
+verified directly against Steam's own tracked source**
+(`SteamDatabase/GameTracking-CS2` on GitHub) — `CDataGCCStrike15_v2_MatchInfo`
+(the message `gc-worker` receives) only has `matchid`, `matchtime`,
+`watchablematchinfo` (live-spectate info, not a downloadable file), and
+`roundstatsall` (per-round scoreboard stats). No `matchurl`/`match_url`/
+`url` field exists anywhere in it.
 
-**Color, confirmed for 2 of 7 bands, generalized for the rest:** the real
-Gold badge has a bright, fairly uniform gold fill (not the near-black
-gradient the component used to render) and light gold-cream text with a
-bronze drop-shadow, not solid gold text. The real Light Blue badge
-(measured from the recording) showed the same pattern — bright bars, a
-light cyan-tinted text (not pure white), background fill more desaturated
-than the bars. **Only Gold and Light Blue were directly verified.** The
-other 5 bands + Unranked use one consistent derived formula (mix each
-band's existing base hue toward white/black at fixed ratios) rather than
-7 independently hand-picked colors — applying the confirmed principle
-uniformly instead of guessing per-band. Flag this if a future session
-gets a real screenshot of another band and finds the derived version off.
+**The real, undocumented answer, confirmed against a genuine independent
+open-source project doing the same job** (`claabs/cs-demo-downloader`):
+the download URL comes from `match.roundstatsall.at(-1)?.map` — the
+**last** round entry's `map` field. Valve repurposes that one field: every
+other round's `map` holds the real map name, but the final entry's `map`
+holds the actual demo download URL string instead. Undocumented by Valve
+anywhere, only knowable by checking how a real working tool handles it.
 
-**Number formatting, measured precisely, not eyeballed:** real footage of
-"7,258" (measured via pixel column-height analysis on the extracted video
-frame) showed only a **subtle** size difference between the leading
-digits and the rest — not the dramatic ~35% jump first assumed. The
-*shipped* component ended up using a more pronounced ratio than that
-literal measurement, per the user's explicit follow-up request
-("increase the pre comma digits") after seeing the subtle version — a
-deliberate stylization choice on top of the real measurement, not a claim
-that this exact ratio exists in the live game. Comma formatting itself
-(`toLocaleString()`) was already correct, confirmed against both real
-examples.
+**A field being named "map" and a field only ever containing a map name
+are different claims** — an earlier session's schema-only audit
+(confirmed the field's declared name/type) reasoned from the first to the
+second incorrectly, removed this fallback, and caused a real production
+incident (`NEXT_STEPS_ARCHIVE.md` Tier 14). Restored, now guarded with
+`startsWith('http')` so a real map name can never again be mistaken for a
+URL.
 
-**Animation, confirmed real, not shipped:** frame-differencing the
-recording (comparing frames ~0.4s apart, amplified) showed a real,
-localized soft white shimmer over the bars — distinct from generic video-
-compression noise, which was visible but differently distributed
-elsewhere in the same frames. The "shadow drifting right and fading"
-half of the user's description wasn't clearly isolated in the diff data.
-Built and shown as a live CSS animation in review, then explicitly
-removed at the user's request — the shipped badge is static. If revisited
-later, the confirmed real effect is a soft, slow shimmer over the bars,
-not a dramatic one.
-
-**Vertical text centering — methodology worth reusing:** the review's
-first "big number" attempt read visually off-center. Rather than nudge
-by eye, the actual rendered pixels were measured (isolate near-white
-text pixels via a color threshold, exclude the bars by x-range, compare
-the glyphs' vertical midpoint against the true image center) — found 8.5px
-off in a 151px-tall render, corrected, then re-measured to confirm within
-1-2px. Worth reusing this measure-don't-eyeball approach for any future
-pixel-level UI positioning dispute.
-
-**Separately confirmed, unrelated to the badge's visual design:**
-`rank_at_match_start` (used on match cards) is the player's rank *before*
-that match started, not after — traced directly to `rank_old` from the
-demo's own `rank_update` event in `sync_pipeline.py` (the code comment
-already said this; confirmed by reading the actual extraction code, not
-just trusting the comment).
-
-**Legal**: same reasoning as `feedback_prefer_real_extracted_assets.md`
-already covers for the rank badge shape and operator art — this is Valve's
-own game asset (extracted via a repo that pulls from CS2's live game
-files), governed by Valve's Fan Content Policy gray area, not a
-freestanding original design. `Juknum/counter-strike-icons` itself carries
-no explicit repo license, same as the badge-shape source used previously;
-the operative legal question is Valve's asset ownership, not the
-extraction repo's own terms.
-
-**Sources**: `github.com/Juknum/counter-strike-icons` (raw SVG path data,
-fetched live), a user-provided real in-game screenshot, and a user-provided
-real ~19s CS2 gameplay recording (frame-extracted and measured with
-ffmpeg + PIL/numpy, not just watched).
+**Sources**: [`SteamDatabase/GameTracking-CS2` — cstrike15_gcmessages.proto](https://github.com/SteamDatabase/GameTracking-CS2/blob/a00b71ec84b24e0773c5fbd595eb91e17fa57f8f/Protobufs/cstrike15_gcmessages.proto), [`claabs/cs-demo-downloader`](https://github.com/claabs/cs-demo-downloader) (`src/steam-gc.ts`).
 
 ## Academic / open-source layer — the safest tier for anything HLTV-Impact-like
 
-Checked beyond the commercial trackers: there's a peer-reviewed academic
-research line for CS:GO/CS2 analytics, with an actual open-source reference
-implementation — this is the legally cleanest possible foundation for
-anything resembling HLTV's undisclosed "Impact" component, because unlike
-HLTV's formula, this one was deliberately published for others to build on.
-
-- **`awpy`** ([github.com/pnxenopoulos/awpy](https://github.com/pnxenopoulos/awpy)) — Python library by Peter
-  Xenopoulos (NYU), ~100k installs, actively maintained. **MIT licensed** —
-  free to use, adapt, or learn from commercially, attribution required.
-  Computes ADR, KAST%, and its own open Rating (not HLTV's). Exposes
-  **player visibility in microseconds** as a primitive — this is exactly the
-  missing piece for a real Time-to-Damage fix (Tier 2 above). Also does
-  navigation-mesh parsing/distance calculations, which could be a far more
-  reliable path to resolving bombsite A/B than the manual callout-centroid
-  approach used in this session's backfill.
+- **`awpy`** (github.com/pnxenopoulos/awpy) — Python library, ~100k
+  installs, actively maintained, **MIT licensed**. Computes ADR, KAST%, its
+  own open Rating. Exposes **player visibility in microseconds** — the
+  missing piece for a real Time-to-Damage fix. Also does nav-mesh parsing,
+  a possibly more reliable path to bombsite resolution than the manual
+  callout-centroid approach.
 - **"Valuing Player Actions in Counter-Strike: Global Offensive"**
-  (Xenopoulos, Doraiswamy, Silva — IEEE Big Data 2020,
-  [arxiv.org/abs/2011.01324](https://arxiv.org/abs/2011.01324)) — a
-  published, open framework that values *every* in-game action (not just
-  kills) by its effect on the team's win probability, validated on 70M+
-  real events. Same open-source lineage as `awpy`. This is a legitimate,
-  citable, IP-clean alternative to guessing at HLTV's Impact component.
-- **Optimal Spending Error (OSE)** — a published metric (from the win-
-  probability research line above) scoring how closely a team's economy
-  spend matches the mathematically optimal decision. Directly extends
-  RoundSync's existing `buy_decisions_against_team_economy` heuristic into
-  something rigorously grounded and citable.
-- **Plus/Minus player rating** ([arxiv.org/pdf/2409.05052](https://arxiv.org/pdf/2409.05052)) — another open,
-  published rating methodology, borrowed from basketball/hockey analytics
-  and adapted to CS:GO. A second legally-clean reference point if RoundSync
-  ever builds its own composite score.
-- **Legal**: all of the above is academic publication + MIT-licensed code —
-  the opposite of HLTV's trade-secret formula. This is explicitly meant to
-  be built upon; citing the paper and/or crediting `awpy` per its MIT
-  license is all that's required.
-
-## Found via cross-checking Google AI Mode's answer against real sources
-
-A second pass, prompted by comparing this doc against what Google AI Mode
-claimed exists. Its answer mixed real, verifiable metrics with at least one
-outright fabrication — treated exactly like any other unverified source:
-checked before trusting, not accepted because an AI said it confidently.
-
-**Confirmed real, adding:**
-- **Eco-frags / equipment value diff** — confirmed via HLTV Rating 3.0's
-  eco-adjustment system: a kill against a low-equipment-value opponent is
-  discounted, and a low-equipment kill against a full-buy opponent is
-  boosted. `fact_economy` already has `round_start_equip_value` per player-
-  round for the tracked player; the enemy side of this would need the
-  killer/victim's equipment value at death, not currently captured anywhere
-  — real new extraction, but the raw ingredient (an equip-value field) is
-  already proven to exist and be parseable. Source:
-  [hltv.org/news/42485 — Introducing Rating 3.0](https://www.hltv.org/news/42485/introducing-rating-30).
-- **Kill distance** — average map distance between the player and their
-  kills. `player_death` gives the tick; position data for both parties at
-  that tick is already fetched elsewhere in the pipeline (e.g.
-  `extract_fact_duel_placement`'s `pos_df` pattern) — cheap addition reusing
-  an existing pattern.
-- **Self-flash duration** — distinct from the self-flash *bug* fixed this
-  session (which correctly stopped counting self-blinds as teammate
-  flashes). This is different: tracking how often/how long a player blinds
-  *themselves* as its own coaching signal, not folded into anyone else's
-  stat. Not yet in RoundSync. `blind_df` (already parsed in
-  `extract_fact_utility_throw`) already contains the self-blind rows — they
-  are currently discarded (`continue`) rather than captured separately.
-
-**Checked and rejected — presented confidently by AI Mode, no real precedent found:**
-- **"Surprise Score"** — searched specifically; zero results on any real
-  CS2 stat platform. Appears to be AI Mode generating a plausible-sounding
-  name rather than reporting an actual tracked metric. Do not implement
-  this as if matching an industry standard — if RoundSync builds "were you
-  killed without looking at your killer," it's an original metric.
-- **"Footstep triggers" / self-audibility** — AI Mode presented this as
-  pullable/tracked. Already researched directly in the previous pass
-  (see "no industry precedent" section below) and confirmed no platform
-  publishes it. AI Mode conflated "computable from raw data" with
-  "is an established stat" — those are not the same claim.
-- **"Space Created"**, **"Crossfire Coverage"** — no citations provided,
-  not independently verified. Not added to the roadmap until confirmed
-  against a real source.
-
-## Found by fetching AI Mode's actual cited sources directly
-
-Checking the primary sources AI Mode linked to, not just its summary of them.
-
-- **NextFrag — "What CS2 Demo Analysis Can and Cannot Measure"**
-  ([nextfrag.gg/cs2-demo-analysis-limitations](https://nextfrag.gg/cs2-demo-analysis-limitations))
-  confirms the counter-strafing/spray-accuracy approach already planned in
-  Tier 5 (`clean shot percentage` = shots × velocity-at-fire-tick, same
-  concept), and adds **"reconstructed duel context" (who saw whom first,
-  peek order)** as a distinct, real derived-metric category not yet in this
-  doc. Also gives an explicit, useful **"cannot measure" list**: true
-  click-to-photon latency, monitor/mouse hardware latency, player
-  fatigue/tilt, full network truth (lag comp/interpolation smoothing), and
-  — directly relevant to last session's sub-tick research — **"perfect
-  sub-tick certainty" is explicitly called out as unmeasurable from a demo,
-  only approximable**, since demo playback reconstructs a per-tick model.
-  Worth stating plainly in RoundSync's own docs/UI: these are honest limits
-  of *any* demo-based tool, not a RoundSync gap.
-- **NextFrag's own product** ([nextfrag.gg/cs2-demo-analyzer](https://nextfrag.gg/cs2-demo-analyzer))
-  breaks its aim score into first-shot accuracy, spray discipline,
-  counter-strafe timing, and **reaction time at the 25th percentile**
-  (not the median Leetify uses) — a third real, sourced example of the
-  aggregation-method question already flagged for RoundSync's own TTD fix:
-  different serious tools pick different percentiles/aggregations
-  deliberately, it's not a solved "one true answer." Also segments
-  engagements by **type** (flick / tracking / static hold) and by
-  **range** (long vs. close) — two more real dimensions not yet in
-  RoundSync's duel data.
-- **`cs2-analyser-tool`** (github.com/taua-almeida/cs2-analyser-tool,
-  **MIT licensed**) — an independent open-source developer already built
-  and published an *"HLTV Rating 3.0-style approximation."* Concrete,
-  real-world precedent that an independently-derived approximation,
-  openly released, is normal practice in this community — reinforces the
-  legal read already in this doc, not just RoundSync's own reasoning about
-  it. Also confirms **CT vs. T side-split reporting** as a real, simple,
-  additional dimension — cheap to add across most existing RoundSync stats
-  since `fact_economy.team` already carries this.
-
-## Other sources checked that didn't add new metrics — recorded so they aren't re-checked
-
-Not every research thread produced something to add. Recording the negative
-results too, since re-running these same checks in a future session would
-waste time re-confirming the same dead end.
-
-- **FACEIT** — searched
-  ([fctracker.org](https://fctracker.org/),
-  [support.faceit.com/hc/en-us/articles/10525200579740](https://support.faceit.com/hc/en-us/articles/10525200579740-FACEIT-CS2-Elo-and-skill-levels),
-  and several ELO-guide sites) specifically for FACEIT's own gameplay
-  analytics catalog, expecting something comparable to Leetify's glossary.
-  Found only ELO/skill-level/rank mechanics (10 levels, 100–2000+ range,
-  ~25 Elo swing per balanced match) — no deep per-match gameplay metrics
-  the way Leetify/HLTV/Scope.gg publish. FACEIT is a matchmaking/ranking
-  layer, not a gameplay-analytics source, for this doc's purposes.
-- **EgoCS-400K** (Xenopoulos, [arxiv.org/abs/2606.18180](https://arxiv.org/abs/2606.18180),
-  submitted 16 Jun 2026) — a real, verified paper, cited by AI Mode's
-  expanded source list as relevant to "how CS2 metrics are calculated." It
-  isn't: this is a dataset for training AI *world models* (400K+ egocentric
-  gameplay videos paired with actions/camera/state for next-frame
-  prediction research), not a coaching-metrics resource. Real citation,
-  wrong domain — recorded so it isn't mistaken for relevant later.
-- **Source 2 Schema Explorer** ([s2v.app/SchemaExplorer](https://s2v.app/SchemaExplorer/))
-  — the true raw Source 2 engine schema (`CCSPlayerController`,
-  `CCSPlayer_WeaponServices`, etc). Checked one class-listing page; it shows
-  hierarchy only, not member fields, and reaching actual field names would
-  mean crawling many individual class pages. Since RoundSync's pipeline
-  goes through `demoparser2` (which already abstracts this exact schema
-  into the friendly names in `DEMOPARSER2_FIELDS.md`), this would mostly
-  duplicate documentation that already exists. Not pursued further — flag
-  if a future need specifically requires raw engine field names
-  `demoparser2` doesn't expose.
-
-### AI Mode's expanded citation list — verified source by source
-
-The user separately supplied AI Mode's full "expanded reference list" for
-its CS2-metrics answer. Every entry was checked individually rather than
-trusted as a batch, since one item on an earlier AI Mode list ("Surprise
-Score," above) had already turned out to be fabricated.
-
-| Source | Real? | Actually useful for RoundSync's metrics? |
-|---|---|---|
-| AlliedModders event wiki | Yes, well-established in the SourceMod/plugin community | Legitimate supplementary event-name reference; not individually re-verified since it's widely known to be real |
-| [`osztenkurden/cs2parser`](https://github.com/osztenkurden/cs2parser) | Yes — confirmed real via direct code snippet (`HttpBroadcastReader`, `EntityMode.ALL`) | Different scope: live GOTV/broadcast-stream parsing, not recorded-`.dem` analysis like RoundSync does — not a substitute for `demoparser2` |
-| [`LaihoE/demoparser`](https://github.com/LaihoE/demoparser) (demoparser2) | Yes | Already RoundSync's actual dependency |
-| [Recoil Analytics](https://recoilanalytics.com/) (WASM in-browser demo parser) | Yes — confirmed via direct fetch of its "how it works" page | Raw extraction only (kills/damage/flash/grenade/bomb/economy/position events, ~40K events/match) — same category as `demoparser2` itself, no new derived-metric definitions found |
-| Leetify Stats Glossary | Yes | Already deeply used throughout this doc |
-| HLTV Rating 2.0/3.0 | Yes | Already deeply covered — see §HLTV Rating |
-| EgoCS-400K ([arxiv:2606.18180](https://arxiv.org/abs/2606.18180)) | Yes, real paper | **No** — AI world-model/video-generation research, not analytics (see above) |
-| AntiCheatPT ([arxiv:2508.06348](https://arxiv.org/abs/2508.06348)) | Yes, real paper | **Yes, but for cheat detection specifically**, not general coaching metrics — see §Cheat detection below |
-| Valve GSI docs ([developer.valvesoftware.com/wiki/Counter-Strike:_Global_Offensive_Game_State_Integration](https://developer.valvesoftware.com/wiki/Counter-Strike:_Global_Offensive_Game_State_Integration)) | Yes | Live-match JSON schema (health/money/round-phase/etc) — RoundSync works from recorded demos, not live GSI, so this describes a data source RoundSync doesn't currently use, not a metrics catalog |
-
-Net finding: every citation on the expanded list was real (nothing else
-fabricated), but two of the academic papers were framed by AI Mode as more
-relevant to "how CS2 metrics are calculated" than they actually are — a
-real citation is not the same guarantee as an accurate claim built on it.
+  (Xenopoulos et al., IEEE Big Data 2020, arxiv.org/abs/2011.01324) —
+  published, open framework valuing every in-game action by win-probability
+  effect, validated on 70M+ real events. Same open-source lineage as `awpy`.
+- **Optimal Spending Error (OSE)** — published metric scoring how closely
+  economy spend matches the mathematically optimal decision. Extends
+  RoundSync's `buy_decisions_against_team_economy` heuristic.
+- **Plus/Minus player rating** (arxiv.org/pdf/2409.05052) — open,
+  published, from basketball/hockey analytics adapted to CS:GO.
+- **Legal**: academic publication + MIT-licensed code — the opposite of
+  HLTV's trade-secret formula. Citing the paper and/or crediting `awpy`
+  per its license is all that's required.
 
 ## Cheat detection — real methodology exists, but this is a different risk category
 
-Checked directly against the actual paper (not just the abstract), since the
-user asked specifically whether RoundSync could detect a likely cheater in a
-match.
-
 - **AntiCheatPT** (Loo, Lužkov, Burelli — IEEE Conference on Games 2025,
-  [arxiv.org/abs/2508.06348](https://arxiv.org/abs/2508.06348)) — a real,
-  peer-reviewed transformer model that classifies likely cheaters from
-  **recorded `.dem` files** (not live/server-only data — exactly the input
-  RoundSync already has). Trained on 256-tick (4-second) windows around
-  each kill (224 ticks before, 32 after), 44 features per tick: attacker
-  state + weapon one-hot, victim state, a "noise" signal for detecting
-  wallbang/smoke kills that shouldn't have had visual confirmation, and map
-  one-hot. Notably, it does **not** primarily use aim-snap/angular-velocity
-  features the way I first assumed — it's mostly about relative
-  positioning and distance, and whether a kill happened with information
-  the shooter shouldn't have had.
+  arxiv.org/abs/2508.06348) — real, peer-reviewed transformer model
+  classifying likely cheaters from recorded `.dem` files — exactly the
+  input RoundSync already has. Trained on 256-tick windows around each
+  kill, 44 features per tick, mostly relative positioning/distance and
+  whether a kill happened with information the shooter shouldn't have had
+  — not primarily aim-snap/angular-velocity features.
 - **Reported performance**: 89.17% accuracy, 93.36% AUC, but only **63.13%
-  recall** and 85.13% precision. In plain terms: it misses more than a
-  third of actual cheaters, and about 1 in 7 of the people it *does* flag
-  aren't cheating.
-- **Dataset (CS2CD, 795 matches)**: CC BY 4.0 license. **Code and model
-  weights**: open-source at
-  [github.com/itubrainlab/AntiCheatPT](https://github.com/itubrainlab/AntiCheatPT).
-  Both genuinely reusable with attribution — no IP blocker.
-- **The real consideration isn't legal, it's product risk.** Everything
-  else in this doc is about RoundSync's own numbers describing the tracked
-  user's own play. A cheat flag is different in kind: it's an accusation
-  about a real third-party opponent, based on a model with a meaningful
-  false-positive rate (~15%) and a worse false-negative rate (~37% of real
-  cheaters missed). Valve's own VAC/Overwatch system is the actual
-  authority with due process attached; an unofficial per-match "possible
-  cheater" flag with no appeal path is a materially higher-risk feature
-  than any stat on this page, regardless of how technically sound the
-  underlying model is. If this gets built, it should be framed as a
-  probabilistic signal for the user's own awareness ("this game had unusual
-  patterns"), never as a confident accusation naming a specific person.
+  recall** and 85.13% precision — misses over a third of actual cheaters,
+  and ~1 in 7 flagged aren't cheating.
+- **Dataset (CS2CD, 795 matches)**: CC BY 4.0. **Code/weights**: open-source
+  at github.com/itubrainlab/AntiCheatPT. Both reusable with attribution.
+- **The real consideration isn't legal, it's product risk.** A cheat flag
+  accuses a real third-party opponent, based on a model with a meaningful
+  false-positive rate. Valve's own VAC/Overwatch system is the actual
+  authority with due process attached. If built: frame as a probabilistic
+  "unusual patterns" signal for the user's own awareness, never a
+  confident accusation naming a specific person.
 
 ## Predictive / trend analysis — real methodology exists, but naive trend-lines are the wrong tool
 
-Checked whether "here's where you're headed if you keep playing like this"
-is something the industry already does, and what the statistically honest
-way to build it would be.
+- **What the industry actually does**: benchmark-gap comparison
+  (Leetify/SteamAnalyst compare current stats against higher-ranked
+  players' typical numbers), not dynamic forecasting. No confirmed real
+  precedent for genuine trend-forecasting found anywhere.
+- **The real statistical methodology**: regression to the mean / Bayesian
+  shrinkage (the James-Stein estimator pattern from baseball analytics) —
+  pulls a small-sample estimate toward a population/rank-tier baseline
+  rather than trusting the raw trend line. Naive linear extrapolation is
+  exactly the mistake this exists to prevent.
+- **Why this matters now**: the tracked player has ~8 matches of history —
+  forecasting almost entirely off noise at that sample size. If built: (1)
+  show a confidence range, not a single number, (2) shrink toward a
+  rank-tier baseline, (3) gate behind a minimum match count.
+- **Sources**: [leetify.com/blog/cs2-benchmarks](https://leetify.com/blog/cs2-benchmarks/), [steamanalyst.com/cs2-stats](https://www.steamanalyst.com/cs2-stats), [andrewgrenbemer.medium.com](https://andrewgrenbemer.medium.com/applying-regression-to-the-mean-and-final-adjustments-creating-a-college-baseball-projection-1213154cac85), [ncbi.nlm.nih.gov/pmc/articles/PMC8970347](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8970347/)
 
-- **What the industry actually does**: benchmark-gap comparison, not
-  forecasting. Leetify and SteamAnalyst compare a player's current stats
-  against higher-ranked players' typical numbers ("here's the gap to
-  close"), which is a *static* comparison, not a *dynamic* projection.
-  Searched specifically for genuine trend-forecasting/"projected rank"
-  features and found no confirmed real precedent on any major platform.
-- **The real statistical methodology, from sports-analytics research**:
-  small-sample performance metrics are dominated by noise, not signal —
-  the standard, well-established fix is **regression to the mean /
-  Bayesian shrinkage** (the classic James-Stein estimator pattern from
-  baseball analytics), which pulls a small-sample estimate toward a
-  population or rank-tier baseline rather than trusting the raw trend
-  line. **Naive linear extrapolation of a trend ("ADR went 80→90→100, so
-  next month you'll be at 150") is exactly the mistake this methodology
-  exists to prevent.**
-- **Why this matters concretely for RoundSync right now**: the tracked
-  player has **8 matches** of history. That is a very small sample by the
-  standard this research uses to talk about "stabilization" — any
-  predictive feature built today would be forecasting almost entirely off
-  noise. If this ships, it needs to (1) show a confidence range, not a
-  single confident number, (2) shrink toward a rank-tier baseline rather
-  than extrapolate the raw trend, and (3) probably gate itself behind a
-  minimum match count before showing anything at all, rather than project
-  from 8 data points.
-- **Connects directly to the Tier 6 academic line already in this doc** —
-  the "Round Swing / win-probability-added" research is the real,
-  rigorous foundation for genuine predictive modeling here, not a
-  from-scratch trend-line.
-- **Sources**: [leetify.com/blog/cs2-benchmarks](https://leetify.com/blog/cs2-benchmarks/) and [steamanalyst.com/cs2-stats](https://www.steamanalyst.com/cs2-stats) (both confirm benchmark-gap comparison, not forecasting) · [andrewgrenbemer.medium.com — regression to the mean in baseball projections](https://andrewgrenbemer.medium.com/applying-regression-to-the-mean-and-final-adjustments-creating-a-college-baseball-projection-1213154cac85) · [ncbi.nlm.nih.gov/pmc/articles/PMC8970347 — Bayesian analysis with informative priors in elite sports](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8970347/) (the small-sample-size methodology this section's recommendation is built on)
+## Bracket comparison ("how do I compare to a higher/lower rank")
 
-## Bracket comparison ("how do I compare to a higher/lower rank") — real methodology, but a real data blocker for RoundSync specifically
-
-- **How Leetify actually does it**: z-scores against their whole tracked
-  playerbase, colour-coded by percentile (bottom 10% = Poor, 10-30% =
-  Subpar, 30-70% = Average, 70-90% = Good, 90-100% = Great). Genuinely
-  useful methodological detail: **not every stat gets rank-adjusted.**
-  Stats like Time to Damage, average blind duration, and spotted accuracy
-  are compared *within your own skill bracket* (rank-dependent), while ADR,
-  K/D, and the composite Rating use the *same* benchmark regardless of
-  rank (rank-independent) — a deliberate, non-obvious design choice worth
-  copying the reasoning behind, not just the output.
-- **Valve does not publish any of this.** Checked directly: there's no
-  official rank-distribution or per-bracket benchmark data from Valve.
-  Even the community "rank distribution" numbers/colour names circulating
-  on sites like csdb.gg are themselves derived from Leetify's own
-  aggregated match data via a third-party republisher (Esports Tales) —
-  not an independent or official source.
-- **What this means concretely for RoundSync**: bracket comparison needs
-  *population* data — many players' stats, grouped by rank — and
-  RoundSync currently has ~3 users total. There is no honest way to show
-  "here's the average ADR for your bracket" today; there isn't enough of
-  RoundSync's own data to compute it, and using someone else's compiled
-  benchmark table (even indirectly, via a republisher) means presenting
-  numbers with an unknown/unverifiable methodology as if they were
-  RoundSync's own.
-- **What's already in place for when this becomes viable**: every fact
-  table already stores `player_rank_new`/`player_rank_type_id` per row —
-  RoundSync already tags every single stat with the exact rank it was
-  earned at. That's the right foundation; once enough users are synced,
-  building genuine population benchmarks is a `group by rank tier`
-  aggregation over data RoundSync already collects, not new extraction.
-- **Cheap and available right now, distinct from the blocked part**:
-  *labeling* a given CS Rating number with its community-convention tier
-  name/color (Grey 0-4,999 / Light Blue 5,000-9,999 / Blue 10,000-14,999 /
-  Purple 15,000-19,999 / Pink 20,000-24,999 / Red 25,000-29,999 / Gold
-  30,000+) is safe to build today — it's just labeling a numeric range
-  RoundSync already stores, not claiming a population comparison RoundSync
-  can't back up yet.
-- **Sources**: [leetify.com/blog/cs2-benchmarks](https://leetify.com/blog/cs2-benchmarks/) (z-score/percentile methodology, fetched directly) · [csdb.gg/rank-distribution](https://csdb.gg/rank-distribution/) and [csdb.gg/premier-ranks](https://csdb.gg/premier-ranks/) (the community tier names/cutoffs, sourced from Esports Tales' aggregation of Leetify data — confirmed this is not an independent or Valve source)
+- **How Leetify does it**: z-scores against their whole playerbase,
+  percentile-banded. **Not every stat gets rank-adjusted** — TTD, blind
+  duration, spotted accuracy compare *within* your bracket (rank-dependent);
+  ADR/K/D/composite Rating use the *same* benchmark regardless of rank
+  (rank-independent) — a deliberate, non-obvious design choice.
+- **Valve publishes none of this.** Even community "rank distribution"
+  numbers (csdb.gg etc.) are themselves derived from Leetify's own
+  aggregated data via a third-party republisher, not an independent or
+  official source.
+- **What this means for RoundSync**: bracket comparison needs population
+  data across many users; RoundSync has ~3 total right now. No honest way
+  to show "average ADR for your bracket" today.
+- **What's already in place**: every fact table stores
+  `player_rank_new`/`player_rank_type_id` per row — the right foundation
+  for a `group by rank tier` once there's real population data.
+- **Cheap and available right now**: labeling a CS Rating number with its
+  community-convention tier name/color (Grey 0-4,999 / Light Blue 5,000-
+  9,999 / Blue 10,000-14,999 / Purple 15,000-19,999 / Pink 20,000-24,999 /
+  Red 25,000-29,999 / Gold 30,000+) — just labeling a numeric range
+  RoundSync already stores.
+- **Sources**: [leetify.com/blog/cs2-benchmarks](https://leetify.com/blog/cs2-benchmarks/), [csdb.gg/rank-distribution](https://csdb.gg/rank-distribution/), [csdb.gg/premier-ranks](https://csdb.gg/premier-ranks/)
 
 ## Checked and confirmed real, but not rigorously standardized
 
-- **Pistol-round-specific performance** — confirmed as a real tracked
-  category (SteamAnalyst and others segment stats by pistol round), but no
-  single rigorous published methodology found — likely just "the same
-  stats, filtered to pistol rounds."
-- **Post-plant win rate / retake success rate**, and the wider **objective
-  category** AI Mode raised (bomb plants/defuses as a raw count, bomb-
-  carrier hold time, plant/defuse-denial kills, site-hold duration) —
-  referenced in passing by some trackers ("retakes with success rate and
-  decision-making speed") but not confirmed as standardized, precisely-
-  defined stats the way ADR or KAST are. Buildable from existing round-
-  bounds + bomb-plant data (RoundSync already has `bomb_plant` trigger data
-  and `round_win_reason`), but there's no external definition to hold it
-  to — RoundSync would be setting its own methodology here, not matching an
-  industry standard.
-- **Sources**: [steamanalyst.com/tools/cs2-stats](https://www.steamanalyst.com/tools/cs2-stats) and [community.skin.club/en/articles/best-cs2-stats-trackers](https://community.skin.club/en/articles/best-cs2-stats-trackers) (pistol-round segmentation and "retakes with success rate and decision-making speed" both referenced only in passing, no rigorous methodology given by either)
+- **Pistol-round-specific performance** — real tracked category, no single
+  rigorous published methodology — likely just "the same stats, filtered
+  to pistol rounds."
+- **Post-plant win rate / retake success rate**, bomb-carrier hold time,
+  plant/defuse-denial kills, site-hold duration — referenced in passing by
+  some trackers but not confirmed as standardized, precisely-defined stats
+  the way ADR or KAST are. Buildable from existing round-bounds + bomb-plant
+  data, but RoundSync would be setting its own methodology.
+- **Sources**: [steamanalyst.com/tools/cs2-stats](https://www.steamanalyst.com/tools/cs2-stats), [community.skin.club/en/articles/best-cs2-stats-trackers](https://community.skin.club/en/articles/best-cs2-stats-trackers)
 
 ## Checked and found no industry precedent — would be a genuine RoundSync original
 
-- **Sound discipline / self-audibility** (how often the tracked player gives
-  away their own position by running instead of walking) — searched
-  specifically for this; it's a real, widely-discussed *coaching concept*,
-  but not a published or tracked stat on any platform researched. Confirmed
-  real audible-range figures from community sources (running ≈20m, silent
-  below ≈5m when deliberately walking) closely match RoundSync's own
-  existing constants (`RUNNING_AUDIBLE_RANGE_UNITS` ≈ 19.05m,
-  `WALKING_AUDIBLE_RANGE_UNITS` ≈ 17.15m, with sub-walk-speed movement
-  correctly classified as silent) — those constants were a good estimate,
-  not a guess that needs fixing. Building a "self-audibility" score would be
-  a legitimate net-new RoundSync feature, not something to hold to an
-  external standard, since none exists.
-- **Sources**: searched specifically for a tracked "sound discipline"/self-audibility stat and found none — [csgo-guides.com/gameplay/sound](https://csgo-guides.com/gameplay/sound) and [steamcommunity.com/sharedfiles/filedetails/?id=3564697172](https://steamcommunity.com/sharedfiles/filedetails/?id=3564697172) confirm the real audible-range figures (running ≈20m, silent below ≈5m walking) used to validate RoundSync's existing constants, but neither describes a tracked stat, only game mechanics.
+- **Sound discipline / self-audibility** — real, widely-discussed coaching
+  concept, but not a published or tracked stat on any platform researched.
+  Confirmed real audible-range figures (running ≈20m, silent below ≈5m
+  walking) closely match RoundSync's own existing constants
+  (`RUNNING_AUDIBLE_RANGE_UNITS` ≈ 19.05m, `WALKING_AUDIBLE_RANGE_UNITS`
+  ≈ 17.15m) — those constants were a good estimate, not a guess that needs
+  fixing.
+- **Sources**: [csgo-guides.com/gameplay/sound](https://csgo-guides.com/gameplay/sound), [steamcommunity.com/sharedfiles/filedetails/?id=3564697172](https://steamcommunity.com/sharedfiles/filedetails/?id=3564697172)
 
 ## HLTV Rating (2.0 / 3.0) — reference only, do not implement as-is
 
-- **Calculation**: Rating 2.0's coefficients were only ever *reverse-engineered*
-  by third parties (`0.0073·KAST + 0.3591·KPR − 0.5329·DPR + 0.2372·Impact +
-  0.0032·ADR + 0.1587`), never officially confirmed by HLTV. Rating 3.0's
-  coefficients have **never been published in any form**.
-- **Purpose**: single-number overall performance score.
-- **RoundSync verdict**: **do not build a copy.** The existing
-  `extract_fact_engage_decision` docstring already gets this right — it
-  deliberately stores raw kill/death/damage components without inventing a
-  weighted score, specifically citing that HLTV's coefficients are
-  undisclosed. If RoundSync wants a composite score later, build an
-  original, transparently-documented formula under RoundSync's own name.
-- **Legal**: the general *idea* of a weighted composite rating isn't
-  ownable, but (a) we can't copy the real 3.0 formula because it doesn't
-  exist publicly to copy, and (b) using the name "Rating" alongside "HLTV"
-  branding, or claiming equivalence to their number, risks implying an
-  affiliation RoundSync doesn't have.
+- **Calculation**: Rating 2.0's coefficients were only ever
+  *reverse-engineered* by third parties, never officially confirmed.
+  Rating 3.0's coefficients have **never been published in any form**.
+- **RoundSync verdict**: **do not build a copy.** `extract_fact_engage_decision`'s
+  docstring already gets this right — stores raw kill/death/damage
+  components without inventing a weighted score. If RoundSync wants a
+  composite score later, build an original, transparently-documented
+  formula under RoundSync's own name.
+- **Legal**: the general idea of a weighted composite rating isn't ownable,
+  but the real 3.0 formula can't be copied (doesn't exist publicly), and
+  using "Rating" alongside "HLTV" branding risks implying an affiliation
+  RoundSync doesn't have.
 - **Sources**: [medium.com/@ferahgothegreat](https://medium.com/@ferahgothegreat/approximating-hltv-s-cs-go-2-0-rating-in-valorant-54e1e7224759), [flashed.gg/posts/reverse-engineering-hltv-rating](https://flashed.gg/posts/reverse-engineering-hltv-rating/), [hltv.org/news/43047](https://www.hltv.org/news/43047/rating-30-adjustments-go-live)

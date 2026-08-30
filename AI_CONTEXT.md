@@ -23,12 +23,18 @@ for you.
 
 ## Required reading, in this order
 
-1. **`NEXT_STEPS.md`** (repo root) — what's been fixed and what's still
-   open, tiered by priority and actual engineering lift (verified against
-   real field availability, not estimated). Includes a full "Completed"
-   record of every bug found and fixed in the 2026-08-25 data audit, so you
-   don't need the external Claude artifact link to know that history — this
-   file is self-contained.
+1. **`NEXT_STEPS.md`** (repo root) — what's still open, tiered by priority
+   and actual engineering lift (verified against real field availability,
+   not estimated), plus a one-line pointer for everything already finished.
+   **`NEXT_STEPS_ARCHIVE.md`** (repo root, split out 2026-08-28) holds the
+   full forensic detail behind every finished item — NOT part of the
+   required-reading list, read it only when a task specifically needs the
+   reasoning behind a past fix. This mirrors how
+   `archive/project_status_and_roadmap_archive.md` already works. Two
+   lessons that generalize beyond their own bug (Supabase RLS scoping, the
+   weighted-average pattern) were promoted to memory
+   (`project_supabase_security_patterns.md`) before the split, so nothing
+   load-bearing depends on opening the archive.
 2. **`services/watcher/CS2_ANALYTICS_STANDARDS.md`** — broader than its name
    suggests: not just ~40 CS2 analytics metrics (ADR, KAST, Time to Damage,
    reaction time, trade kills, clutches, cheat detection, predictive/trend
@@ -46,6 +52,12 @@ for you.
    external standard and must be built from scratch, and what's off-limits
    (IP risk or product risk). This is the evidence behind every item in
    `NEXT_STEPS.md` — check it before re-researching anything from scratch.
+   Every fact/verdict in this doc is complete on its own — the research
+   *process* narrative behind a few of them (rank badge pixel measurement,
+   the full Google AI Mode fact-check trail) moved to
+   `CS2_ANALYTICS_STANDARDS_ARCHIVE.md` (split 2026-08-28), which is NOT
+   part of this required-reading list — same on-demand-only treatment as
+   `NEXT_STEPS_ARCHIVE.md` above.
 3. **`services/watcher/DEMOPARSER2_FIELDS.md`** — the field/event reference
    for `demoparser2`, the library RoundSync's data pipeline is built on,
    plus specific researched findings (e.g. sub-tick input timing vs. the
@@ -58,6 +70,16 @@ for you.
 5. **`IDEAS.md`** (repo root) — original feature/metric ideas not yet
    scoped into `NEXT_STEPS.md`. Check before proposing a "new" idea that
    might already be recorded here.
+
+## A separate, self-contained side experiment exists — not required reading
+
+**`LOCAL_AGENT_EXPERIMENT.md`** (repo root) tracks a free, local multi-agent
+coding pipeline (Ollama + a local model + a hand-built plan/apply/audit
+loop), run alongside normal RoundSync development, not part of it — the
+goal is a self-hosted equivalent of Anthropic's paid multi-agent Workflows
+feature, not a way to build RoundSync itself. Only open this file if asked
+to continue that experiment specifically; it's irrelevant to regular
+RoundSync work.
 
 ## If the task involves frontend work
 
