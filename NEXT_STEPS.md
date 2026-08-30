@@ -484,14 +484,27 @@ These feature requests/redesigns are still open:
 - [ ] **Match-detail drill-down page** — a real per-match view (overview,
       round-by-round, etc.), not just the current summary card. RoundSync
       currently has no single-match detail view at all.
-- [ ] **Recent Matches carousel cards need more stats — and the actual
-      time played, not just the date.** Currently only shows map/date/K-D
-      ratio. User wants Kills, Deaths, Assists, Headshot %, K/D, ADR, and
-      Performance Index all visible (the Matches tab's own cards already
-      show most of these but are missing Assists; the Home carousel cards
-      are missing almost all of them). Also: `formatMatchDate()`
-      (`page.tsx`) only formats the date portion of `match_time` — needs
-      the time-of-day included too, everywhere a match's date is shown.
+- [x] **Recent Matches carousel cards need more stats — and the actual
+      time played, not just the date — DONE, 2026-08-30.** `assists` never
+      existed as a real backend stat at all — `player_death`'s
+      `assister_steamid` was already parsed for KAST but never counted per
+      player. Added `total_assists` extraction in `sync_pipeline.py`
+      (same pattern as `total_kills`/`total_deaths`) and threaded it into
+      `real_payload.telemetry.assists`; passes through `/api/matches`
+      unchanged since that endpoint selects the whole `match_data` blob.
+      Frontend: added `assists?: number | null` to the `Match` telemetry
+      type (optional/nullable like the other post-hoc fields, since older
+      already-parsed matches won't have it — renders `—` via `t.assists ?? '—'`,
+      verified in a mocked screenshot). Matches tab card grid went from
+      4 stats (K/D, Kills, ADR, HS) to 6 (added Deaths, Assists), 3-col x
+      2-row. Home carousel card was previously image-heavy showing only
+      K/D — redesigned to a compact 4-col stat grid (K/D, Kills, Deaths,
+      Assists / ADR, HS, Performance spanning 2 cells) below a smaller
+      image, verified in a mocked screenshot at 5-cards-per-page width.
+      `formatMatchDate()` now uses `toLocaleString` with `hour`/`minute`
+      instead of `toLocaleDateString` — fixes every call site at once
+      since it's the one shared function (Home carousel, Matches tab,
+      AI Coach prompt text).
 - [x] **Re-evaluate Performance Index using the richer metrics now
       available — DONE, 2026-08-30.** Was a simple 3-input blend (K/D 50%
       / ADR 35% / HS% 15%), explicitly labeled a placeholder. Now a

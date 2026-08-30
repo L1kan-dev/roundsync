@@ -27,6 +27,7 @@ interface Match {
       adr: number;
       kills: number;
       deaths: number;
+      assists?: number | null;
       headshot_pct: number;
       map?: string | null;
       match_time?: number | null;
@@ -96,7 +97,9 @@ function performanceIndex(t: Match['match_data']['telemetry']): number {
 // backlog of older matches processed in one sitting looks like a false play date.
 function formatMatchDate(t: Match['match_data']['telemetry']): string {
   if (!t.match_time) return 'Date unavailable';
-  return new Date(t.match_time * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(t.match_time * 1000).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
 }
 
 // Sorts most-recent-played first when we know match_time, falling back to parse
@@ -659,9 +662,9 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
               onClick={() => onAskMatch(m)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAskMatch(m); } }}
               style={{ width: cardWidth }}
-              className="relative flex-none h-48 rounded-2xl overflow-hidden border border-[var(--edge)] flex flex-col cursor-pointer transition-transform hover:-translate-y-0.5"
+              className="relative flex-none rounded-2xl overflow-hidden border border-[var(--edge)] flex flex-col cursor-pointer transition-transform hover:-translate-y-0.5"
             >
-              <div className="relative" style={{ flex: 3 }}>
+              <div className="relative h-20 shrink-0">
                 {bg ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={bg} alt="" className="absolute inset-0 w-full h-full object-cover" />
@@ -677,17 +680,47 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
                   </div>
                 )}
               </div>
+              {/* Redesigned 2026-08-30 (NEXT_STEPS.md Band 7) — used to show only K/D; now
+                  every stat the Matches tab card shows, packed into a 4-col grid since these
+                  cards are ~5x narrower. Performance Index spans 2 cells (its own number is
+                  wider: "NN/100") so it doesn't wrap inside a single narrow cell. */}
               <div
-                className="flex items-center justify-between gap-2 px-3.5 chip3d"
-                style={{ flex: 1, borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}
+                className="flex flex-col gap-1 px-3 py-2 chip3d"
+                style={{ borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}
               >
                 <div className="min-w-0">
-                  <p className="font-display font-bold text-sm leading-none truncate">{formatMapName(t.map)}</p>
-                  <p className="text-[10px] text-[var(--text-dim)] mt-1.5">{formatMatchDate(t)}</p>
+                  <p className="font-display font-bold text-xs leading-none truncate">{formatMapName(t.map)}</p>
+                  <p className="text-[8px] text-[var(--text-dim)] mt-1 truncate">{formatMatchDate(t)}</p>
                 </div>
-                <div className="shrink-0 text-right" title="Kills-to-deaths ratio">
-                  <p className="font-tel text-base font-extrabold leading-none" style={{ color: accent }}>{t.kd_ratio}</p>
-                  <p className="text-[9px] uppercase tracking-wider text-[var(--text-dim)] mt-1.5">K/D</p>
+                <div className="grid grid-cols-4 gap-x-1 gap-y-1 text-center mt-0.5">
+                  <div title="Kills-to-deaths ratio">
+                    <p className="font-tel text-xs font-extrabold leading-none" style={{ color: accent }}>{t.kd_ratio}</p>
+                    <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">K/D</p>
+                  </div>
+                  <div>
+                    <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.kills}</p>
+                    <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Kills</p>
+                  </div>
+                  <div>
+                    <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.deaths}</p>
+                    <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Deaths</p>
+                  </div>
+                  <div>
+                    <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.assists ?? '—'}</p>
+                    <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Assists</p>
+                  </div>
+                  <div>
+                    <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.adr}</p>
+                    <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">ADR</p>
+                  </div>
+                  <div>
+                    <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.headshot_pct}%</p>
+                    <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">HS</p>
+                  </div>
+                  <div className="col-span-2" title="Performance Index">
+                    <p className="font-tel text-xs font-extrabold leading-none text-[var(--amber)]">{performanceIndex(t)}/100</p>
+                    <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Performance</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1897,7 +1930,7 @@ export default function Home() {
                     </div>
 
                     <div className="chip3d p-4.5" style={{ borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}>
-                      <div className="grid grid-cols-4 gap-2 text-center mb-3.5">
+                      <div className="grid grid-cols-3 gap-2 text-center mb-3.5">
                         <div title="Kills-to-deaths ratio">
                           <p className="font-tel font-bold text-lg" style={{ color: accent }}>{t.kd_ratio}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">K/D</p>
@@ -1905,6 +1938,14 @@ export default function Home() {
                         <div>
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.kills}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Kills</p>
+                        </div>
+                        <div>
+                          <p className="font-tel font-bold text-lg text-[var(--text)]">{t.deaths}</p>
+                          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Deaths</p>
+                        </div>
+                        <div>
+                          <p className="font-tel font-bold text-lg text-[var(--text)]">{t.assists ?? '—'}</p>
+                          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Assists</p>
                         </div>
                         <div>
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.adr}</p>

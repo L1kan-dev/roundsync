@@ -1715,6 +1715,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
 
         total_kills = 0
         total_deaths = 0
+        total_assists = 0
         headshots = 0
         rounds_played = 0
         deaths_df = pd.DataFrame()
@@ -1744,6 +1745,12 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 if "user_steamid" in deaths_df.columns:
                     user_deaths = deaths_df[deaths_df["user_steamid"].astype(str) == str(target_steam_id64)]
                     total_deaths = len(user_deaths)
+                # assister_steamid was already parsed for KAST (below) but never counted into a
+                # real per-player assists stat — NEXT_STEPS.md Band 7 flagged the frontend as
+                # missing Assists entirely, and there was no backend field to surface at all.
+                if "assister_steamid" in deaths_df.columns:
+                    user_assists = deaths_df[deaths_df["assister_steamid"].astype(str) == str(target_steam_id64)]
+                    total_assists = len(user_assists)
         except Exception as e:
             print(f"⚠️ Warning parsing deaths: {e}")
 
@@ -1913,6 +1920,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "adr": calculated_adr,
                 "kills": total_kills,
                 "deaths": total_deaths,
+                "assists": total_assists,
                 "headshot_pct": headshot_pct,
                 "total_damage": total_damage,
                 "headshots": headshots,

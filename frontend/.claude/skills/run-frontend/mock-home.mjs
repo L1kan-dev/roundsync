@@ -16,7 +16,7 @@ const matches = {
       parsed_at: new Date().toISOString(),
       match_data: {
         telemetry: {
-          status: 'fully_parsed', kd_ratio: 1.62, adr: 87, kills: 24, deaths: 15, headshot_pct: 52,
+          status: 'fully_parsed', kd_ratio: 1.62, adr: 87, kills: 24, deaths: 15, assists: 6, headshot_pct: 52,
           map: 'de_mirage', match_time: Math.floor(Date.now() / 1000) - 86400, total_damage: 1800,
           headshots: 12, rounds_played: 22, rank_at_match_start: 17850,
           entry_success_pct: 61.5, utility_dmg_per_round: 7.2, clutches_won: 2, trade_kill_pct: 41.0,
