@@ -99,8 +99,12 @@ All 4 came from actually using the live app — full detail in archive, Tier
 
 **Band 6 — Bigger builds, sequenced by shared dependency.**
 Tier 2's Time to Damage and reaction-time rebuilds both need a real
-player-visibility primitive. Tier 6's `awpy` (MIT) already has this solved
-— evaluate it first.
+player-visibility primitive. **`awpy` evaluated 2026-08-30 — real, usable,
+low-risk (see Tier 6 below and `CS2_ANALYTICS_STANDARDS.md`'s Academic/
+open-source layer section for the full verdict).** Not yet installed —
+integrating it (adding the dependency, running `awpy get tris`, wiring
+`VisibilityChecker` into the pipeline) is the next actual build step,
+pending the user's go-ahead.
 
 **Band 7 — Bigger UX asks, real value but bigger scope.**
 - Match-detail drill-down page
@@ -280,11 +284,18 @@ actual lift, cheapest first:
 
 ## Tier 6 — Academic/open-source layer (legally cleanest path to anything HLTV-Impact-like)
 
-- [ ] Evaluate `awpy` (MIT license, github.com/pnxenopoulos/awpy) as a
-      reference or dependency — it already solves player-visibility
-      detection (unlocks Tier 2's Time-to-Damage rebuild + raw accuracy
-      above) and has nav-mesh data that could replace the manual
-      callout-centroid approach used for the bombsite fix.
+- [x] **Evaluate `awpy` (MIT license, github.com/pnxenopoulos/awpy) — DONE,
+      2026-08-30.** Real, usable, low-risk: runs on top of the same
+      `demoparser2` `sync_pipeline.py` already uses (not a second parser to
+      reconcile), exposes `awpy.visibility.VisibilityChecker.is_visible(p1,
+      p2)` at ~65-177μs/check with a one-time per-map BVH build (744ms-9.6s),
+      covers CS2's current competitive map pool. Full findings in
+      `CS2_ANALYTICS_STANDARDS.md`. **Not yet installed/integrated** — next
+      step is adding the dependency and wiring it into Tier 2's TTD/
+      reaction-time rebuild, pending go-ahead.
+- [ ] Nav-mesh data as a possibly more reliable path to bombsite resolution
+      than the manual callout-centroid approach — not yet evaluated in
+      detail (visibility was the priority check).
 - [ ] Consider building RoundSync's own composite score from the published,
       peer-reviewed "Valuing Player Actions in CS:GO" win-probability
       framework (arxiv.org/abs/2011.01324) instead of guessing at HLTV's

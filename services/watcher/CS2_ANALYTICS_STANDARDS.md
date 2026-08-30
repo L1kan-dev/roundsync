@@ -443,6 +443,48 @@ URL.
   missing piece for a real Time-to-Damage fix. Also does nav-mesh parsing,
   a possibly more reliable path to bombsite resolution than the manual
   callout-centroid approach.
+  **Real evaluation done 2026-08-30** (checked live against readthedocs/PyPI/GitHub,
+  not assumed from the name — this is Tier 6's Band-6 dependency task from
+  `NEXT_STEPS.md`):
+  - **Version 2.0.2** (Mar 2025), Python `>=3.11,<3.14`, MIT.
+  - **Runs on top of `demoparser2`** — the exact same parser
+    `sync_pipeline.py` already uses, confirmed via its own docs ("We now
+    rely on demoparser2 for parsing"). Not a second/competing parser to
+    reconcile — it composes with the existing pipeline.
+  - **Real API**: `awpy.visibility.VisibilityChecker.is_visible(point1,
+    point2)` → bool, given two `(x, y, z)` positions. This is exactly the
+    primitive Tier 2 (Time to Damage, reaction time) and Tier 5's raw
+    accuracy/spray accuracy all need.
+  - **Requires per-map collision-mesh files** (`.tri`), fetched via `awpy
+    get tris` (~20MB total, all maps combined) — a one-time asset download,
+    not bundled in the pip package itself.
+  - **Map coverage confirmed**: ar_baggage, ar_shoots, cs_italy, cs_office,
+    de_ancient, de_anubis, de_dust2, de_inferno, de_mirage, de_nuke,
+    de_overpass, de_train, de_vertigo, lobby_mapveto — covers CS2's current
+    active Premier/competitive pool. `sync_pipeline.py` has no hardcoded
+    map allowlist (confirmed via grep, 2026-08-30), so a demo on an
+    unlisted map would just mean visibility data isn't available for that
+    one match, not a crash — a real but survivable edge case, no code
+    changes needed to tolerate it.
+  - **Real performance numbers, not estimated**: `VisibilityChecker`
+    build cost (once per map, from the BVH tree over the mesh) ranges 744ms
+    (de_mirage, smallest) to 9.62s (de_inferno, largest) — a one-time
+    per-sync cost, not per-check. Each individual `is_visible()` call is
+    ~65-177 microseconds — cheap enough to run per-tick, per-player-pair
+    across a full match without a real perf concern.
+  - **Real caveat, stated in awpy's own docs**: the mesh-raycast check
+    doesn't account for smokes, flashes, or dynamic props blocking sight —
+    it answers "is there a clear geometric line" not "could the player
+    actually see through what's currently there." Acceptable for TTD/
+    reaction-time (both already anchored to "enemy becomes visible," and a
+    smoke blocking a would-be sightline just correctly produces no
+    visibility event, which is the right outcome) but worth remembering if
+    it's ever used for something claiming smoke-awareness.
+  - **Verdict: real, usable, low-risk dependency to add.** Unlocks Tier 2's
+    TTD/reaction-time rebuild and Tier 5's raw/spray accuracy off one
+    shared primitive, exactly as the Dependency Map in `NEXT_STEPS.md`
+    predicted. Not yet installed/integrated — this entry is the research
+    verdict, not a build confirmation.
 - **"Valuing Player Actions in Counter-Strike: Global Offensive"**
   (Xenopoulos et al., IEEE Big Data 2020, arxiv.org/abs/2011.01324) —
   published, open framework valuing every in-game action by win-probability
