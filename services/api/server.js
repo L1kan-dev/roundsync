@@ -623,14 +623,39 @@ function countBy(rows, field) {
   return counts;
 }
 
-// Mirrors the frontend's performanceIndex() in frontend/app/page.tsx exactly — kept in
-// sync deliberately, both are the same "lightweight composite, not the full Impact
-// formula" placeholder.
+// Same impact-weighted multi-kill bonus as frontend/app/page.tsx's multiKillBonusComponent —
+// kept in sync deliberately. Weight = (kill count - 1), the EXTRA kills beyond a normal 1-kill
+// round: 2k=1, 3k=2, 4k=3, ace=5 kills-1=4.
+const MULTI_KILL_BONUS_WEIGHT = { '2k': 1, '3k': 2, '4k': 3, ace: 4 };
+const MULTI_KILL_BONUS_PER_ROUND_CAP = 0.5;
+
+function multiKillBonusComponentServer(multiKillRounds, roundsPlayed) {
+  if (!multiKillRounds || !roundsPlayed) return null;
+  const bonusKills = Object.entries(MULTI_KILL_BONUS_WEIGHT)
+    .reduce((sum, [key, weight]) => sum + (multiKillRounds[key] || 0) * weight, 0);
+  return Math.min(bonusKills / roundsPlayed, MULTI_KILL_BONUS_PER_ROUND_CAP) / MULTI_KILL_BONUS_PER_ROUND_CAP;
+}
+
+// Mirrors the frontend's performanceIndex() in frontend/app/page.tsx exactly — kept in sync
+// deliberately. See that function's own comment for the weight reasoning (ADR/KAST are the
+// two most outcome-predictive stats per published research checked 2026-08-30; K/D is the
+// least correlated; headshot% is a mechanics indicator, not an outcome predictor) and the
+// missing-component reweighting (an older match without KAST/trade-kill%/multi-kill data
+// doesn't get penalized as 0 — remaining weights are redistributed proportionally).
 function performanceIndexServer(t) {
-  const kdComponent = Math.min(t.kd_ratio || 0, 3) / 3;
-  const adrComponent = Math.min(t.adr || 0, 150) / 150;
-  const hsComponent = Math.min(t.headshot_pct || 0, 100) / 100;
-  return Math.round((kdComponent * 0.5 + adrComponent * 0.35 + hsComponent * 0.15) * 100);
+  const components = [
+    [t.kd_ratio != null ? Math.min(t.kd_ratio, 3) / 3 : null, 0.15],
+    [t.adr != null ? Math.min(t.adr, 150) / 150 : null, 0.30],
+    [t.headshot_pct != null ? Math.min(t.headshot_pct, 100) / 100 : null, 0.07],
+    [t.kast_pct != null ? Math.min(t.kast_pct, 100) / 100 : null, 0.30],
+    [t.trade_kill_pct != null ? Math.min(t.trade_kill_pct, 100) / 100 : null, 0.10],
+    [multiKillBonusComponentServer(t.multi_kill_rounds, t.rounds_played), 0.08],
+  ];
+  const present = components.filter(([v]) => v !== null && v !== undefined);
+  if (present.length === 0) return 0;
+  const totalWeight = present.reduce((sum, [, w]) => sum + w, 0);
+  const score = present.reduce((sum, [v, w]) => sum + v * (w / totalWeight), 0);
+  return Math.round(score * 100);
 }
 
 function buildMapBreakdown(matchList) {

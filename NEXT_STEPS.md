@@ -84,8 +84,8 @@ All 4 came from actually using the live app — full detail in archive, Tier
 - [x] Real map thumbnails — DONE, 2026-08-27
 - [x] Tier 13: precision-over-rounding sweep — DONE, 2026-08-27
 
-**Band 3 — Consistency work tied to what's already shipped.**
-- Performance Index redesign (Tier 10 — explicitly labeled a placeholder in its own code comment; KAST/multi-kill/positioning data now exists to build a real one)
+**Band 3 — Consistency work tied to what's already shipped. DONE, 2026-08-30.**
+- [x] Performance Index redesign (Tier 10) — DONE, 2026-08-30, see Tier 10 below
 - [x] Tier 5.5: Engage IQ redesign — Phase 1 (factor capture) DONE, 2026-08-30; scoring-methodology phase deliberately deferred, see Tier 5.5 below
 
 **Band 4 — DONE, 2026-08-30.**
@@ -468,11 +468,24 @@ These feature requests/redesigns are still open:
       are missing almost all of them). Also: `formatMatchDate()`
       (`page.tsx`) only formats the date portion of `match_time` — needs
       the time-of-day included too, everywhere a match's date is shown.
-- [ ] **Re-evaluate Performance Index using the richer metrics now
-      available.** Currently a simple 3-input blend (K/D, ADR, headshot %),
-      explicitly labeled a placeholder in its own code comment. With KAST,
-      multi-kill rounds, utility, positioning, and engage-decision data all
-      now available, this deserves a real re-design.
+- [x] **Re-evaluate Performance Index using the richer metrics now
+      available — DONE, 2026-08-30.** Was a simple 3-input blend (K/D 50%
+      / ADR 35% / HS% 15%), explicitly labeled a placeholder. Now a
+      6-input blend — `frontend/app/page.tsx`'s `performanceIndex()` and
+      `services/api/server.js`'s `performanceIndexServer()` (kept in sync
+      deliberately, same as before) — adding KAST (30%), trade-kill% (10%),
+      and a multi-kill bonus (8%), while re-weighting ADR up to 30% and
+      K/D down to 15%. Weights are grounded in real published research
+      (checked 2026-08-30, not guessed): ADR and KAST are the two most
+      outcome-predictive classic stats; K/D is explicitly the LEAST
+      correlated with actual round impact among them (ignores damage/
+      trades/survival); headshot% is a mechanics indicator, not an outcome
+      predictor, so it stays small (7%). A component missing on an older
+      already-parsed match (KAST/trade-kill%/multi-kill weren't always
+      captured) doesn't get penalized as 0 — its weight is redistributed
+      proportionally across whichever components ARE present, verified via
+      constructed test cases (full data, missing components, and a
+      genuine measured 0% KAST correctly NOT treated as missing).
 
 ## Tier 9 — Full-codebase audit findings (2026-08-25, third session same day)
 
