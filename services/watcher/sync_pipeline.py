@@ -1054,7 +1054,14 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
     stores the raw running components (kills/deaths/damage/rounds, for target AND every
     remaining enemy) so any weighting scheme can be applied later without re-parsing.
     freeze_ticks/round_end_df/death_df/hurt_df/fire_df are parsed once by the caller and shared
-    across every extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
+    across every extract_fact_* function instead of each one re-parsing it independently (Tier 9).
+
+    Also captures the Tier 5.5 "Engage IQ redesign" free/cheap factors (is_isolated,
+    current_weapon, current_health, current_utility) as raw columns, per the staged plan's
+    first phase — deliberately NOT folded into a new engage_iq score yet. Turning these into a
+    "was this a good decision" verdict needs real methodology (what counts as too outnumbered,
+    how much isolation matters) that was never actually agreed; capturing the real data now
+    without guessing at that methodology keeps the door open for whoever designs it for real."""
     rows = []
     target = str(target_steam_id64)
     try:
@@ -1075,7 +1082,14 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
             while t <= end_tick:
                 sample_ticks.add(t)
                 t += POSITIONING_SAMPLE_INTERVAL_TICKS
-        snap = parser.parse_ticks(["team_num", "is_alive"], ticks=sorted(sample_ticks))
+        # X/Y/health/active_weapon_name/inventory added alongside the original team_num/is_alive
+        # for the Tier 5.5 Engage IQ free/cheap factors (isolation distance, current
+        # weapon/health/utility at the decision moment) — one combined parse_ticks call rather
+        # than a second pass over the same ticks.
+        snap = parser.parse_ticks(
+            ["team_num", "is_alive", "X", "Y", "health", "active_weapon_name", "inventory"],
+            ticks=sorted(sample_ticks),
+        )
         player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
 
         def running_stats(steamid, cutoff_tick):
@@ -1110,7 +1124,16 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
                 if trow.empty or not bool(trow.iloc[0]["is_alive"]):
                     continue
 
+                # teammates_alive is target's own SIDE's total living headcount, target included
+                # (the conventional "3v2" framing, where the 2 includes you) — this is the
+                # existing, already-shipped semantics of this stored field; do not change it.
+                # other_teammate_rows (target excluded) is only for the new isolation-distance
+                # check below, which needs OTHER players' positions, not target's own.
                 teammates_alive = len(tick_rows[(tick_rows["team_num"] == target_team_num) & (tick_rows["is_alive"])])
+                other_teammate_rows = tick_rows[
+                    (tick_rows["team_num"] == target_team_num) & (tick_rows["is_alive"])
+                    & (tick_rows["steamid"].astype(str) != target)
+                ]
                 enemy_rows = tick_rows[(tick_rows["team_num"] != target_team_num) & (tick_rows["is_alive"])]
                 enemies_alive = len(enemy_rows)
                 is_outnumbered = enemies_alive > teammates_alive
@@ -1119,6 +1142,28 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
                     state = "outnumbered"
                     decision_tick = int(tick)
                     target_kills, target_deaths, target_damage = running_stats(target, decision_tick)
+
+                    # Engage IQ free/cheap factors (Tier 5.5) — raw data only, no scoring yet.
+                    if other_teammate_rows.empty:
+                        is_isolated = True
+                    else:
+                        tx, ty = float(trow.iloc[0]["X"]), float(trow.iloc[0]["Y"])
+                        teammate_dists = (
+                            (other_teammate_rows["X"].astype(float) - tx) ** 2 + (other_teammate_rows["Y"].astype(float) - ty) ** 2
+                        ) ** 0.5
+                        is_isolated = bool(teammate_dists.min() > TEAMMATE_TRADE_DISTANCE_UNITS)
+                    current_health = (
+                        int(trow.iloc[0]["health"]) if "health" in trow.columns and pd.notna(trow.iloc[0]["health"]) else None
+                    )
+                    current_weapon = (
+                        str(trow.iloc[0]["active_weapon_name"])
+                        if "active_weapon_name" in trow.columns and pd.notna(trow.iloc[0]["active_weapon_name"]) else None
+                    )
+                    inventory_list = trow.iloc[0]["inventory"] if "inventory" in trow.columns else None
+                    current_utility = (
+                        [item for item in inventory_list if re.search("grenade|flashbang|molotov|incendiary|decoy", str(item), re.IGNORECASE)]
+                        if isinstance(inventory_list, (list, tuple)) else None
+                    )
 
                     enemies_components = [
                         dict(zip(
@@ -1158,6 +1203,10 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
                         "round_won": round_won,
                         "player_rank_new": player_rank_new,
                         "player_rank_type_id": player_rank_type_id,
+                        "is_isolated": is_isolated,
+                        "current_health": current_health,
+                        "current_weapon": current_weapon,
+                        "current_utility": current_utility,
                     })
                 elif not is_outnumbered and state == "outnumbered":
                     state = "even_or_favorable"

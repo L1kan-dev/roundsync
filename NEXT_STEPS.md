@@ -86,7 +86,7 @@ All 4 came from actually using the live app — full detail in archive, Tier
 
 **Band 3 — Consistency work tied to what's already shipped.**
 - Performance Index redesign (Tier 10 — explicitly labeled a placeholder in its own code comment; KAST/multi-kill/positioning data now exists to build a real one)
-- Tier 5.5: Engage IQ redesign (staged plan already agreed, just not started)
+- [x] Tier 5.5: Engage IQ redesign — Phase 1 (factor capture) DONE, 2026-08-30; scoring-methodology phase deliberately deferred, see Tier 5.5 below
 
 **Band 4 — DONE, 2026-08-30.**
 - [x] Tier 9: 8x-per-sync duplicate parsing — fixed, all 7 extraction functions now share one pre-parse
@@ -323,6 +323,19 @@ matches — same row counts everywhere, confirming the rebuild changes
 *precision*, not which engagements get captured.
 
 ## Tier 5.5 — Engage IQ redesign (proposed 2026-08-27, queued behind the audit)
+
+**Phase 1 (factor capture) DONE, 2026-08-30.** `fact_engage_decision` now
+stores `is_isolated`, `current_health`, `current_weapon`, `current_utility`
+(grenades held) at the decision moment — the free/cheap factors below,
+raw. **Deliberately NOT folded into a new `engage_iq` score** — the
+current score is an OUTCOME measure (did you win/survive?), the redesign
+goal was a DECISION-QUALITY measure (was taking/avoiding the fight smart,
+regardless of outcome?), and turning these raw factors into a "good
+decision" verdict needs real methodology (what counts as too outnumbered,
+how much isolation matters) that was never actually agreed — confirmed
+with the user 2026-08-30 rather than guessing at thresholds unilaterally.
+**Open follow-up**: design that scoring methodology, then apply it to the
+now-available data (no new extraction needed for phase 1's factors).
 
 The user proposed a much richer version of `engage_iq` than what it
 currently measures — the actual checklist a player runs through before
