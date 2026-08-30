@@ -201,6 +201,85 @@ app.get('/api/matches/sync-status', authenticateToken, async (req, res) => {
   }
 });
 
+// 2c. Single Match Detail Endpoint — backs the new match-detail drill-down page
+// (NEXT_STEPS.md Band 7). Registered AFTER /api/matches/sync-status on purpose: Express
+// matches routes in registration order, and a :matchId param would otherwise swallow
+// "sync-status" as a literal match id if this were registered first.
+app.get('/api/matches/:matchId', authenticateToken, async (req, res) => {
+  const steamId = req.user.steamId;
+  const { matchId } = req.params;
+
+  try {
+    const { data: match, error } = await supabase
+      .from('matches')
+      .select('match_id, match_data, parsed_at, map')
+      .eq('match_id', matchId)
+      .eq('steam_id64', steamId) // never trust the URL param alone for ownership
+      .single();
+
+    if (error || !match) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+
+    res.json({ match });
+  } catch (err) {
+    console.error('❌ Unexpected error fetching match detail:', err.message);
+    res.status(500).json({ error: 'Failed to fetch match detail.' });
+  }
+});
+
+// Groups this player's own rows from the round-scoped fact tables (fact_duel_placement,
+// fact_positioning_risk, fact_engage_decision) by round_number for one match — the real,
+// already-extracted round-level data behind the drill-down page's "Round by round" section.
+// Deliberately NOT a full 10-player round-result timeline (no round-winner field is
+// persisted anywhere — round_end is only ever parsed transiently in sync_pipeline.py to
+// derive OTHER stats, never stored itself) — this is honestly scoped to "what happened to
+// the tracked player, round by round," which every one of these tables already captures.
+app.get('/api/matches/:matchId/rounds', authenticateToken, async (req, res) => {
+  const steamId = req.user.steamId;
+  const { matchId } = req.params;
+
+  try {
+    // Ownership check — same reasoning as the single-match endpoint above.
+    const { data: match } = await supabase
+      .from('matches')
+      .select('match_id')
+      .eq('match_id', matchId)
+      .eq('steam_id64', steamId)
+      .single();
+    if (!match) {
+      return res.status(404).json({ error: 'Match not found.' });
+    }
+
+    const [duels, positioning, engage] = await Promise.all([
+      supabase.from('fact_duel_placement').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
+      supabase.from('fact_positioning_risk').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
+      supabase.from('fact_engage_decision').select('*').eq('match_id', matchId).eq('steam_id64', steamId),
+    ]);
+
+    const roundNumbers = new Set([
+      ...(duels.data || []).map((r) => r.round_number),
+      ...(positioning.data || []).map((r) => r.round_number),
+      ...(engage.data || []).map((r) => r.round_number),
+    ]);
+
+    const rounds = Array.from(roundNumbers)
+      .sort((a, b) => a - b)
+      .map((round_number) => ({
+        round_number,
+        duels: (duels.data || []).filter((r) => r.round_number === round_number)
+          .sort((a, b) => a.engagement_tick - b.engagement_tick),
+        positioning: (positioning.data || []).filter((r) => r.round_number === round_number),
+        engage_decisions: (engage.data || []).filter((r) => r.round_number === round_number),
+      }));
+
+    res.json({ rounds });
+  } catch (err) {
+    console.error('❌ Unexpected error fetching match rounds:', err.message);
+    res.status(500).json({ error: 'Failed to fetch match round detail.' });
+  }
+});
+
 // 3b. User Profile / Onboarding Status Endpoint
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
   const steamId = req.user.steamId;
