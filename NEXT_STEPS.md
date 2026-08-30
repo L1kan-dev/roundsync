@@ -63,12 +63,26 @@ undocumented).
 **Standing note:** Tier 14's 502 fix, the GC match-resolution retry backoff,
 and the `LoggedInElsewhere`-reconnect hang fix are all done — see Tier 14
 below for the real root cause and fix (a missing `steamGuard` handler, not
-something needing a restart). Not yet pushed to production as of this note;
-verify `railway status` before assuming it's live.
+something needing a restart). Pushed to `main` 2026-08-31 (18 commits,
+including this fix) — Railway's auto-deploy-on-push means this and every
+other item below marked done-but-not-yet-pushed is now live; verify
+`railway status` if anything here still seems stale.
 
 ## Recommended Priority Order — the Bands, read this to pick what's next
 
-**Band 1 — Real users are confused right now. DONE, 2026-08-27.**
+**Band 0 — UI/UX stabilization pass. NEXT UP, decided 2026-08-31, not
+started.** Numbered 0 deliberately, out of the Bands' normal chronological
+sequence — user's explicit call 2026-08-31: consolidate every currently-known
+UI/UX issue into one dedicated pass (their words: "get it to a version 2.0 or
+3.0") before resuming any new-feature Tier below. Rationale, confirmed with
+the user: most of these are the same root cause repeated across several
+pages (missing glossary, inconsistent tooltip styling, tile sizing) — fixing
+the pattern once is cheaper than re-solving it page by page while also
+shipping new features on top. No version-number tag exists anywhere in this
+repo currently (no semver/git tags) — "2.0"/"3.0" is a milestone label for
+the user's own tracking, not something the codebase needs; a real git tag
+can be added when this ships if wanted. Full item list and detail: **Tier
+15** below.
 All 4 came from actually using the live app — full detail in archive, Tier
 10 section:
 - [x] Sync-progress counts not matching reality
@@ -608,6 +622,51 @@ Most findings from this audit are fixed — full detail in
       but newer stable models now exist (`gemini-3.6-flash`,
       `gemini-3.7-flash` as of 2026-08-13). Upgrading is a cost/behavior
       tradeoff for the user to decide, not something to change unprompted.
+
+## Tier 15 — UI/UX stabilization pass (2026-08-31, user-reported, not yet started)
+
+Raw list from the user's own live use of the app, 2026-08-31 — not yet
+triaged into root causes or an implementation order. Pick this up as a whole
+Band (Band 0 above) rather than one item at a time, since several of these
+likely share one fix (see the grouping notes below each item).
+
+- [ ] **Tooltip styling inconsistency.** Most tooltips render as the
+      browser's generic native tooltip (`title` attribute), not the custom
+      styled tooltip already built and used in a few places. Needs an
+      inventory of every tooltip in the app and a pass to standardize all of
+      them onto the existing custom component.
+- [ ] **Home page trend-analysis chart has no glossary.** The chart itself
+      renders but nothing explains what it's showing — same gap as several
+      Insights items below, likely the same missing pattern everywhere a
+      chart/tile was added after `frontend/lib/statGlossary.ts` was built.
+- [ ] **Match Detail: rank badge number isn't centered** inside the badge
+      asset (visual bug, not a data bug).
+- [ ] **Tiles don't apply their position-based color gradient consistently.**
+      Some tiles are supposed to shift color by their position on the page;
+      not currently applied everywhere it should be.
+- [ ] **Match Detail: round-by-round section needs a layout overhaul.**
+      User's specific ask: horizontal orientation instead of the current
+      layout, and every tile in the match-detail page should read as "3D"
+      (visual depth/styling), not flat.
+- [ ] **Match Detail: missing a full per-player stat table.** No comparison
+      table of every player's stats for the match exists anywhere in the
+      app right now (only the tracked user's own numbers are shown).
+      **Needs real research** (same rigor as `CS2_ANALYTICS_STANDARDS.md`'s
+      other research, not a guess) into how other trackers (Leetify, HLTV,
+      Scope.gg, tracker.gg) lay this out before building — user explicitly
+      asked for this to be researched, not assumed.
+- [ ] **Browser back button goes to Home, not back to the Matches tab** the
+      user actually came from — a navigation/history-state bug on the
+      match-detail route.
+- [ ] **Insights: dead empty space next to the Consistency/Impact tiles**,
+      and inconsistent tile sizing across the page generally.
+- [ ] **Insights: "Reaction rate over time" chart has no glossary.**
+- [ ] **Insights: Economy and Utility section has no trending chart** (other
+      sections on the same page do).
+- [ ] **Insights: every tile is missing a glossary entry** — broadest item
+      on this list, likely the single biggest chunk of Band 0's work. Same
+      `frontend/lib/statGlossary.ts` pattern already used on Home/Matches/
+      match-detail should extend to cover every Insights tile.
 
 ## Already confirmed correct, no action needed
 
