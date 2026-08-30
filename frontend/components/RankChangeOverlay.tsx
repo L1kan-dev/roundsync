@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { RankBadge } from '@/components/RankBadge';
 
 export interface RankChangeEvent {
   direction: 'up' | 'down';
@@ -13,13 +14,17 @@ export interface RankChangeEvent {
   newBandColor: string;
 }
 
-const PARTICLE_COUNT = 20;
+// Bumped from 20 (user feedback 2026-08-30, after watching it live: the effect read as too
+// subtle for a full-screen "you ranked up" moment) — more particles plus the flash/count-up
+// additions below, not just a blind number increase.
+const PARTICLE_COUNT = 36;
 
 // Full-screen takeover — only fired when the player's rank crosses into a new Premier
 // band (e.g. Grey -> Light Blue), positive or negative. Same-band moves get the much
 // smaller RankDeltaBadge instead — this one is deliberately loud, on purpose.
 export function RankBandTakeover({ event, onDone }: { event: RankChangeEvent; onDone: () => void }) {
   const [visible, setVisible] = useState(true);
+  const [flashing, setFlashing] = useState(true);
   const isUp = event.direction === 'up';
   // Up wears the new band's own color (feels like arriving somewhere better). Down
   // deliberately does NOT use the old band's color (still cool-toned, reads too similar
@@ -30,17 +35,27 @@ export function RankBandTakeover({ event, onDone }: { event: RankChangeEvent; on
   useEffect(() => {
     const dismissTimer = setTimeout(() => setVisible(false), 4200);
     const cleanupTimer = setTimeout(onDone, 4700);
-    return () => { clearTimeout(dismissTimer); clearTimeout(cleanupTimer); };
+    const flashTimer = setTimeout(() => setFlashing(false), 220);
+    return () => { clearTimeout(dismissTimer); clearTimeout(cleanupTimer); clearTimeout(flashTimer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Two staggered waves (wave 2 starts ~0.9s after wave 1) instead of one burst — a single
+  // wave read as "already over" by the time a viewer's eyes settle on the takeover, even at
+  // the slower 2.2s burst duration. The second wave keeps real motion on screen through
+  // roughly the first 3 seconds of the takeover's 4.2s total display window.
   const particles = React.useMemo(
-    () => Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
-      id: i,
-      angle: (i / PARTICLE_COUNT) * 360 + Math.random() * 10,
-      distance: 200 + Math.random() * 160,
-      delay: Math.random() * 0.15,
-    })),
+    () => [0, 1].flatMap((wave) =>
+      Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
+        id: `${wave}-${i}`,
+        angle: (i / PARTICLE_COUNT) * 360 + Math.random() * 10,
+        distance: 200 + Math.random() * 220,
+        delay: wave * 0.9 + Math.random() * 0.2,
+        // Every 3rd particle mixes toward white — pure single-color particles read flat at
+        // this higher count; the sparkle variety reads as more "celebratory," not just "more."
+        size: i % 3 === 0 ? 10 : 6,
+      }))
+    ),
     []
   );
 
@@ -50,12 +65,19 @@ export function RankBandTakeover({ event, onDone }: { event: RankChangeEvent; on
       style={{ background: 'radial-gradient(circle at center, rgba(5,7,10,0.94), rgba(5,7,10,0.99))' }}
       onClick={() => setVisible(false)}
     >
+      {/* A quick bright flash on mount — the one thing a screenshot can't show but reads
+          as real impact when actually watched live. Pure opacity fade, no layout cost. */}
+      <div
+        className={`absolute inset-0 pointer-events-none transition-opacity duration-200 ${flashing ? 'opacity-100' : 'opacity-0'}`}
+        style={{ background: `radial-gradient(circle at center, ${themeColor}55, transparent 70%)` }}
+      />
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         {particles.map((p) => (
           <span
             key={p.id}
-            className="absolute w-2 h-2 rounded-full rank-particle"
+            className="absolute rounded-full rank-particle"
             style={{
+              width: p.size, height: p.size,
               background: themeColor,
               boxShadow: `0 0 12px 2px ${themeColor}`,
               ['--angle' as string]: `${p.angle}deg`,
@@ -65,7 +87,8 @@ export function RankBandTakeover({ event, onDone }: { event: RankChangeEvent; on
           />
         ))}
         <div className="absolute rank-ring" style={{ borderColor: themeColor }} />
-        <div className="absolute rank-ring" style={{ borderColor: themeColor, animationDelay: '0.3s' }} />
+        <div className="absolute rank-ring" style={{ borderColor: themeColor, animationDelay: '0.25s' }} />
+        <div className="absolute rank-ring" style={{ borderColor: themeColor, animationDelay: '0.5s' }} />
       </div>
 
       <div className="relative z-10 text-center rank-takeover-content px-6">
@@ -86,9 +109,13 @@ export function RankBandTakeover({ event, onDone }: { event: RankChangeEvent; on
             <p className="font-display text-2xl font-extrabold" style={{ color: event.newBandColor }}>{event.newBandLabel}</p>
           </div>
         </div>
-        <p className="font-tel text-6xl font-extrabold" style={{ color: themeColor, textShadow: `0 0 40px ${themeColor}` }}>
-          {event.newRank.toLocaleString()}
-        </p>
+        {/* The actual CS2 rank badge asset — this used to be missing entirely, just a plain
+            number, unlike the small profile-tile version which always shows the real badge.
+            Reuses RankBadge's own count-up (fromRank -> rankNew) instead of duplicating it
+            here. */}
+        <div className="flex justify-center mb-2" style={{ filter: `drop-shadow(0 0 24px ${themeColor}66)` }}>
+          <RankBadge color={event.newBandColor} rankNew={event.newRank} fromRank={event.prevRank} size={110} />
+        </div>
         <p className="text-sm text-[var(--text-dim)] mt-3">
           CS Rating · {isUp ? '+' : ''}{(event.newRank - event.prevRank).toLocaleString()}
         </p>

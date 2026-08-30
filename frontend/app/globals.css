@@ -315,7 +315,12 @@ body {
 .rank-particle {
   top: 50%;
   left: 50%;
-  animation: rank-particle-burst 1.1s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+  /* Bumped from 1.1s (user feedback 2026-08-31, after watching live: a single burst that
+     fully faded before the badge even settled read as "no particles" even though the code
+     was firing correctly) — slower burst plus a second staggered wave in
+     RankChangeOverlay.tsx keeps motion visible for ~2.5s instead of finishing in the first
+     second, so it's still going while the badge/number are the actual focus of attention. */
+  animation: rank-particle-burst 2.2s cubic-bezier(0.15, 0.7, 0.3, 1) forwards;
 }
 
 @keyframes rank-ring-expand {
@@ -347,4 +352,14 @@ body {
   100% { transform: scale(1); opacity: 1; }
 }
 .rank-delta-pop { animation: rank-delta-pop-anim 0.4s ease-out forwards; }
+
+/* RankBadge's own count-up glow — separate from rank-band-pulse above (that one is the
+   takeover's small orbiting dot, this is the actual badge icon reacting to its number
+   changing). Color comes from --glow, set inline per-badge since it needs the live band
+   color, not a fixed one. */
+@keyframes rank-badge-glow-anim {
+  0%, 100% { filter: drop-shadow(0 0 0px var(--glow)); transform: scale(1); }
+  50% { filter: drop-shadow(0 0 10px var(--glow)); transform: scale(1.06); }
+}
+.rank-badge-glow { animation: rank-badge-glow-anim 0.7s ease-in-out 2; transform-origin: center; }
 

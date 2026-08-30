@@ -120,7 +120,7 @@ files per awpy's docs, rather than waiting indefinitely.
 - [x] Recent Matches carousel — missing fields — DONE, 2026-08-30
 - Full metrics placement review
 - [x] Rank badge visual redesign — DONE, 2026-08-27
-- Rank-change celebration effects (confirm with the user first whether `RankChangeOverlay.tsx` — which already exists — was known about)
+- [x] Rank-change celebration effects — DONE, 2026-08-31. User confirmed they didn't know `RankChangeOverlay.tsx`'s effects already existed; watched both live (headed Playwright, not just screenshots — see `feedback_local_dev_testing_windows.md`), then asked for the takeover to feel bigger/louder. Real bug found along the way: the badge's own number and the takeover's number both jumped straight to the new value with zero animation — extracted a shared `useCountUp` hook (`frontend/lib/useCountUp.ts`) used by both `RankBadge.tsx` (badge glow + count-up) and the takeover. Bigger miss caught by the user directly: the takeover never rendered the actual CS2 rank badge SVG asset at all, just plain number text — replaced with a real `<RankBadge>` instance, same asset the profile tile uses. Particle burst bumped from a single 1.1s wave to two staggered 2.2s waves (`rank-particle-burst` in `globals.css`) since a single fast burst had already fully faded before a viewer's eyes settled on the takeover.
 - Parse-time ETA
 
 **Band 8 — Research-only, no build attached yet.**

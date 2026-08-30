@@ -102,6 +102,16 @@ function formatMatchDate(t: Match['match_data']['telemetry']): string {
   });
 }
 
+// "~Xm Ys" / "~Ys" for the sync-queue ETA below — never shows a 0-padded
+// "0m" prefix, and rounds up to the next whole second so a live countdown
+// never flashes "0s" while genuinely still in progress.
+function formatDuration(totalSeconds: number): string {
+  const s = Math.max(1, Math.ceil(totalSeconds));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return m > 0 ? `${m}m ${rem}s` : `${rem}s`;
+}
+
 // Sorts most-recent-played first when we know match_time, falling back to parse
 // order for older matches that predate that field — see formatMatchDate above.
 function matchSortKey(m: Match): number {
@@ -1315,6 +1325,16 @@ export default function Home() {
   const currentPct = syncStatus?.avgSeconds
     ? Math.min(96, Math.round((currentElapsed / syncStatus.avgSeconds) * 100))
     : null;
+  // Only shown once avgSeconds exists (needs at least one completed match in this batch) — a
+  // guess before that would be noise, not a real estimate.
+  const currentMatchEtaSeconds = syncStatus?.avgSeconds
+    ? Math.max(0, syncStatus.avgSeconds - currentElapsed)
+    : null;
+  // Total ETA for everything still queued: whatever's left on the in-flight match (if any)
+  // plus one avgSeconds per match still waiting behind it.
+  const totalEtaSeconds = syncStatus?.avgSeconds
+    ? (currentMatchEtaSeconds ?? 0) + queuedCount * syncStatus.avgSeconds
+    : null;
 
   // ---------- LOGGED-OUT LANDING ----------
   if (!steamId) {
@@ -1470,7 +1490,12 @@ export default function Home() {
                       {performanceTooltip.tooltip}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1.5">
-                      <RankBadge color={rankBand(rankNew)?.color ?? '#9ca3af'} rankNew={rankNew} size={26} />
+                      <RankBadge
+                        color={rankBand(rankNew)?.color ?? '#9ca3af'}
+                        rankNew={rankNew}
+                        size={26}
+                        fromRank={rankChangeEvent ? rankChangeEvent.prevRank : null}
+                      />
                       {rankChangeEvent && !rankChangeEvent.crossedBand && <RankDeltaBadge event={rankChangeEvent} />}
                     </div>
                     <div className="w-full h-2 bg-[var(--void)] rounded-full overflow-hidden mt-2 shadow-[inset_0_1px_3px_rgba(0,0,0,0.6)]">
@@ -1622,6 +1647,7 @@ export default function Home() {
                       {batchReadyCount} ready
                       {batchFailedCount > 0 && <span className="text-[var(--danger)]"> · {batchFailedCount} failed</span>}
                       {' '}· {queuedCount + (syncCounts?.downloading ?? 0)} remaining
+                      {totalEtaSeconds !== null && ` · ~${formatDuration(totalEtaSeconds)} left`}
                     </span>
                   </div>
 
@@ -1642,7 +1668,7 @@ export default function Home() {
                         <span className="font-tel">{syncStatus.current.matchId}</span>
                         <span className="font-tel">
                           {Math.floor(currentElapsed)}s elapsed
-                          {syncStatus.avgSeconds ? ` · ~${syncStatus.avgSeconds}s avg` : ''}
+                          {currentMatchEtaSeconds !== null ? ` · ~${formatDuration(currentMatchEtaSeconds)} left` : (syncStatus.avgSeconds ? ` · ~${syncStatus.avgSeconds}s avg` : '')}
                         </span>
                       </div>
                       <div className="w-full h-1.5 bg-[var(--void)] rounded-full overflow-hidden">

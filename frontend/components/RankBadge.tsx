@@ -1,6 +1,7 @@
 'use client';
 
-import React from 'react';
+import React, { CSSProperties } from 'react';
+import { useCountUp } from '@/lib/useCountUp';
 
 // Real CS2 Premier rank badge geometry — path data is the exact d= coordinates from
 // github.com/Juknum/counter-strike-icons's premier_rating_bg.svg (auto-updates from CS2's
@@ -68,7 +69,13 @@ function bandTones(hex: string): Tones {
 
 const UNRANKED_COLOR = '#9ca3af';
 
-export function RankBadge({ color, rankNew, size = 92 }: { color: string; rankNew: number | null; size?: number }) {
+// Long enough to actually read as counting (not a blink) but short enough not to lag behind
+// the much longer RankBandTakeover overlay it usually plays alongside.
+const COUNT_UP_MS = 1400;
+
+export function RankBadge({
+  color, rankNew, size = 92, fromRank = null,
+}: { color: string; rankNew: number | null; size?: number; fromRank?: number | null }) {
   const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
   const boxGradId = `rb-box-${uid}`;
   const rimGradId = `rb-rim-${uid}`;
@@ -81,19 +88,39 @@ export function RankBadge({ color, rankNew, size = 92 }: { color: string; rankNe
 
   const width = (size * VIEWBOX_WIDTH) / VIEWBOX_HEIGHT;
 
+  // The badge used to just swap straight to the new number the instant `rankNew` changed —
+  // real, but reads as "nothing happened," which is exactly what got flagged after watching
+  // the rank-change celebration live. When a real previous value is supplied and differs
+  // from the current one, animate a real count-up between them (shared with
+  // RankBandTakeover's own count-up via useCountUp — SVG <text> content can't be
+  // interpolated by a CSS transition, so both need the same JS-driven approach).
+  const displayRank = useCountUp(fromRank, rankNew, COUNT_UP_MS);
+  const [pulsing, setPulsing] = React.useState(false);
+  React.useEffect(() => {
+    if (fromRank === null || rankNew === null || fromRank === rankNew) return;
+    setPulsing(true);
+    const t = setTimeout(() => setPulsing(false), COUNT_UP_MS + 600);
+    return () => clearTimeout(t);
+  }, [fromRank, rankNew]);
+
   // Splits "18,420" into "18" (rendered larger) and ",420" (smaller) — confirmed via real
   // footage that the leading digits genuinely render bigger, though the exact ratio below
   // is a deliberate stylization on top of that (the real footage showed a subtler jump;
   // this was intentionally pushed further per direct feedback after seeing the subtle
   // version). No comma (e.g. a sub-1,000 rank, or the unranked "—") means the whole string
   // is just the "big" part, which renders correctly with no special-casing needed.
-  const formatted = isUnranked ? '—' : rankNew!.toLocaleString();
+  const shownValue = fromRank !== null ? displayRank : rankNew;
+  const formatted = isUnranked ? '—' : shownValue!.toLocaleString();
   const commaIndex = formatted.indexOf(',');
   const bigPart = commaIndex === -1 ? formatted : formatted.slice(0, commaIndex);
   const restPart = commaIndex === -1 ? '' : formatted.slice(commaIndex);
 
   return (
-    <svg width={width} height={size} viewBox="0 0 178 64" xmlns="http://www.w3.org/2000/svg">
+    <svg
+      width={width} height={size} viewBox="0 0 178 64" xmlns="http://www.w3.org/2000/svg"
+      className={pulsing ? 'rank-badge-glow' : undefined}
+      style={{ '--glow': bandColor } as CSSProperties}
+    >
       <defs>
         <linearGradient id={boxGradId} x1="187.49" y1="48.7288" x2="30.4973" y2="20.5012" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor={tones.fillTop} />
