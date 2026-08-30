@@ -13,6 +13,28 @@ from crypto_utils import decrypt_value
 WEAPON_CLASS_BY_WEPTYPE = {1: "pistol", 2: "smg", 3: "rifle", 4: "shotgun", 5: "sniper"}
 WEAPON_CLASS_RANK = {"pistol": 0, "smg": 1, "shotgun": 1, "sniper": 2, "rifle": 2}
 
+# player_death/player_hurt's own `weapon` field, keyed by name substring rather than exact
+# match — the same defensive pattern NON_GUN_WEAPON_KEYWORDS already uses elsewhere in this
+# file, since different demoparser2 events format the weapon string differently (weapon_fire's
+# own example is "weapon_smokegrenade", prefixed; fact_economy's real production data confirmed
+# item_equip's names are NOT prefixed — "ak47", "awp", "hkp2000", etc, per a live query against
+# fact_economy.primary_weapon). Names confirmed real via DEMOPARSER2_FIELDS.md's weptype table.
+WEAPON_CLASS_KEYWORDS = {
+    "sniper": "awp|ssg08|scar20|g3sg1",
+    "shotgun": "nova|xm1014|mag7|sawedoff",
+    "smg": "mac10|mp9|mp7|mp5|ump45|p90|bizon",
+    "rifle": "ak47|m4a1|m4a4|famas|galil|aug|sg55",
+    "pistol": "glock|usp|hkp2000|p250|fiveseven|five-seven|tec9|cz75|deagle|elite|revolver",
+}
+
+
+def _classify_weapon_by_name(weapon) -> str | None:
+    w = str(weapon).lower()
+    for weapon_class, pattern in WEAPON_CLASS_KEYWORDS.items():
+        if re.search(pattern, w):
+            return weapon_class
+    return None
+
 
 def parse_event(parser, event_name, **kwargs):
     """parser.parse_event() returns a plain [] (not an empty DataFrame) for an event type
@@ -220,6 +242,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str, freeze_ticks: lis
             total_enemy_blind_duration = None
             flash_assist = None
             damage_dealt = None
+            self_blind_duration = None
 
             if t["type"] == "flashbang" and not blind_df.empty and t["entityid"] is not None:
                 # entityid alone isn't enough — CS2 recycles entity slots, so the same
@@ -234,7 +257,13 @@ def extract_fact_utility_throw(parser, target_steam_id64: str, freeze_ticks: lis
                 for _, b in matched.iterrows():
                     victim = str(b["user_steamid"])
                     if victim == target:
-                        continue  # self-blind, not a teammate flash
+                        # Previously discarded entirely (`continue`, no capture) — NEXT_STEPS.md
+                        # Tier 5 "Self-flash duration". No industry-published definition exists
+                        # for this (RoundSync original, per CS2_ANALYTICS_STANDARDS.md); a
+                        # thrower can only self-blind once per thrown flash, so plain assignment
+                        # (not accumulation) is correct here.
+                        self_blind_duration = float(b["blind_duration"])
+                        continue
                     duration = float(b["blind_duration"])
                     if _team_for(team_snap, freeze_ticks, victim, t["tick"]) == thrower_team:
                         teammates_blinded += 1
@@ -288,6 +317,7 @@ def extract_fact_utility_throw(parser, target_steam_id64: str, freeze_ticks: lis
                 "total_enemy_blind_duration": total_enemy_blind_duration,
                 "flash_assist": flash_assist,
                 "damage_dealt": damage_dealt,
+                "self_blind_duration": self_blind_duration,
             })
     except Exception as e:
         print(f"⚠️ Warning parsing fact_utility_throw: {e}")
@@ -1136,12 +1166,12 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
     return rows
 
 
-def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df, bomb_planted_df) -> dict:
-    """Four Home-dashboard KPI tiles, computed once per match from data already parsed here
-    (freeze_ticks/round_end_df/deaths_df/bomb_planted_df are all passed in so this doesn't
-    re-run parse_event() a second time for events every other extract_fact_* function already
-    shares — Tier 9). Every value defaults to None and is left out of the telemetry blob by the
-    caller when it couldn't be computed — same optional-field/graceful-fallback pattern as
+def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df, bomb_planted_df, hurt_df) -> dict:
+    """Home-dashboard/Insights KPI tiles, computed once per match from data already parsed here
+    (freeze_ticks/round_end_df/deaths_df/bomb_planted_df/hurt_df are all passed in so this
+    doesn't re-run parse_event() a second time for events every other extract_fact_* function
+    already shares — Tier 9). Every value defaults to None and is left out of the telemetry blob
+    by the caller when it couldn't be computed — same optional-field/graceful-fallback pattern as
     total_damage/headshots/rounds_played already use, so older already-parsed matches just show
     nothing for a tile instead of a fake zero."""
     target = str(target_steam_id64)
@@ -1151,6 +1181,9 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
         "clutches_won": None,
         "trade_kill_pct": None,
         "kast_pct": None,
+        "weapon_segmented_stats": None,
+        "kills_damage_by_round_outcome": None,
+        "kill_distance_buckets": None,
     }
     try:
         if not freeze_ticks or round_end_df.empty or "round" not in round_end_df.columns:
@@ -1351,6 +1384,101 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
             if got_kill or got_assist or survived or was_traded:
                 kast_rounds += 1
         metrics["kast_pct"] = round(100 * kast_rounds / len(round_bounds), 1)
+
+        # --- 6. Weapon-segmented stats — kills/damage grouped by weapon class, plus AWP broken
+        # out individually since NEXT_STEPS.md names it explicitly ("AWP kills, rifle vs. pistol
+        # performance"). AWP intentionally double-counts under "sniper" too — it's a named
+        # callout on top of the class breakdown, not a replacement for it. Classification is
+        # name-substring based (see _classify_weapon_by_name's docstring for why).
+        my_kills_all = deaths_df[deaths_df["attacker_steamid"].astype(str) == target]
+        my_damage_all = (
+            hurt_df[hurt_df["attacker_steamid"].astype(str) == target]
+            if not hurt_df.empty and "attacker_steamid" in hurt_df.columns else pd.DataFrame()
+        )
+        weapon_segmented_stats = {}
+        for weapon_class in list(WEAPON_CLASS_KEYWORDS.keys()) + ["awp"]:
+            if weapon_class == "awp":
+                kill_mask = my_kills_all["weapon"].astype(str).str.contains("awp", case=False, na=False)
+                dmg_mask = (
+                    my_damage_all["weapon"].astype(str).str.contains("awp", case=False, na=False)
+                    if not my_damage_all.empty else None
+                )
+            else:
+                kill_mask = my_kills_all["weapon"].apply(_classify_weapon_by_name) == weapon_class
+                dmg_mask = (
+                    my_damage_all["weapon"].apply(_classify_weapon_by_name) == weapon_class
+                    if not my_damage_all.empty else None
+                )
+            kills = int(kill_mask.sum()) if not my_kills_all.empty else 0
+            damage = capped_damage_sum(my_damage_all[dmg_mask]) if dmg_mask is not None else 0.0
+            if kills > 0 or damage > 0:
+                weapon_segmented_stats[weapon_class] = {"kills": kills, "damage": round(damage, 1)}
+        metrics["weapon_segmented_stats"] = weapon_segmented_stats or None
+
+        # --- 7. Kills/damage in round wins vs. losses — same round_bounds-with-winner pattern
+        # already used for entry_success_pct/clutches_won above, split by whether target's team
+        # won that round.
+        kills_damage_by_outcome = {
+            "wins": {"kills": 0, "damage": 0.0},
+            "losses": {"kills": 0, "damage": 0.0},
+        }
+        for start_tick, end_tick, winner in round_bounds.values():
+            round_team = _team_for(team_snap, freeze_ticks, target, start_tick)
+            if round_team is None:
+                continue
+            outcome = "wins" if winner == round_team else "losses"
+            round_kills = my_kills_all[(my_kills_all["tick"] >= start_tick) & (my_kills_all["tick"] <= end_tick)]
+            kills_damage_by_outcome[outcome]["kills"] += len(round_kills)
+            if not my_damage_all.empty:
+                round_damage = my_damage_all[(my_damage_all["tick"] >= start_tick) & (my_damage_all["tick"] <= end_tick)]
+                kills_damage_by_outcome[outcome]["damage"] += capped_damage_sum(round_damage)
+        kills_damage_by_outcome["wins"]["damage"] = round(kills_damage_by_outcome["wins"]["damage"], 1)
+        kills_damage_by_outcome["losses"]["damage"] = round(kills_damage_by_outcome["losses"]["damage"], 1)
+        metrics["kills_damage_by_round_outcome"] = kills_damage_by_outcome
+
+        # --- 8. Kill distance buckets — close/medium/long, a RoundSync-original methodology
+        # since no industry-published bucket boundaries exist (checked; see IDEAS.md #6 and
+        # CS2_ANALYTICS_STANDARDS.md's Kill distance entry for the real sourcing trail).
+        # Boundaries anchor to two independently-cited real facts, not arbitrary guesses:
+        #   - close: 0-30m — reuses ENEMY_CONTESTED_RANGE_UNITS, already cited elsewhere in this
+        #     file as assault rifles' effective-accuracy range.
+        #   - medium: 30-50m — rifles retain near-max damage under 50m per CS2's own damage
+        #     falloff curve, confirmed via 2 independent sources.
+        #   - long: 50m+ — where falloff becomes clearly noticeable per the same sources.
+        # Distances are 2D (X/Y only), matching the convention fact_positioning_risk already
+        # uses for teammate/enemy distance. This buckets kills already made, NOT a shots-fired
+        # accuracy-per-bucket — that needs the enemy-visibility primitive Tier 2's true-accuracy
+        # rebuild is blocked on (see NEXT_STEPS.md's Dependency Map); headshot% within a bucket
+        # doesn't need that primitive since it's already known which shots resulted in kills.
+        CLOSE_RANGE_MAX_UNITS = ENEMY_CONTESTED_RANGE_UNITS  # ≈ 30m
+        MEDIUM_RANGE_MAX_UNITS = round(50 * CS2_UNITS_PER_METER, -2)  # ≈ 50m
+
+        kill_distance_buckets = {
+            "close": {"kills": 0, "headshots": 0},
+            "medium": {"kills": 0, "headshots": 0},
+            "long": {"kills": 0, "headshots": 0},
+        }
+        if not my_kills_all.empty:
+            kill_ticks = sorted(my_kills_all["tick"].unique().tolist())
+            kill_pos_snap = parser.parse_ticks(["X", "Y"], ticks=kill_ticks)
+            for _, kill in my_kills_all.iterrows():
+                tick = int(kill["tick"])
+                victim = str(kill["user_steamid"])
+                tick_rows = kill_pos_snap[kill_pos_snap["tick"] == tick]
+                attacker_row = tick_rows[tick_rows["steamid"].astype(str) == target]
+                victim_row = tick_rows[tick_rows["steamid"].astype(str) == victim]
+                if attacker_row.empty or victim_row.empty:
+                    continue
+                dx = float(attacker_row.iloc[0]["X"]) - float(victim_row.iloc[0]["X"])
+                dy = float(attacker_row.iloc[0]["Y"]) - float(victim_row.iloc[0]["Y"])
+                dist_units = (dx ** 2 + dy ** 2) ** 0.5
+                bucket = "close" if dist_units <= CLOSE_RANGE_MAX_UNITS else (
+                    "medium" if dist_units <= MEDIUM_RANGE_MAX_UNITS else "long"
+                )
+                kill_distance_buckets[bucket]["kills"] += 1
+                if bool(kill.get("headshot")):
+                    kill_distance_buckets[bucket]["headshots"] += 1
+        metrics["kill_distance_buckets"] = kill_distance_buckets
     except Exception as e:
         print(f"⚠️ Warning parsing match secondary metrics: {e}")
     return metrics
@@ -1642,7 +1770,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         # unranked/other modes — the frontend shows "—" for that match's rank pill in that case.
         _rank_new_unused, rank_at_match_start, _rank_type_unused = _get_player_rank(parser, target_steam_id64)
 
-        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df, bomb_planted_df)
+        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df, bomb_planted_df, hurt_df)
 
         fact_economy_rows = extract_fact_economy(parser, target_steam_id64, freeze_ticks)
         if fact_economy_rows:
@@ -1746,6 +1874,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "clutches_won": secondary_metrics["clutches_won"],
                 "trade_kill_pct": secondary_metrics["trade_kill_pct"],
                 "kast_pct": secondary_metrics["kast_pct"],
+                "weapon_segmented_stats": secondary_metrics["weapon_segmented_stats"],
+                "kills_damage_by_round_outcome": secondary_metrics["kills_damage_by_round_outcome"],
+                "kill_distance_buckets": secondary_metrics["kill_distance_buckets"],
                 "headshot_accuracy_pct": headshot_accuracy_pct,
                 "multi_kill_rounds": multi_kill_rounds,
                 "processing_seconds": round(time.time() - start_time, 1)

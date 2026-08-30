@@ -76,10 +76,10 @@ All 4 came from actually using the live app — full detail in archive, Tier
 - [x] Inconsistent stat labels/units
 - [x] Unclear "Positioning Decisions" tooltip
 
-**Band 2 — Cheap, real value, no blockers.**
+**Band 2 — Cheap, real value, no blockers. DONE, 2026-08-30.**
 - [x] Tier 11: lifetime stats via Steam Web API — DONE, 2026-08-27
-- Tier 5 "Free/Cheap": weapon-segmented stats, kills/damage in wins vs. losses, kill distance, self-flash duration
-- Tier 6.5: rank-tier label (pure lookup on data already stored)
+- [x] Tier 5 "Free/Cheap": weapon-segmented stats, kills/damage in wins vs. losses, kill distance, self-flash duration — DONE, 2026-08-30, see Tier 5 below
+- [x] Tier 6.5: rank-tier label — already built, see Tier 6.5 below
 - [x] KAST/headshot%/multi-kill parity in Insights — DONE, 2026-08-27
 - [x] Real map thumbnails — DONE, 2026-08-27
 - [x] Tier 13: precision-over-rounding sweep — DONE, 2026-08-27
@@ -172,25 +172,38 @@ actual lift, cheapest first:
 
 **Free — the raw field already flows through the parser every sync, just never captured:**
 - [x] **Headshot accuracy** — done, 2026-08-27. `telemetry.headshot_accuracy_pct`, Home dashboard tile.
-- [ ] **Weapon-segmented stats** (AWP kills, rifle vs. pistol performance) —
-      `player_death.weapon` / `player_hurt.weapon`, already parsed.
+- [x] **Weapon-segmented stats** — done, 2026-08-30.
+      `telemetry.weapon_segmented_stats` (kills/damage grouped by weapon
+      class — pistol/smg/rifle/shotgun/sniper — plus AWP broken out
+      individually per this line's own wording). Classification is
+      name-substring based (`_classify_weapon_by_name`), confirmed against
+      real `fact_economy.primary_weapon` production values.
 - [x] **Multi-kill rounds (2K/3K/4K/Ace)** — done, 2026-08-27. `telemetry.multi_kill_rounds`.
-- [ ] **Kills/damage in round wins vs. losses** — `round_won` already
-      stored per row in `fact_engage_decision`.
+- [x] **Kills/damage in round wins vs. losses** — done, 2026-08-30.
+      `telemetry.kills_damage_by_round_outcome` (`{wins: {kills, damage},
+      losses: {...}}`), reusing the same round_bounds-with-winner pattern
+      already used for `entry_success_pct`/`clutches_won`.
 - [ ] **Positioning heatmap / map control visualization** — X/Y/Z data
       already exists; pure frontend work, zero backend extraction.
 
 **Cheap — reuses an existing pattern already written elsewhere in the codebase:**
-- [ ] **Kill distance** (avg map distance to your kills) — reuses the
-      existing `pos_df` position-lookup pattern from
-      `extract_fact_duel_placement`. **Extended, 2026-08-30**: bucket into
-      close/medium/long-range accuracy, not just one average number — see
-      `IDEAS.md` #6 for the real research needed before this is buildable
-      (unit-to-distance conversion, and whether a bucket convention already
-      exists industry-wide).
-- [ ] **Self-flash duration** — the self-blind rows already exist in
-      `blind_df` inside `extract_fact_utility_throw`, currently discarded
-      (`continue`) instead of captured.
+- [x] **Kill distance** — done, 2026-08-30, as `telemetry.kill_distance_buckets`
+      (`{close: {kills, headshots}, medium: {...}, long: {...}}`). `IDEAS.md`
+      #6's two open research questions are now resolved: (1) unit conversion
+      was already solved (`CS2_UNITS_PER_METER = 52.49`, already in use
+      elsewhere); (2) no industry-published bucket convention exists
+      (checked) — so this is a documented RoundSync original, anchored to
+      two real facts rather than an arbitrary guess: close ≤30m reuses the
+      already-cited `ENEMY_CONTESTED_RANGE_UNITS` (assault rifles'
+      effective-accuracy range), medium 30-50m is where CS2 rifles retain
+      near-max damage before falloff (confirmed via 2 independent sources),
+      long is 50m+. Reports kill count + headshot% per bucket, NOT a
+      shots-fired accuracy% — that still needs Tier 2's blocked
+      enemy-visibility primitive, see the Dependency Map.
+- [x] **Self-flash duration** — done, 2026-08-30. The self-blind row inside
+      `extract_fact_utility_throw` is now captured as
+      `fact_utility_throw.self_blind_duration` (new nullable column,
+      migration applied) instead of being discarded via `continue`.
 - [ ] **Spray accuracy** — reuses the existing `BURST_GAP_TICKS` burst
       grouping from `extract_fact_duel_placement`.
 - [ ] **Counter-strafing quality** — reuses the existing position-delta
@@ -227,9 +240,13 @@ actual lift, cheapest first:
 
 ## Tier 6.5 — Bracket comparison (real methodology, blocked on population data)
 
-- [ ] **Rank-tier label** (Grey/Light Blue/Blue/Purple/Pink/Red/Gold for a
-      given CS Rating number) — cheap, available now. Pure labeling of the
-      `player_rank_new` value already stored in every fact table.
+- [x] **Rank-tier label** (Grey/Light Blue/Blue/Purple/Pink/Red/Gold for a
+      given CS Rating number) — **already built**, this list entry was
+      stale. `RANK_BANDS`/`rankBand()` in `frontend/lib/rank.ts` is the
+      source of truth (kept in sync with `services/api/server.js`'s
+      `rankTierInstruction()`), surfaced in match-card rank tooltips
+      (`page.tsx`), the rank-band-crossing celebration copy
+      (`RankChangeOverlay.tsx`), and the AI Coach's tone instructions.
 - [ ] **"Average ADR/KAST/etc for your bracket" comparison** — **blocked**,
       not just unbuilt. Needs population data across many users grouped by
       rank; RoundSync has ~3 users right now, nowhere near enough. Revisit

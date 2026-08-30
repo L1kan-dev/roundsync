@@ -67,7 +67,7 @@ decoded data that this future full page can reuse it directly rather than
 needing a second endpoint built later. When this gets picked up for real,
 move it into `NEXT_STEPS.md` as its own tier.
 
-## 6. Distance-bucketed kill accuracy (proposed by the user, 2026-08-30)
+## 6. Distance-bucketed kill accuracy (proposed by the user, 2026-08-30) — DONE, 2026-08-30
 
 `NEXT_STEPS.md` Tier 5 already plans a plain "average kill distance" stat
 (reusing the existing `pos_df` position-lookup pattern from
@@ -79,17 +79,25 @@ player's long-range bucket against a known real-world yardstick, like
 Mirage's Top-Mid-boxes-to-Sniper-Window sightline, so "long range" means
 something concrete instead of an arbitrary number.
 
-**Not yet scoped — two things need real research before this is buildable,
-not just assumed:**
-1. What close/medium/long actually means in CS2 map units. The engine's
-   own unit-to-real-world-distance conversion needs to be verified against
-   a real source (Source engine documentation or a measured in-game
-   reference), not recalled from memory, before picking bucket cutoffs.
-2. Whether any existing tracker (Leetify/HLTV/Scope.gg) already publishes
-   a range-bucketed accuracy stat — if one does, align to their bucket
-   boundaries so the numbers are comparable; if not, this is a genuine
-   RoundSync original and needs its own documented methodology, same
-   treatment as `CS2_ANALYTICS_STANDARDS.md` gives every other metric.
+**Research resolved, 2026-08-30, both questions:**
+1. Unit conversion was already solved before this idea was even proposed —
+   `CS2_UNITS_PER_METER = 52.49` was already in use elsewhere in
+   `sync_pipeline.py`, cited as a real, verified conversion.
+2. Checked Leetify/HLTV/Scope.gg (web search, current as of 2026-08-30) —
+   no tracker publishes a range-bucketed accuracy/kill stat with defined
+   boundaries. This is a genuine RoundSync original. Bucket boundaries are
+   anchored to two independently-cited real facts rather than a guess:
+   **close ≤30m** reuses `ENEMY_CONTESTED_RANGE_UNITS` (already cited
+   elsewhere as assault rifles' effective-accuracy range); **medium
+   30-50m** is where CS2 rifles retain near-max damage before falloff
+   (confirmed via 2 independent current sources — CSStatLab, profilerr);
+   **long 50m+** is where falloff becomes clearly noticeable per the same
+   sources.
 
-Once researched, this folds into the existing Tier 5 "Kill distance" line
-in `NEXT_STEPS.md` rather than becoming a separate tier.
+**Shipped as kill count + headshot% per bucket** (`telemetry.kill_distance_buckets`),
+NOT a shots-fired accuracy% per bucket — true accuracy needs the same
+enemy-visibility primitive Tier 2's true-accuracy rebuild is blocked on
+(see `NEXT_STEPS.md`'s Dependency Map). The real-world-yardstick comparison
+(Mirage Top-Mid-to-Sniper-Window) the user proposed as a frontend display
+idea is not yet built — that's a presentation layer on top of the now-real
+backend data, open for whoever picks up the frontend side.

@@ -73,15 +73,15 @@ Implementing these means *matching a known definition*, not inventing one.
 - **Clutch won** ("fake clutch" exclusion added — DONE, 2026-08-30) → §Clutch won
 - **Utility damage per round** (already correct) → §Utility damage per round
 - **Headshot accuracy** (% of hits, not kills) → §Full industry inventory
-- **Weapon-segmented stats** (AWP/rifle/pistol splits) → §Full industry inventory
+- **Weapon-segmented stats** (AWP/rifle/pistol splits — DONE, 2026-08-30) → §Full industry inventory
 - **Raw accuracy (enemy spotted) / spray accuracy** → §Full industry inventory
 - **Counter-strafing quality** → §Full industry inventory
 - **Multi-kill rounds (2K/3K/4K/Ace)** → §Full industry inventory
-- **Kills/damage in round wins vs. losses** → §Full industry inventory
+- **Kills/damage in round wins vs. losses** (DONE, 2026-08-30) → §Full industry inventory
 - **Trade-kill funnel** (opportunity/attempt/success) → §Full industry inventory
 - **Per-scenario clutch win rate** (1v1..1v5) → §Full industry inventory
 - **Eco-frags / equipment value diff** → §Full industry inventory
-- **Kill distance** → §Full industry inventory
+- **Kill distance** (bucketed close/medium/long — DONE, 2026-08-30) → §Full industry inventory
 - **CT/T side splits** → §Full industry inventory
 - **Reconstructed duel context** (peek order) — no rigorous published
   methodology, real derived-metric category per NextFrag's own product
@@ -99,9 +99,9 @@ Implementing these means *matching a known definition*, not inventing one.
 Nobody else publishes a definition or dataset to align to; RoundSync would
 be setting its own methodology, not matching one.
 
-- **Self-flash duration** — no published external definition; simple to
-  build (data already captured then discarded) but the metric itself is a
-  RoundSync original.
+- **Self-flash duration** — **done, 2026-08-30**, `fact_utility_throw.self_blind_duration`
+  (new nullable column). No published external definition exists — a
+  RoundSync original, matching this doc's own scoping.
 - **[CT] Smokes that stopped a push** — no defined formula anywhere, must
   invent the correlation logic → §Full industry inventory
 - **Unused utility value on death** — no rigorous standard for "value" →
@@ -308,8 +308,14 @@ extraction).
 - **Headshot accuracy** — **done, 2026-08-27.** `player_hurt` already
   carries `hitgroup` (`1 == head`, confirmed via Valve's Source SDK
   reference), already parsed every sync for ADR.
-- **Weapon-segmented stats** — cheap: `player_death`/`player_hurt` already
-  carry `weapon`, already parsed. Group existing logic by weapon.
+- **Weapon-segmented stats** — **done, 2026-08-30**,
+  `telemetry.weapon_segmented_stats`. Grouped by weapon class
+  (pistol/smg/rifle/shotgun/sniper) via `_classify_weapon_by_name`
+  (name-substring match, since different demoparser2 events format the
+  `weapon` field differently — confirmed no prefix on real production
+  `fact_economy.primary_weapon` values, but kept substring-based for the
+  same defensive reason `NON_GUN_WEAPON_KEYWORDS` is), plus AWP broken out
+  individually since NEXT_STEPS.md named it explicitly.
 - **Accuracy (enemy spotted)** / **spray accuracy** — genuinely new
   extraction, needs `weapon_fire` matched against `player_hurt` plus
   enemy-visibility determination (same missing primitive as TTD, Tier 2).
@@ -336,8 +342,11 @@ extraction).
 **Round-outcome:**
 - **Multi-kill rounds (2K/3K/4K/Ace)** — **done, 2026-08-27.** Pure
   aggregation of `player_death`, grouped by round.
-- **Kills/damage in round wins vs. losses** — `fact_engage_decision`
-  already stores `round_won` per row — reuses an existing pattern.
+- **Kills/damage in round wins vs. losses** — **done, 2026-08-30**,
+  `telemetry.kills_damage_by_round_outcome`. Reuses the round_bounds-with-
+  winner pattern (not literally `fact_engage_decision`'s sparse rows, which
+  only cover outnumbered moments — the reusable part was the win/loss
+  determination pattern, not that table's data).
 - **Round Swing / win-probability-added** — needs a *trained* win-
   probability model, the biggest lift on this list.
 
@@ -356,8 +365,12 @@ extraction).
   eco-adjustment. `fact_economy` has the tracked player's own equip value;
   the enemy side needs the killer/victim's equipment value at death — real
   new extraction, but the raw ingredient is already proven parseable.
-- **Kill distance** — reuses the existing `pos_df` position-lookup pattern
-  from `extract_fact_duel_placement`.
+- **Kill distance** — **done, 2026-08-30**, `telemetry.kill_distance_buckets`.
+  Bucketed close/medium/long (see IDEAS.md #6 for the full sourcing of the
+  30m/50m boundaries — no industry-published convention exists, so this is
+  a documented RoundSync original anchored to real CS2 damage-falloff facts,
+  not a guess). Reports kill count + headshot% per bucket, not shots-fired
+  accuracy — that still needs Tier 2's blocked visibility primitive.
 - **CT/T side splits** — `fact_economy.team` already carries this, cheap to
   add across most existing stats.
 
@@ -498,11 +511,13 @@ URL.
 - **What's already in place**: every fact table stores
   `player_rank_new`/`player_rank_type_id` per row — the right foundation
   for a `group by rank tier` once there's real population data.
-- **Cheap and available right now**: labeling a CS Rating number with its
-  community-convention tier name/color (Grey 0-4,999 / Light Blue 5,000-
-  9,999 / Blue 10,000-14,999 / Purple 15,000-19,999 / Pink 20,000-24,999 /
-  Red 25,000-29,999 / Gold 30,000+) — just labeling a numeric range
-  RoundSync already stores.
+- **Already built** (`RANK_BANDS`/`rankBand()` in `frontend/lib/rank.ts`,
+  kept in sync with `services/api/server.js`'s `rankTierInstruction()`):
+  labels a CS Rating number with its community-convention tier name/color
+  (Grey 0-4,999 / Light Blue 5,000-9,999 / Blue 10,000-14,999 / Purple
+  15,000-19,999 / Pink 20,000-24,999 / Red 25,000-29,999 / Gold 30,000+).
+  `NEXT_STEPS.md` previously listed this as unbuilt — stale, corrected
+  2026-08-30.
 - **Sources**: [leetify.com/blog/cs2-benchmarks](https://leetify.com/blog/cs2-benchmarks/), [csdb.gg/rank-distribution](https://csdb.gg/rank-distribution/), [csdb.gg/premier-ranks](https://csdb.gg/premier-ranks/)
 
 ## Checked and confirmed real, but not rigorously standardized
