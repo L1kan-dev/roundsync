@@ -17,6 +17,7 @@ import { ctTAccent, shadeHex, Bar3DShape, duelLerp } from '@/lib/duelColors';
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { type Match, performanceIndex, formatMatchDate } from '@/lib/matchStats';
 import { STAT_GLOSSARY } from '@/lib/statGlossary';
+import { statTier, adaptivePrompt } from '@/lib/promptTone';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -1221,7 +1222,7 @@ export default function Home() {
   const lastParsedMatch = parsedMatches[0];
   const wheelSegments: { id: string; label: string; icon: React.ElementType; prompt: string | null }[] = [
     { id: 'aim', label: 'Aim & Reaction', icon: Crosshair, prompt: 'Where is my aim actually costing me rounds — not just in general, but in specific moments?' },
-    { id: 'positioning', label: 'Positioning', icon: MapPinned, prompt: 'Walk me through my worst positioning habit right now.' },
+    { id: 'positioning', label: 'Positioning', icon: MapPinned, prompt: 'Walk me through my positioning right now — what habit is most worth changing?' },
     { id: 'engage', label: 'Engage vs. Save', icon: Users, prompt: 'Give me a rule of thumb for when I should fight outnumbered versus back off.' },
     { id: 'economy', label: 'Buy Decisions', icon: Coins, prompt: 'Is my buy pattern actually hurting my team, or does it just feel that way?' },
     { id: 'utility', label: 'Utility', icon: Flame, prompt: "What's the single biggest upgrade I could make to how I use my grenades?" },
@@ -1404,7 +1405,11 @@ export default function Home() {
                           alone doesn't explain what's being measured. */}
                       <button
                         type="button"
-                        onClick={() => promptCoach(`My performance index is ${avgPerformanceIndex}/100 — a blended score from my K/D ratio, ADR, and headshot percentage. What's dragging it down the most?`)}
+                        onClick={() => promptCoach(adaptivePrompt(statTier('performanceIndex', avgPerformanceIndex), {
+                          weak: `My performance index is ${avgPerformanceIndex}/100. What's dragging it down the most?`,
+                          neutral: `My performance index is ${avgPerformanceIndex}/100 — a blended score from K/D, ADR, HS%, KAST, trade-kill%, and multi-kill bonus. What's the single biggest lever to move it?`,
+                          strong: `My performance index is ${avgPerformanceIndex}/100. What's separating this from an even higher level — what would the very best players at my rank be doing differently?`,
+                        }))}
                         className="group flex items-center gap-1 text-[11px] uppercase tracking-wider text-[var(--text-dim)] shrink-0 cursor-pointer hover:text-[var(--text)] transition-colors"
                         {...performanceTooltip.handlers}
                       >
@@ -1432,7 +1437,11 @@ export default function Home() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => promptCoach(`My average K/D over my last ${parsedMatches.length} games is ${avgKd}. Is that good for my rank, and what's dragging it down?`)}
+                  onClick={() => promptCoach(adaptivePrompt(statTier('kd', Number(avgKd)), {
+                    weak: `My average K/D over my last ${parsedMatches.length} games is ${avgKd}. What's dragging it down?`,
+                    neutral: `My average K/D over my last ${parsedMatches.length} games is ${avgKd}. Is that solid for my rank, and what would move it further?`,
+                    strong: `My average K/D over my last ${parsedMatches.length} games is ${avgKd} — already strong. What's the next-level habit that separates this from elite?`,
+                  }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
                   title={STAT_GLOSSARY.kd}
@@ -1445,7 +1454,11 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => promptCoach(`My average ADR over my last ${parsedMatches.length} games is ${avgAdr}. What's the biggest thing holding my damage output back?`)}
+                  onClick={() => promptCoach(adaptivePrompt(statTier('adr', Number(avgAdr)), {
+                    weak: `My average ADR over my last ${parsedMatches.length} games is ${avgAdr}. What's the biggest thing holding my damage output back?`,
+                    neutral: `My average ADR over my last ${parsedMatches.length} games is ${avgAdr}. What would it take to push this higher?`,
+                    strong: `My average ADR over my last ${parsedMatches.length} games is ${avgAdr} — already elite territory. What's actually left to improve here?`,
+                  }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
                   title={STAT_GLOSSARY.adr}
@@ -1458,7 +1471,11 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => promptCoach(`My headshot percentage is ${avgHs}%. How can I improve it?`)}
+                  onClick={() => promptCoach(adaptivePrompt(statTier('hsPct', Number(avgHs)), {
+                    weak: `My headshot percentage is ${avgHs}%. How can I improve it?`,
+                    neutral: `My headshot percentage is ${avgHs}%. Is that solid, and what would push it higher?`,
+                    strong: `My headshot percentage is ${avgHs}% — already elite territory. Is there a real downside to aiming this high, or is it worth pushing further?`,
+                  }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
                   title={STAT_GLOSSARY.hsPct}
@@ -1475,7 +1492,11 @@ export default function Home() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 mb-3.5">
                 <button
                   type="button"
-                  onClick={() => promptCoach('How is my entry success rate — am I trading my life for enough value when I open a site?')}
+                  onClick={() => promptCoach(adaptivePrompt(statTier('entrySuccessPct', avgEntrySuccessPct), {
+                    weak: 'How is my entry success rate — am I trading my life for enough value when I open a site?',
+                    neutral: `My entry success rate is ${avgEntrySuccessPct !== null ? avgEntrySuccessPct.toFixed(1) : '—'}%. What would move it up?`,
+                    strong: `My entry success rate is ${avgEntrySuccessPct !== null ? avgEntrySuccessPct.toFixed(1) : '—'}% — already above average. What separates a great entry fragger from a merely good one?`,
+                  }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(0, 4) } as CSSProperties}
                   title={STAT_GLOSSARY.entrySuccessPct}
@@ -1488,7 +1509,11 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => promptCoach('Is my utility damage per round low? What am I doing wrong with my grenades?')}
+                  onClick={() => promptCoach(adaptivePrompt(statTier('utilityDmgPerRound', avgUtilityDmgPerRound), {
+                    weak: 'How is my utility damage per round — what would actually move the needle with my grenades?',
+                    neutral: 'How is my utility damage per round — what would actually move the needle with my grenades?',
+                    strong: `My utility damage per round is ${avgUtilityDmgPerRound !== null ? avgUtilityDmgPerRound.toFixed(1) : '—'} — already at a professional support-player level. What's the next thing to refine?`,
+                  }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
                   title={STAT_GLOSSARY.utilityDmgPerRound}
@@ -1501,7 +1526,7 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => promptCoach("Walk me through my clutch rounds — what am I doing right or wrong when I'm the last one alive?")}
+                  onClick={() => promptCoach("Walk me through my clutch rounds — what's actually happening when I'm the last one alive?")}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
                   title={STAT_GLOSSARY.clutchesWon}
@@ -1514,7 +1539,7 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => promptCoach("My trade kill percentage feels low — which of my deaths had a teammate nearby who could have traded but didn't?")}
+                  onClick={() => promptCoach("Which of my deaths had a teammate nearby who could have traded but didn't — and separately, am I capitalizing when a teammate's death leaves an enemy exposed to me?")}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
                   title={STAT_GLOSSARY.tradeKillPct}
@@ -1531,7 +1556,11 @@ export default function Home() {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 mb-3.5">
                 <button
                   type="button"
-                  onClick={() => promptCoach('My KAST is what it is — which rounds am I contributing nothing at all, no kill, no assist, no survival, no trade?')}
+                  onClick={() => promptCoach(adaptivePrompt(statTier('kast', avgKastPct), {
+                    weak: 'Which rounds am I contributing nothing at all — no kill, no assist, no survival, no trade?',
+                    neutral: `My KAST is ${avgKastPct !== null ? avgKastPct.toFixed(1) : '—'}%. What would push it toward being a genuinely reliable contributor?`,
+                    strong: `My KAST is ${avgKastPct !== null ? avgKastPct.toFixed(1) : '—'}% — already a reliable, floor-level number. What's the ceiling above this?`,
+                  }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(0, 3) } as CSSProperties}
                   title={STAT_GLOSSARY.kast}
@@ -1544,7 +1573,7 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => promptCoach('Of all my shots that actually land, what fraction are hitting the head versus body? Is my crosshair placement the issue?')}
+                  onClick={() => promptCoach('Of all my shots that actually land, what fraction are hitting the head versus body — and what does that say about my crosshair placement?')}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 3) } as CSSProperties}
                   title={STAT_GLOSSARY.hsAccuracy}
@@ -1674,7 +1703,13 @@ export default function Home() {
                     recentLosses={recentLosses}
                     onAskMatch={(m) => {
                       const t = m.match_data.telemetry;
-                      promptCoach(`What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kills}/${t.deaths}/${t.assists ?? '?'} (K/D/A), ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS.`);
+                      const matchIndex = performanceIndex(t);
+                      const stats = `I went ${t.kills}/${t.deaths}/${t.assists ?? '?'} (K/D/A), ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS, with a performance index of ${matchIndex}/100`;
+                      promptCoach(adaptivePrompt(statTier('performanceIndex', matchIndex), {
+                        weak: `What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? ${stats}.`,
+                        neutral: `Break down my match on ${formatMapName(t.map)} (${formatMatchDate(t)}). ${stats}.`,
+                        strong: `That was a strong match on ${formatMapName(t.map)} (${formatMatchDate(t)}) — ${stats}. What made it work, and is it repeatable?`,
+                      }));
                     }}
                   />
 
@@ -1853,7 +1888,12 @@ export default function Home() {
                 const bg = mapScreenshotUrl(t.map);
                 const matchRankBand = rankBand(t.rank_at_match_start);
                 const index = performanceIndex(t);
-                const matchPrompt = `What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? I went ${t.kills}/${t.deaths}/${t.assists ?? '?'} (K/D/A), ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS, with a performance index of ${index}/100.`;
+                const matchStats = `I went ${t.kills}/${t.deaths}/${t.assists ?? '?'} (K/D/A), ${t.kd_ratio} K/D, ${t.adr} ADR, ${t.headshot_pct}% HS, with a performance index of ${index}/100`;
+                const matchPrompt = adaptivePrompt(statTier('performanceIndex', index), {
+                  weak: `What went wrong in my match on ${formatMapName(t.map)} (${formatMatchDate(t)})? ${matchStats}.`,
+                  neutral: `Break down my match on ${formatMapName(t.map)} (${formatMatchDate(t)}). ${matchStats}.`,
+                  strong: `That was a strong match on ${formatMapName(t.map)} (${formatMatchDate(t)}) — ${matchStats}. What made it work, and is it repeatable?`,
+                });
                 return (
                   <div
                     key={m.match_id}

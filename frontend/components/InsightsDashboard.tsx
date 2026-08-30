@@ -9,6 +9,7 @@ import {
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { shadeHex, Bar3DShape, ctTAccent, hexToRgba, duelLerp } from '@/lib/duelColors';
 import { STAT_GLOSSARY } from '@/lib/statGlossary';
+import { statTier, adaptivePrompt } from '@/lib/promptTone';
 
 // Every panel on this page picks up one flat "duel" color from which side of the page it
 // sits on (left = CT cyan, right = T amber, full-width = neutral grey) — and everything
@@ -555,7 +556,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     label="Avg. deviation (won)"
                     value={`${factSummary.duels.avg_angle_deviation_deg_when_won ?? '—'}°`}
                     color={SIDE_LEFT}
-                    onAsk={() => onAskCoach(`My average crosshair deviation when I win a duel is ${factSummary.duels?.avg_angle_deviation_deg_when_won ?? '—'}°. Is that good, and how do I get it lower?`)}
+                    onAsk={() => onAskCoach(`My average crosshair deviation when I win a duel is ${factSummary.duels?.avg_angle_deviation_deg_when_won ?? '—'}°. What does that number say about my crosshair placement?`)}
                   />
                   <StatTile
                     label="Avg. deviation (lost)"
@@ -567,7 +568,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     label="Engagements"
                     value={`${factSummary.duels.engagements_tracked}`}
                     color={SIDE_LEFT}
-                    onAsk={() => onAskCoach(`I've had ${factSummary.duels?.engagements_tracked} tracked duel engagements. Which ones did I lose that I should have won?`)}
+                    onAsk={() => onAskCoach(`I've had ${factSummary.duels?.engagements_tracked} tracked duel engagements. Walk me through a few — what separated the wins from the losses?`)}
                   />
                   <StatTile
                     label="Time to damage (won)"
@@ -588,7 +589,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 <ReactionByTriggerChart
                   adaptation={factSummary.adaptation}
                   color={SIDE_RIGHT}
-                  onAsk={(triggerLabel, reactedPct) => onAskCoach(`I only react within 3 seconds ${reactedPct}% of the time after "${triggerLabel}". Why am I slow to react to this specifically?`)}
+                  onAsk={(triggerLabel, reactedPct) => onAskCoach(`I react within 3 seconds ${reactedPct}% of the time after "${triggerLabel}". What's actually happening in that window?`)}
                 />
                 <AskCoachHint />
               </>
@@ -601,13 +602,17 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                 label="KAST"
                 value={data.avgKastPct !== null ? `${data.avgKastPct}%` : '—'}
                 color={SIDE_LEFT}
-                onAsk={() => onAskCoach(`My KAST is ${data.avgKastPct ?? '—'}% — which rounds am I contributing nothing at all, no kill, no assist, no survival, no trade?`)}
+                onAsk={() => onAskCoach(adaptivePrompt(statTier('kast', data.avgKastPct), {
+                  weak: `My KAST is ${data.avgKastPct ?? '—'}% — which rounds am I contributing nothing at all, no kill, no assist, no survival, no trade?`,
+                  neutral: `My KAST is ${data.avgKastPct ?? '—'}%. What would push it toward being a genuinely reliable contributor?`,
+                  strong: `My KAST is ${data.avgKastPct ?? '—'}% — already a reliable, floor-level number. What's the ceiling above this?`,
+                }))}
               />
               <StatTile
                 label="HS Accuracy"
                 value={data.avgHeadshotAccuracyPct !== null ? `${data.avgHeadshotAccuracyPct}%` : '—'}
                 color={SIDE_LEFT}
-                onAsk={() => onAskCoach(`Of all my shots that actually land, ${data.avgHeadshotAccuracyPct ?? '—'}% hit the head. Is my crosshair placement the issue?`)}
+                onAsk={() => onAskCoach(`Of all my shots that actually land, ${data.avgHeadshotAccuracyPct ?? '—'}% hit the head. What does that say about my crosshair placement?`)}
               />
               <StatTile
                 label="Multi-Kills"
@@ -650,14 +655,14 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     label="Isolated pushes"
                     value={`${factSummary.positioning.isolated_commitments}`}
                     color={SIDE_LEFT}
-                    onAsk={() => onAskCoach(`I've made ${factSummary.positioning?.isolated_commitments} isolated pushes. Am I pushing alone too often?`)}
+                    onAsk={() => onAskCoach(`I've made ${factSummary.positioning?.isolated_commitments} isolated pushes. What's the right balance for how often to push alone?`)}
                     title={STAT_GLOSSARY.isolatedPush}
                   />
                   <StatTile
                     label="Deaths that were tradeable"
                     value={factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct !== null ? `${factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct}%` : '—'}
                     color={SIDE_LEFT}
-                    onAsk={() => onAskCoach(`${factSummary.positioning?.of_deaths_teammate_was_in_trade_range_pct ?? '—'}% of my deaths had a teammate in trade range. Why didn't more of those turn into actual trades?`)}
+                    onAsk={() => onAskCoach(`${factSummary.positioning?.of_deaths_teammate_was_in_trade_range_pct ?? '—'}% of my deaths had a teammate in trade range. What actually determines whether those turn into a trade?`)}
                   />
                 </div>
                 <AskCoachHint />
@@ -732,7 +737,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   label="Against team economy"
                   value={`${factSummary.economy.buy_decisions_against_team_economy_pct}%`}
                   color={SIDE_LEFT}
-                  onAsk={() => onAskCoach(`I bought against my team's economy ${factSummary.economy?.buy_decisions_against_team_economy_pct}% of the time. Which rounds were those, and did it cost us?`)}
+                  onAsk={() => onAskCoach(`I bought against my team's economy ${factSummary.economy?.buy_decisions_against_team_economy_pct}% of the time. What was the situation in those rounds?`)}
                 />
               </div>
             )}
