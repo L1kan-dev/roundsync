@@ -117,7 +117,7 @@ files per awpy's docs, rather than waiting indefinitely.
 
 **Band 7 — Bigger UX asks, real value but bigger scope.**
 - Match-detail drill-down page
-- Recent Matches carousel — missing fields
+- [x] Recent Matches carousel — missing fields — DONE, 2026-08-30
 - Full metrics placement review
 - [x] Rank badge visual redesign — DONE, 2026-08-27
 - Rank-change celebration effects (confirm with the user first whether `RankChangeOverlay.tsx` — which already exists — was known about)
