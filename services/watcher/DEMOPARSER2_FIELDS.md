@@ -362,3 +362,56 @@ snapshots over `item_equip` alone when the goal is "full loadout," and
 `item_equip` when the goal is "what did they just buy." Route skill-context
 entirely through `rank_update`, not the GC `rankings` path. Always filter
 `parse_grenades()` before storing anything from it.
+
+## THIRD CRAWL (2026-08-30) — `fire_bullets`' angle fields resolved, `player_bullet_hit`'s slot numbers resolved
+
+Both done for the Tier 9.5 `fact_duel_placement` rebuild (`NEXT_STEPS.md`) —
+confirmed empirically against 5 real downloaded matches (~9,500 shots, ~2,250
+hits total), not guessed from field names or Valve's undocumented schema.
+
+**`fire_bullets`' `angles_x/y/z` — which one is yaw, resolved.** Compared
+every `fire_bullets` row's `angles_x/y/z` against that same player's real
+per-tick `yaw`/`pitch` tick fields (both already curated/confirmed in the
+Player Data table above) at the same tick:
+- **`angles_y` = yaw** (horizontal aim). Avg diff from the per-tick sample:
+  0.48-0.72° across the 5 matches — that gap is just normal tracking lag
+  between `fire_bullets`' exact sub-tick moment and the nearest whole-tick
+  sample, not error; `fire_bullets`' own value is more precise, not less.
+- **`angles_x` = pitch** (vertical aim), same order of precision.
+- **`angles_z` is always exactly `0.0`** in every row checked — unused/roll,
+  not a real aim component.
+
+**`player_bullet_hit`'s `attacker_slot`/`victim_slot` — what they are, and
+how to resolve them to a real steamid.** This event identifies players by a
+small per-match integer (0-9), not steamid — confirmed there is no
+`user_steamid`/`attacker_steamid` column on the event at all. The `player`
+field on `fire_bullets` is NOT the same thing (it's a large raw entity
+handle, e.g. `2670930`, not a 0-9 slot) — don't conflate the two.
+
+The real resolution path: `bullet_damage` is a separate event fired for the
+same hits, with real `attacker_steamid`/`victim_steamid` columns directly.
+Joining `player_bullet_hit` and `bullet_damage` on `tick` recovers the
+slot->steamid mapping — confirmed **100% consistent and stable for an
+entire match** (a player's slot never changes mid-match) across all 5 real
+matches tested. **One real gotcha**: a tick can carry more than one hit
+(multi-pellet shotgun, or two simultaneous engagements) — ~5-10% of ticks in
+every match tested had this. Joining on tick alone across ALL rows produces
+wrong pairings for those ambiguous ticks (confirmed: it silently mismatched
+slot 8 in a real test). The fix is simple and doesn't lose any coverage:
+restrict the join to ticks that are unique in BOTH events first (still
+covers all 10 slots at least once, every match tested), build the map from
+those, then apply that fixed map to every row including the ambiguous ones
+— slot identity doesn't change mid-match, so a map learned from the safe
+subset is valid for the rest. Implemented as `_build_slot_to_steamid_map()`
+in `services/watcher/sync_pipeline.py`.
+
+**`bullet_damage`'s real columns** (not previously crawled in full): `aim_punch_x/y/z`,
+`attack_tick_count`, `attack_tick_frac`, `attacker_name`, `attacker_steamid`,
+`damage_dir_x/y/z`, `distance`, `in_air`, `inaccuracy_air/move/total`,
+`no_scope`, `num_penetrations`, `recoil_index`, `render_tick_count`,
+`render_tick_frac`, `shoot_ang_x/y/z`, `tick`, `type`, `victim_name`,
+`victim_steamid`. Real steamids on both sides directly, no slot resolution
+needed — this is what makes it the right tool for building the slot map
+above, even though `player_bullet_hit` is still the richer source for the
+duel-placement rebuild itself (it has `victim_pos_x/y/z`, which
+`bullet_damage` doesn't).

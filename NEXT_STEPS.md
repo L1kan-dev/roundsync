@@ -35,7 +35,6 @@ collision yourself.
 
 | If you're about to work on... | Check... | Because... |
 |---|---|---|
-| **Tier 9** (shared pre-parsing refactor) | **Tier 9.5** (`fact_duel_placement` rebuild) | Both touch the same file's parsing plumbing. Tier 9.5 already needs `fire_bullets`/`player_bullet_hit` (see Tier 9.5 below) — if Tier 9's shared pre-parse step doesn't include those two events from the start, Tier 9.5 will have to touch all 7 function signatures a second time, or bolt on a duplicate un-shared parse call, defeating Tier 9's whole point. **Do these together, or design Tier 9's shared-event list to already include what Tier 9.5 needs.** |
 | **Tier 2** (Time to Damage / reaction-time rebuild) | **Tier 6** (`awpy` evaluation), **Tier 5**'s raw/spray accuracy | All three need the same missing primitive: real player-visibility detection between ticks. `awpy` (MIT, already solves this) can unlock all three at once — evaluate it before building visibility detection from scratch for just one of them. |
 | **Tier 6.5** (bracket comparison) | User count | Blocked, not sequenced — needs real population data across many users; RoundSync has ~3. Revisit when that changes, don't substitute a third-party benchmark in the meantime. |
 | **Tier 8** (predictive/trend analysis) | Match history count | Same shape as above — gated behind more matches per user, not a build-order dependency. |
@@ -75,9 +74,9 @@ All 4 came from actually using the live app — full detail in archive, Tier
 - Performance Index redesign (Tier 10 — explicitly labeled a placeholder in its own code comment; KAST/multi-kill/positioning data now exists to build a real one)
 - Tier 5.5: Engage IQ redesign (staged plan already agreed, just not started)
 
-**Band 4 — Needs one scope decision, then unblocks work.**
-- Tier 9: 8x-per-sync duplicate parsing (touches all 7 extraction function signatures)
-- Tier 9.5: `fact_duel_placement` rebuild onto `fire_bullets`/`player_bullet_hit` (touches production Crosshair Placement data)
+**Band 4 — DONE, 2026-08-30.**
+- [x] Tier 9: 8x-per-sync duplicate parsing — fixed, all 7 extraction functions now share one pre-parse
+- [x] Tier 9.5: `fact_duel_placement` rebuild onto `fire_bullets`/`player_bullet_hit` — done together with Tier 9
 
 **Band 5 — Cheap correctness tweaks, align to published definitions.**
 - Trade-kill window 3s → 4s
@@ -259,29 +258,35 @@ actual lift, cheapest first:
 - [ ] Consider "Optimal Spending Error" as a rigorous replacement for the
       existing `buy_decisions_against_team_economy` heuristic.
 
-## Tier 9.5 — Found only after actually reading the full research docs, not their summaries
+## Tier 9.5 — `fact_duel_placement` rebuild — DONE, 2026-08-30
 
-- [ ] **`extract_fact_duel_placement` uses a less precise data source than
-      what's already documented as available.** Currently anchors on
-      `weapon_fire` for the opening-shot tick, then does a separate
-      `parse_ticks()` snapshot lookup for the shooter's position/yaw and
-      (via `player_hurt`) the opponent's identity/position. But
-      `DEMOPARSER2_FIELDS.md`'s full field crawl already documents two
-      richer, more direct sources: `fire_bullets` carries the shooter's
-      *exact* fired angle (`angles_x/y/z`) on the same row as the shot
-      itself, and `player_bullet_hit` carries the victim's *exact* position
-      at the hit (`victim_pos_x/y/z`) plus `round` built directly into the
-      row. **Approved by the user, 2026-08-30** — this touches
-      `fact_duel_placement`, which already feeds production data
-      (Crosshair Placement card, `aim_placement` category score), so it's
-      being rebuilt rather than silently swapped. **Real blocker found
-      2026-08-30, before implementing**: need to confirm which of
-      `fire_bullets`'s `angles_x/y/z` fields is the horizontal (yaw) angle —
-      guessing wrong would silently corrupt this live stat. A web search
-      came up empty; needs either a direct read of `demoparser2`'s own Rust
-      source, or an empirical test against a real downloaded demo (same
-      method the original field crawl in `DEMOPARSER2_FIELDS.md` used). Not
-      started until this is verified.
+Rebuilt onto `fire_bullets` (shooter's exact position/angle at the shot) and
+`player_bullet_hit` (victim's exact position at the hit), replacing the old
+`weapon_fire` + a separate `parse_ticks()` snapshot lookup. The yaw-angle
+blocker was resolved empirically before implementing: `fire_bullets`'
+`angles_y` is the real yaw (horizontal aim), `angles_x` is pitch, `angles_z`
+is always 0/unused — confirmed against 5 real downloaded matches (~9,500
+shots total), avg diff ~0.5-0.7° from the nearest per-tick sample (that gap
+is just sampling lag, not error). `player_bullet_hit` identifies players by
+a small `attacker_slot`/`victim_slot` number, not steamid — resolved via a
+new `_build_slot_to_steamid_map()` helper (cross-references `bullet_damage`,
+which has real steamids, on unambiguous single-hit ticks), confirmed 100%
+reliable across the same 5 matches. Full sourcing in
+`services/watcher/DEMOPARSER2_FIELDS.md`.
+
+**Real bug found and fixed along the way**: `NON_GUN_WEAPON_KEYWORDS`
+(`"grenade|molotov|decoy|incgrenade"`) never excluded flashbang throws or
+knife swings — `weapon_fire` fires for those too, not just real bullets — so
+both `fact_duel_placement`'s opening-shot detection and
+`fact_engage_decision`'s `player_engaged` flag were treating them as
+gunfight shots. Confirmed against a real match: 9 of 44 "opening shots" for
+one player were flashbang throws/knife swings, not gunfire. Now
+`"grenade|molotov|decoy|incgrenade|flashbang|knife"`.
+
+Verified byte-for-byte against the pre-rebuild version (with the keyword fix
+applied to both) across all 10 players in 2 independent real downloaded
+matches — same row counts everywhere, confirming the rebuild changes
+*precision*, not which engagements get captured.
 
 ## Tier 5.5 — Engage IQ redesign (proposed 2026-08-27, queued behind the audit)
 
@@ -425,18 +430,25 @@ These feature requests/redesigns are still open:
 ## Tier 9 — Full-codebase audit findings (2026-08-25, third session same day)
 
 Most findings from this audit are fixed — full detail in
-`NEXT_STEPS_ARCHIVE.md`. Two items are still open:
+`NEXT_STEPS_ARCHIVE.md`. One item remains, now done:
 
-- [ ] **Every `extract_fact_*` function independently re-parses the same
-      base demo events** (`round_freeze_end`, `round_end`, `player_death`,
-      `player_hurt`, `weapon_fire`, etc.) from scratch, instead of reading
-      each event once and sharing it. `round_freeze_end` alone is re-parsed
-      independently up to 8 times per single match sync. Since
-      `demoparser2` has to scan the compiled demo stream per call, this is
-      real, repeated wasted work every sync — but fixing it means changing
-      the signatures of all 7 extraction functions to accept pre-parsed
-      DataFrames instead of parsing their own. **Flagged for a scope
-      decision, not yet started.**
+- [x] **Every `extract_fact_*` function independently re-parses the same
+      base demo events — FIXED, 2026-08-30.** `round_freeze_end`,
+      `round_end`, `player_death`, `player_hurt`, and `weapon_fire` are now
+      each parsed exactly once in `process_and_parse_real_demo` and passed
+      into all 7 extraction functions as arguments, instead of every
+      function independently re-parsing them (`round_freeze_end` alone was
+      re-parsed up to 8 times per sync before this). Done together with
+      Tier 9.5 (below) per the dependency-map note that used to sit here —
+      the shared pre-parse also includes `fire_bullets`/`player_bullet_hit`/
+      `bullet_damage`, which Tier 9.5's rebuild needed. Verified
+      byte-for-byte identical output against the pre-refactor version
+      across all 10 players in 2 real downloaded matches for every function
+      except `fact_duel_placement` (which changed on purpose — see Tier
+      9.5). See `_build_slot_to_steamid_map()`'s docstring in
+      `services/watcher/sync_pipeline.py` for the one genuinely new parse
+      added (`bullet_damage`, needed only to resolve `player_bullet_hit`'s
+      slot numbers into real steamids).
 - [ ] **AI Coach model name worth revisiting.** `gemini-3.5-flash` is
       genuinely real and valid (checked against current docs, not a typo),
       but newer stable models now exist (`gemini-3.6-flash`,

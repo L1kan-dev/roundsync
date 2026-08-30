@@ -58,14 +58,14 @@ def classify_loadout_tier(weapon_class: str, had_armor: bool, team_buy_capacity:
     return "eco"
 
 
-def extract_fact_economy(parser, target_steam_id64: str) -> list:
-    """One row per round for target_steam_id64 only (see project memory for why not all 10 players)."""
+def extract_fact_economy(parser, target_steam_id64: str, freeze_ticks: list) -> list:
+    """One row per round for target_steam_id64 only (see project memory for why not all 10 players).
+    freeze_ticks (from round_freeze_end) is parsed once by the caller and shared across every
+    extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
     rows = []
     try:
-        freeze_end_df = parse_event(parser, "round_freeze_end")
-        if freeze_end_df.empty:
+        if not freeze_ticks:
             return rows
-        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
 
         snaps = parser.parse_ticks(
             ["start_balance", "cash_spent_this_round", "round_start_equip_value",
@@ -149,14 +149,13 @@ GRENADE_DETONATE_EVENTS = {
 }
 
 
-def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
-    """One row per grenade thrown by target_steam_id64 only (same scoping rule as fact_economy)."""
+def extract_fact_utility_throw(parser, target_steam_id64: str, freeze_ticks: list, fire_df, hurt_df, death_df) -> list:
+    """One row per grenade thrown by target_steam_id64 only (same scoping rule as fact_economy).
+    freeze_ticks/fire_df/hurt_df/death_df are parsed once by the caller and shared across every
+    extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parse_event(parser, "round_freeze_end")
-        freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
-
         team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
 
         throws = []
@@ -182,10 +181,6 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
             inferno_df = parse_event(parser, "inferno_startburn")
         except Exception:
             inferno_df = pd.DataFrame()
-        try:
-            fire_df = parse_event(parser, "weapon_fire")
-        except Exception:
-            fire_df = pd.DataFrame()
 
         my_infernos = inferno_df[inferno_df["user_steamid"].astype(str) == target] if not inferno_df.empty else pd.DataFrame()
         my_fires = (
@@ -209,14 +204,6 @@ def extract_fact_utility_throw(parser, target_steam_id64: str) -> list:
             blind_df = parse_event(parser, "player_blind")
         except Exception:
             blind_df = pd.DataFrame()
-        try:
-            hurt_df = parse_event(parser, "player_hurt")
-        except Exception:
-            hurt_df = pd.DataFrame()
-        try:
-            death_df = parse_event(parser, "player_death")
-        except Exception:
-            death_df = pd.DataFrame()
         try:
             inferno_expire_df = parse_event(parser, "inferno_expire")
         except Exception:
@@ -357,6 +344,40 @@ def _team_for(team_snap, freeze_ticks: list, steamid, tick: int):
     lookup_tick = max(candidates) if candidates else (freeze_ticks[0] if freeze_ticks else tick)
     sub = team_snap[(team_snap["tick"] == lookup_tick) & (team_snap["steamid"].astype(str) == str(steamid))]
     return None if sub.empty else ("CT" if int(sub.iloc[0]["team_num"]) == 3 else "T")
+
+
+def _build_slot_to_steamid_map(bullet_hit_df, bullet_damage_df) -> dict:
+    """player_bullet_hit identifies players by a small per-match attacker_slot/victim_slot
+    number (0-9), not steamid. bullet_damage (a separate event fired for the same hits) has
+    the real steamids directly. Join the two on tick to learn the slot<->steamid mapping once
+    per match, then reuse it for every player_bullet_hit row — slot is stable for one player
+    all match (confirmed empirically against 5 real downloaded matches, 2026-08-30).
+
+    A tick can carry more than one hit (multi-pellet shotgun, or two simultaneous
+    engagements) — joining on tick alone would then pair the wrong rows together. Only ticks
+    that are unique in BOTH events are used to build the map (confirmed empirically: ~90-95%
+    of hits, still enough to see every one of the 10 slots at least once); once a slot's
+    steamid is known it applies to every row for the rest of the match, ambiguous ticks
+    included, since slot assignment doesn't change mid-match."""
+    if bullet_hit_df.empty or bullet_damage_df.empty:
+        return {}
+    single_hit_ticks = bullet_hit_df["tick"].value_counts()
+    single_hit_ticks = set(single_hit_ticks[single_hit_ticks == 1].index)
+    single_damage_ticks = bullet_damage_df["tick"].value_counts()
+    single_damage_ticks = set(single_damage_ticks[single_damage_ticks == 1].index)
+    safe_ticks = single_hit_ticks & single_damage_ticks
+    if not safe_ticks:
+        return {}
+
+    merged = (
+        bullet_hit_df[bullet_hit_df["tick"].isin(safe_ticks)]
+        .merge(bullet_damage_df[bullet_damage_df["tick"].isin(safe_ticks)], on="tick", how="inner")
+    )
+    slot_to_steamid = {}
+    for _, row in merged.iterrows():
+        slot_to_steamid[int(row["attacker_slot"])] = str(row["attacker_steamid"])
+        slot_to_steamid[int(row["victim_slot"])] = str(row["victim_steamid"])
+    return slot_to_steamid
 
 
 def _get_player_rank(parser, target_steam_id64: str):
@@ -501,23 +522,22 @@ def _resolve_bomb_sites_by_elevation(code_to_positions: dict, callouts: list):
     return {codes_by_z[0][0]: letters_by_z[0], codes_by_z[1][0]: letters_by_z[1]}
 
 
-def extract_fact_adaptation_event(parser, target_steam_id64: str, bomb_site_callouts: list = None) -> list:
+def extract_fact_adaptation_event(parser, target_steam_id64: str, freeze_ticks: list, death_df, round_end_df,
+                                   bomb_site_callouts: list = None) -> list:
     """One row per teammate-death, bomb-plant, or enemy-audible-movement trigger for
     target_steam_id64 only (same scoping rule as fact_economy/fact_utility_throw). Bomb-plant
     "opposite site" filtering is NOT applied here — distance_to_plant_units is stored as a raw
-    fact and thresholded later, same facts-vs-rules split as reaction_time_seconds itself."""
+    fact and thresholded later, same facts-vs-rules split as reaction_time_seconds itself.
+    freeze_ticks/death_df/round_end_df are parsed once by the caller and shared across every
+    extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
     rows = []
     bomb_site_callouts = bomb_site_callouts or []
     # raw `site` code -> resolved letter, built and sanity-checked in the bomb-plant block below.
     _raw_code_to_resolved_site = {}
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parse_event(parser, "round_freeze_end")
-        freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
-
         team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
 
-        death_df = parse_event(parser, "player_death")
         if death_df.empty or "user_steamid" not in death_df.columns:
             return rows
 
@@ -620,10 +640,6 @@ def extract_fact_adaptation_event(parser, target_steam_id64: str, bomb_site_call
                     "_planter_y": planter_y,
                 }))
 
-        try:
-            round_end_df = parse_event(parser, "round_end")
-        except Exception:
-            round_end_df = pd.DataFrame()
         if not round_end_df.empty and "round" in round_end_df.columns:
             round_bounds = _build_round_bounds(freeze_ticks, round_end_df)
             for tick, extra in _find_enemy_audible_triggers(parser, target, round_bounds):
@@ -705,26 +721,24 @@ POSITIONING_SAMPLE_INTERVAL_TICKS = int(TICK_RATE * 0.5)
 TRADE_KILL_WINDOW_TICKS = int(TICK_RATE * 3)
 
 
-def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
+def extract_fact_positioning_risk(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, death_df) -> list:
     """One row per isolated-commitment moment for target_steam_id64 only. Fires the instant the
     player has no living teammate within trade distance AND a living enemy within contested
     range — anchored on the COMMITMENT, not the death, per the standing design principle (a
     lucky survival on a bad push must still be visible). Outcome (died/survived, and whether a
-    death was tradeable) is filled in after the fact, as a column, not the trigger itself."""
+    death was tradeable) is filled in after the fact, as a column, not the trigger itself.
+    freeze_ticks/round_end_df/death_df are parsed once by the caller and shared across every
+    extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parse_event(parser, "round_freeze_end")
-        round_end_df = parse_event(parser, "round_end")
-        if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
+        if not freeze_ticks or round_end_df.empty or "round" not in round_end_df.columns:
             return rows
-        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
 
         round_bounds = _build_round_bounds(freeze_ticks, round_end_df)
         if not round_bounds:
             return rows
 
-        death_df = parse_event(parser, "player_death")
         target_deaths = (
             death_df[death_df["user_steamid"].astype(str) == target]
             if not death_df.empty and "user_steamid" in death_df.columns else pd.DataFrame()
@@ -852,23 +866,41 @@ def extract_fact_positioning_risk(parser, target_steam_id64: str) -> list:
 BURST_GAP_TICKS = int(TICK_RATE * 2)
 # How far past the opening shot we look for the hit/kill/death that resolves the engagement.
 ENGAGEMENT_WINDOW_TICKS = int(TICK_RATE * 5)
-NON_GUN_WEAPON_KEYWORDS = "grenade|molotov|decoy|incgrenade"
+# Found 2026-08-30 while rebuilding fact_duel_placement (Tier 9.5): this list was missing
+# "flashbang" and "knife" — weapon_fire fires for a flashbang THROW and a knife SWING too, not
+# just real bullets, so both extract_fact_duel_placement's opening-shot detection and
+# extract_fact_engage_decision's player_engaged flag were treating them as gunfight shots.
+# Confirmed against a real match: 9 of 44 "opening shots" for one player were actually
+# flashbang throws/knife swings, not gunfire. fire_bullets (which only fires for real bullets)
+# exposed this directly — those 9 ticks have no matching fire_bullets row at all.
+NON_GUN_WEAPON_KEYWORDS = "grenade|molotov|decoy|incgrenade|flashbang|knife"
 
 
-def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
+def extract_fact_duel_placement(parser, target_steam_id64: str, freeze_ticks: list, fire_df, death_df,
+                                 fire_bullets_df, bullet_hit_df, slot_to_steamid: dict) -> list:
     """One row per gunfight target_steam_id64 opens (their own opening shot only — this is a
     proxy for pre-aim, not true visibility-based pre-aim, see project memory). Fires for both
     wins and losses, per the decision-vs-outcome principle. When target's shots land, the real
-    opponent (and a real time-to-damage) comes from player_hurt; when they don't, the nearest
-    living enemy is used as a best-guess opponent for the angle check only, flagged via
-    opponent_inferred so the two cases are never silently conflated."""
+    opponent (and a real time-to-damage) comes from player_bullet_hit; when they don't, the
+    nearest living enemy is used as a best-guess opponent for the angle check only, flagged via
+    opponent_inferred so the two cases are never silently conflated.
+
+    Rebuilt 2026-08-30 (Tier 9.5) onto fire_bullets/player_bullet_hit instead of weapon_fire +
+    a separate parse_ticks() snapshot lookup — both richer, more precise sources confirmed
+    already available (see DEMOPARSER2_FIELDS.md). fire_bullets carries the shooter's own
+    EXACT position/angle at the instant of the shot (angles_y = yaw, confirmed empirically
+    against 5 real matches, avg diff ~0.5-0.7deg from the nearest per-tick sample — see
+    NEXT_STEPS.md Tier 9.5), replacing a snapshot at the nearest sampled tick. player_bullet_hit
+    carries the victim's exact position at the hit directly on the row, replacing a second
+    snapshot lookup — but only identifies players by a small attacker_slot/victim_slot number,
+    resolved to a real steamid via slot_to_steamid (see _build_slot_to_steamid_map). Burst/
+    opening-shot detection still uses weapon_fire (fire_df, shared, unchanged) — that part
+    wasn't the imprecise piece Tier 9.5 flagged, only the position/angle/opponent lookup was.
+    freeze_ticks/fire_df/death_df are parsed once by the caller and shared across every
+    extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parse_event(parser, "round_freeze_end")
-        freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
-
-        fire_df = parse_event(parser, "weapon_fire")
         if fire_df.empty or "user_steamid" not in fire_df.columns:
             return rows
         my_fires = fire_df[fire_df["user_steamid"].astype(str) == target]
@@ -887,35 +919,43 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
         bursts.append(current)
         opening_ticks = [b[0] for b in bursts]
 
-        hurt_df = parse_event(parser, "player_hurt")
-        death_df = parse_event(parser, "player_death")
-        pos_df = parser.parse_ticks(["X", "Y", "Z", "yaw", "team_num", "is_alive"], ticks=opening_ticks)
+        # still needed for the fallback path (team_num/position of players who WEREN'T hit) —
+        # fire_bullets/player_bullet_hit only carry data for the shooter and whoever got hit,
+        # not for every other living player at that tick.
+        pos_df = parser.parse_ticks(["X", "Y", "team_num", "is_alive"], ticks=opening_ticks)
+        my_fire_bullets = (
+            fire_bullets_df[fire_bullets_df["user_steamid"].astype(str) == target]
+            if not fire_bullets_df.empty else pd.DataFrame()
+        )
+        my_slot = next((slot for slot, sid in slot_to_steamid.items() if sid == target), None)
         player_rank_new, _player_rank_old, player_rank_type_id = _get_player_rank(parser, target)
 
         for opening_tick in opening_ticks:
+            shot_row = my_fire_bullets[my_fire_bullets["tick"] == opening_tick] if not my_fire_bullets.empty else pd.DataFrame()
             trow = pos_df[(pos_df["tick"] == opening_tick) & (pos_df["steamid"].astype(str) == target)]
-            if trow.empty:
+            if shot_row.empty or trow.empty:
                 continue
-            trow = trow.iloc[0]
-            tx, ty, tz = float(trow["X"]), float(trow["Y"]), float(trow["Z"])
-            tyaw, team_num = float(trow["yaw"]), int(trow["team_num"])
+            shot_row = shot_row.iloc[0]
+            tx, ty, tz = float(shot_row["origin_x"]), float(shot_row["origin_y"]), float(shot_row["origin_z"])
+            tyaw = float(shot_row["angles_y"])
+            team_num = int(trow.iloc[0]["team_num"])
             window_end = opening_tick + ENGAGEMENT_WINDOW_TICKS
 
             opponent_steamid, opponent_inferred, opp_x, opp_y = None, False, None, None
-            if not hurt_df.empty:
-                my_hits = hurt_df[
-                    (hurt_df["attacker_steamid"].astype(str) == target)
-                    & (hurt_df["tick"] >= opening_tick) & (hurt_df["tick"] <= window_end)
+            first_hit = None
+            if my_slot is not None and not bullet_hit_df.empty:
+                my_hits = bullet_hit_df[
+                    (bullet_hit_df["attacker_slot"] == my_slot)
+                    & (bullet_hit_df["tick"] >= opening_tick) & (bullet_hit_df["tick"] <= window_end)
                 ]
                 if not my_hits.empty:
-                    opponent_steamid = str(my_hits.sort_values("tick").iloc[0]["user_steamid"])
+                    first_hit = my_hits.sort_values("tick").iloc[0]
+                    opponent_steamid = slot_to_steamid.get(int(first_hit["victim_slot"]))
 
-            if opponent_steamid is not None:
-                opp_row = pos_df[(pos_df["tick"] == opening_tick) & (pos_df["steamid"].astype(str) == opponent_steamid)]
-                if opp_row.empty:
-                    continue
-                opp_x, opp_y = float(opp_row.iloc[0]["X"]), float(opp_row.iloc[0]["Y"])
+            if opponent_steamid is not None and first_hit is not None:
+                opp_x, opp_y = float(first_hit["victim_pos_x"]), float(first_hit["victim_pos_y"])
             else:
+                opponent_steamid, first_hit = None, None
                 others = pos_df[
                     (pos_df["tick"] == opening_tick) & (pos_df["steamid"].astype(str) != target) & (pos_df["is_alive"])
                 ]
@@ -932,15 +972,8 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
             angle_deviation_deg = round(abs(_angle_diff(angle_to_opponent, tyaw)), 2)
 
             time_to_damage_seconds = None
-            if not opponent_inferred and not hurt_df.empty:
-                landed = hurt_df[
-                    (hurt_df["attacker_steamid"].astype(str) == target)
-                    & (hurt_df["user_steamid"].astype(str) == opponent_steamid)
-                    & (hurt_df["tick"] >= opening_tick) & (hurt_df["tick"] <= window_end)
-                ]
-                if not landed.empty:
-                    first_hit_tick = int(landed.sort_values("tick").iloc[0]["tick"])
-                    time_to_damage_seconds = round((first_hit_tick - opening_tick) / TICK_RATE, 2)
+            if not opponent_inferred and first_hit is not None:
+                time_to_damage_seconds = round((int(first_hit["tick"]) - opening_tick) / TICK_RATE, 2)
 
             engagement_result = "no_result"
             if not death_df.empty:
@@ -976,29 +1009,26 @@ def extract_fact_duel_placement(parser, target_steam_id64: str) -> list:
     return rows
 
 
-def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
+def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: list, round_end_df,
+                                  death_df, hurt_df, fire_df) -> list:
     """One row per moment target_steam_id64's team first becomes outnumbered while target is
     still alive (not exclusive to true 1-vs-N clutches, per category 7's design). Deliberately
     does NOT compute a weighted HLTV-style Impact Score — those coefficients are undisclosed
     even for HLTV's own real formula and need real calibration (see project memory). Instead
     stores the raw running components (kills/deaths/damage/rounds, for target AND every
-    remaining enemy) so any weighting scheme can be applied later without re-parsing."""
+    remaining enemy) so any weighting scheme can be applied later without re-parsing.
+    freeze_ticks/round_end_df/death_df/hurt_df/fire_df are parsed once by the caller and shared
+    across every extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
     rows = []
     target = str(target_steam_id64)
     try:
-        freeze_end_df = parse_event(parser, "round_freeze_end")
-        round_end_df = parse_event(parser, "round_end")
-        if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
+        if not freeze_ticks or round_end_df.empty or "round" not in round_end_df.columns:
             return rows
-        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
 
         round_bounds = _build_round_bounds(freeze_ticks, round_end_df, with_winner=True)
         if not round_bounds:
             return rows
 
-        death_df = parse_event(parser, "player_death")
-        hurt_df = parse_event(parser, "player_hurt")
-        fire_df = parse_event(parser, "weapon_fire")
         if death_df.empty:
             return rows
         target_death_events = death_df[death_df["user_steamid"].astype(str) == target]
@@ -1100,9 +1130,10 @@ def extract_fact_engage_decision(parser, target_steam_id64: str) -> list:
     return rows
 
 
-def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -> dict:
+def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df) -> dict:
     """Four Home-dashboard KPI tiles, computed once per match from data already parsed here
-    (deaths_df is passed in so this doesn't re-run parse_event("player_death") a second time).
+    (freeze_ticks/round_end_df/deaths_df are all passed in so this doesn't re-run parse_event()
+    a second time for events every other extract_fact_* function already shares — Tier 9).
     Every value defaults to None and is left out of the telemetry blob by the caller when it
     couldn't be computed — same optional-field/graceful-fallback pattern as total_damage/
     headshots/rounds_played already use, so older already-parsed matches just show nothing for
@@ -1116,11 +1147,8 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, deaths_df) -
         "kast_pct": None,
     }
     try:
-        freeze_end_df = parse_event(parser, "round_freeze_end")
-        round_end_df = parse_event(parser, "round_end")
-        if freeze_end_df.empty or round_end_df.empty or "round" not in round_end_df.columns:
+        if not freeze_ticks or round_end_df.empty or "round" not in round_end_df.columns:
             return metrics
-        freeze_ticks = sorted(freeze_end_df["tick"].tolist())
 
         round_bounds = _build_round_bounds(freeze_ticks, round_end_df, with_winner=True)
         if not round_bounds:
@@ -1466,9 +1494,11 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         # matches happen to end on a kill. round_freeze_end fires at the start of every round
         # instead, including the last one, and is the same source every fact_* extractor below
         # already uses to count rounds — confirmed self-consistent across all of them.
+        freeze_ticks = []
         try:
             freeze_end_df = parse_event(parser, "round_freeze_end")
             rounds_played = len(freeze_end_df)
+            freeze_ticks = sorted(freeze_end_df["tick"].tolist()) if not freeze_end_df.empty else []
         except Exception as e:
             print(f"⚠️ Warning parsing round count: {e}")
 
@@ -1502,16 +1532,36 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         except Exception as e:
             print(f"⚠️ Warning parsing damage: {e}")
 
+        # Shared events every extract_fact_* function below used to re-parse independently
+        # (round_freeze_end/player_death/player_hurt above, plus these) — up to 8x per sync for
+        # round_freeze_end alone. Parsed once here and passed into every function instead
+        # (Tier 9, NEXT_STEPS.md). fire_bullets/player_bullet_hit are the richer sources
+        # fact_duel_placement's rebuild uses (Tier 9.5) — see _build_slot_to_steamid_map's
+        # docstring for why player_bullet_hit needs bullet_damage to resolve its slot numbers.
+        round_end_df = pd.DataFrame()
+        fire_df = pd.DataFrame()
+        fire_bullets_df = pd.DataFrame()
+        bullet_hit_df = pd.DataFrame()
+        slot_to_steamid = {}
+        try:
+            round_end_df = parse_event(parser, "round_end")
+            fire_df = parse_event(parser, "weapon_fire")
+            fire_bullets_df = parse_event(parser, "fire_bullets", other=["angles_x", "angles_y", "angles_z"])
+            bullet_hit_df = parse_event(parser, "player_bullet_hit")
+            bullet_damage_df = parse_event(parser, "bullet_damage")
+            slot_to_steamid = _build_slot_to_steamid_map(bullet_hit_df, bullet_damage_df)
+        except Exception as e:
+            print(f"⚠️ Warning parsing shared round_end/weapon_fire/fire_bullets/player_bullet_hit: {e}")
+
         # Rounds where target got a 2/3/4/5(ace)-kill — pure aggregation of deaths_df, already
         # parsed above; grouped by round via the same _round_for helper every fact_* extractor uses.
         multi_kill_rounds = None
         try:
-            if not deaths_df.empty and "attacker_steamid" in deaths_df.columns and not freeze_end_df.empty:
-                multi_kill_freeze_ticks = sorted(freeze_end_df["tick"].tolist())
+            if not deaths_df.empty and "attacker_steamid" in deaths_df.columns and freeze_ticks:
                 user_kills_for_multi = deaths_df[deaths_df["attacker_steamid"].astype(str) == str(target_steam_id64)]
                 kills_per_round = {}
                 for _, k in user_kills_for_multi.iterrows():
-                    rnd = _round_for(multi_kill_freeze_ticks, int(k["tick"]))
+                    rnd = _round_for(freeze_ticks, int(k["tick"]))
                     kills_per_round[rnd] = kills_per_round.get(rnd, 0) + 1
                 multi_kill_rounds = {"2k": 0, "3k": 0, "4k": 0, "ace": 0}
                 for count in kills_per_round.values():
@@ -1536,9 +1586,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         # unranked/other modes — the frontend shows "—" for that match's rank pill in that case.
         _rank_new_unused, rank_at_match_start, _rank_type_unused = _get_player_rank(parser, target_steam_id64)
 
-        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, deaths_df)
+        secondary_metrics = extract_match_secondary_metrics(parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df)
 
-        fact_economy_rows = extract_fact_economy(parser, target_steam_id64)
+        fact_economy_rows = extract_fact_economy(parser, target_steam_id64, freeze_ticks)
         if fact_economy_rows:
             try:
                 for r in fact_economy_rows:
@@ -1550,7 +1600,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             except Exception as e:
                 print(f"⚠️ Failed to save fact_economy: {e}")
 
-        fact_utility_rows = extract_fact_utility_throw(parser, target_steam_id64)
+        fact_utility_rows = extract_fact_utility_throw(parser, target_steam_id64, freeze_ticks, fire_df, hurt_df, deaths_df)
         if fact_utility_rows:
             try:
                 for r in fact_utility_rows:
@@ -1562,7 +1612,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             except Exception as e:
                 print(f"⚠️ Failed to save fact_utility_throw: {e}")
 
-        fact_adaptation_rows = extract_fact_adaptation_event(parser, target_steam_id64, bomb_site_callouts)
+        fact_adaptation_rows = extract_fact_adaptation_event(
+            parser, target_steam_id64, freeze_ticks, deaths_df, round_end_df, bomb_site_callouts
+        )
         if fact_adaptation_rows:
             try:
                 for r in fact_adaptation_rows:
@@ -1575,7 +1627,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             except Exception as e:
                 print(f"⚠️ Failed to save fact_adaptation_event: {e}")
 
-        fact_positioning_rows = extract_fact_positioning_risk(parser, target_steam_id64)
+        fact_positioning_rows = extract_fact_positioning_risk(parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df)
         if fact_positioning_rows:
             try:
                 for r in fact_positioning_rows:
@@ -1587,7 +1639,10 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             except Exception as e:
                 print(f"⚠️ Failed to save fact_positioning_risk: {e}")
 
-        fact_duel_rows = extract_fact_duel_placement(parser, target_steam_id64)
+        fact_duel_rows = extract_fact_duel_placement(
+            parser, target_steam_id64, freeze_ticks, fire_df, deaths_df,
+            fire_bullets_df, bullet_hit_df, slot_to_steamid
+        )
         if fact_duel_rows:
             try:
                 for r in fact_duel_rows:
@@ -1599,7 +1654,9 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             except Exception as e:
                 print(f"⚠️ Failed to save fact_duel_placement: {e}")
 
-        fact_engage_rows = extract_fact_engage_decision(parser, target_steam_id64)
+        fact_engage_rows = extract_fact_engage_decision(
+            parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df, hurt_df, fire_df
+        )
         if fact_engage_rows:
             try:
                 for r in fact_engage_rows:
