@@ -33,7 +33,7 @@ for you.
    `archive/project_status_and_roadmap_archive.md` already works. Two
    lessons that generalize beyond their own bug (Supabase RLS scoping, the
    weighted-average pattern) were promoted to memory
-   (`project_supabase_security_patterns.md`) before the split, so nothing
+   (now folded into `project_supabase_operations.md`) before the split, so nothing
    load-bearing depends on opening the archive.
 2. **`services/watcher/CS2_ANALYTICS_STANDARDS.md`** — broader than its name
    suggests: not just ~40 CS2 analytics metrics (ADR, KAST, Time to Damage,

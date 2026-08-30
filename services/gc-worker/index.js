@@ -58,6 +58,22 @@ const FATAL_LOGIN_ERESULTS = new Set([
   114, // AccountDeleted
 ]);
 
+// Without an explicit handler, node-steam-user's own default behavior when it decides mid-
+// session that it needs a FRESH verification code (distinct from the one already sent at
+// logOn) is to fall back to prompting for one interactively via stdin — something a
+// non-interactive Railway container can never answer, so the process just hangs forever.
+// This is the confirmed root cause of the reconnect-after-kick hang (NEXT_STEPS.md Tier 14):
+// registering this handler and auto-supplying a fresh TOTP code (same method the normal
+// logOn path already uses) prevents the stuck state from ever happening, instead of trying
+// to detect and recover from it after the fact.
+user.on('steamGuard', (_domain, callback, lastCodeWrong) => {
+  console.log(
+    `🔐 Steam requested a fresh Guard code mid-session (lastCodeWrong: ${lastCodeWrong}) — ` +
+    `auto-supplying via TOTP, no manual input needed.`
+  );
+  callback(SteamTotp.generateAuthCode(STEAM_SHARED_SECRET));
+});
+
 // Steam & GC Authentication Lifecycle
 user.on('loggedOn', () => {
   console.log('✅ Logged into Steam successfully. Requesting CS2 license...');

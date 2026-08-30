@@ -66,3 +66,30 @@ not a replacement for it. Tier 11's endpoint (`GET
 decoded data that this future full page can reuse it directly rather than
 needing a second endpoint built later. When this gets picked up for real,
 move it into `NEXT_STEPS.md` as its own tier.
+
+## 6. Distance-bucketed kill accuracy (proposed by the user, 2026-08-30)
+
+`NEXT_STEPS.md` Tier 5 already plans a plain "average kill distance" stat
+(reusing the existing `pos_df` position-lookup pattern from
+`extract_fact_duel_placement`). The user's extension: don't stop at one
+average number — bucket kills into close/medium/long range and show
+accuracy per bucket, so a player can see "I'm strong up close, weak at
+range" instead of one blended figure. The user's own example: compare a
+player's long-range bucket against a known real-world yardstick, like
+Mirage's Top-Mid-boxes-to-Sniper-Window sightline, so "long range" means
+something concrete instead of an arbitrary number.
+
+**Not yet scoped — two things need real research before this is buildable,
+not just assumed:**
+1. What close/medium/long actually means in CS2 map units. The engine's
+   own unit-to-real-world-distance conversion needs to be verified against
+   a real source (Source engine documentation or a measured in-game
+   reference), not recalled from memory, before picking bucket cutoffs.
+2. Whether any existing tracker (Leetify/HLTV/Scope.gg) already publishes
+   a range-bucketed accuracy stat — if one does, align to their bucket
+   boundaries so the numbers are comparable; if not, this is a genuine
+   RoundSync original and needs its own documented methodology, same
+   treatment as `CS2_ANALYTICS_STANDARDS.md` gives every other metric.
+
+Once researched, this folds into the existing Tier 5 "Kill distance" line
+in `NEXT_STEPS.md` rather than becoming a separate tier.

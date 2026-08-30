@@ -8,7 +8,7 @@ what was checked, exact before/after numbers — lives in
 `NEXT_STEPS_ARCHIVE.md`, read only on demand, not every session.** Split
 done 2026-08-28 specifically to cut this file's mandatory-read cost; two
 lessons that generalize beyond their own bug got promoted to memory
-(`project_supabase_security_patterns.md`) before anything moved, so nothing
+(now folded into `project_supabase_operations.md`) before anything moved, so nothing
 load-bearing got buried.
 
 A fuller visual writeup of the 2026-08-25 audit also exists as a "RoundSync
@@ -25,10 +25,35 @@ next" guide.
 `IDEAS.md` is a separate, intentionally-overlapping list — some ideas below
 also appear there in their own words. That duplication is deliberate.
 
-**Standing note:** Tier 14's 502 fix and `gc-worker` GC retry-loop fix are
-both applied and live. `gc-worker` is still not self-recovering from a
-`LoggedInElsewhere` kick — see Tier 14 below, this is the one open item from
-that production incident.
+## Dependency Map — check this BEFORE starting any tier below
+
+The Bands above are grouped by category, not by build order — they don't by
+themselves say "doing A first changes how B has to be built." This table is
+the actual cross-tier lineage: before starting any tier, check here first
+(a few lines) rather than reading every other tier in full to notice a
+collision yourself.
+
+| If you're about to work on... | Check... | Because... |
+|---|---|---|
+| **Tier 9** (shared pre-parsing refactor) | **Tier 9.5** (`fact_duel_placement` rebuild) | Both touch the same file's parsing plumbing. Tier 9.5 already needs `fire_bullets`/`player_bullet_hit` (see Tier 9.5 below) — if Tier 9's shared pre-parse step doesn't include those two events from the start, Tier 9.5 will have to touch all 7 function signatures a second time, or bolt on a duplicate un-shared parse call, defeating Tier 9's whole point. **Do these together, or design Tier 9's shared-event list to already include what Tier 9.5 needs.** |
+| **Tier 2** (Time to Damage / reaction-time rebuild) | **Tier 6** (`awpy` evaluation), **Tier 5**'s raw/spray accuracy | All three need the same missing primitive: real player-visibility detection between ticks. `awpy` (MIT, already solves this) can unlock all three at once — evaluate it before building visibility detection from scratch for just one of them. |
+| **Tier 6.5** (bracket comparison) | User count | Blocked, not sequenced — needs real population data across many users; RoundSync has ~3. Revisit when that changes, don't substitute a third-party benchmark in the meantime. |
+| **Tier 8** (predictive/trend analysis) | Match history count | Same shape as above — gated behind more matches per user, not a build-order dependency. |
+
+**How to use this as a new session:** once you know which tier you're
+starting, scan this table for that tier's row before reading anything else
+in this file in full. If it names a dependency, read that other tier's
+section too before writing code. If it doesn't appear here, it's safe to
+treat as standalone. Add a new row here immediately if a fix while working
+on one tier turns out to touch another (same rule as
+[[engineering_standards]] rule 9 — don't let a newly-found dependency go
+undocumented).
+
+**Standing note:** Tier 14's 502 fix, the GC match-resolution retry backoff,
+and the `LoggedInElsewhere`-reconnect hang fix are all done — see Tier 14
+below for the real root cause and fix (a missing `steamGuard` handler, not
+something needing a restart). Not yet pushed to production as of this note;
+verify `railway status` before assuming it's live.
 
 **Band 1 — Real users are confused right now. DONE, 2026-08-27.**
 All 4 came from actually using the live app — full detail in archive, Tier
@@ -142,7 +167,11 @@ actual lift, cheapest first:
 **Cheap — reuses an existing pattern already written elsewhere in the codebase:**
 - [ ] **Kill distance** (avg map distance to your kills) — reuses the
       existing `pos_df` position-lookup pattern from
-      `extract_fact_duel_placement`.
+      `extract_fact_duel_placement`. **Extended, 2026-08-30**: bucket into
+      close/medium/long-range accuracy, not just one average number — see
+      `IDEAS.md` #6 for the real research needed before this is buildable
+      (unit-to-distance conversion, and whether a bucket convention already
+      exists industry-wide).
 - [ ] **Self-flash duration** — the self-blind rows already exist in
       `blind_df` inside `extract_fact_utility_throw`, currently discarded
       (`continue`) instead of captured.
@@ -242,10 +271,17 @@ actual lift, cheapest first:
       *exact* fired angle (`angles_x/y/z`) on the same row as the shot
       itself, and `player_bullet_hit` carries the victim's *exact* position
       at the hit (`victim_pos_x/y/z`) plus `round` built directly into the
-      row. **Flagged for a scope decision** — this touches
+      row. **Approved by the user, 2026-08-30** — this touches
       `fact_duel_placement`, which already feeds production data
-      (Crosshair Placement card, `aim_placement` category score), so a
-      rebuild needs sign-off, not a silent swap.
+      (Crosshair Placement card, `aim_placement` category score), so it's
+      being rebuilt rather than silently swapped. **Real blocker found
+      2026-08-30, before implementing**: need to confirm which of
+      `fire_bullets`'s `angles_x/y/z` fields is the horizontal (yaw) angle —
+      guessing wrong would silently corrupt this live stat. A web search
+      came up empty; needs either a direct read of `demoparser2`'s own Rust
+      source, or an empirical test against a real downloaded demo (same
+      method the original field crawl in `DEMOPARSER2_FIELDS.md` used). Not
+      started until this is verified.
 
 ## Tier 5.5 — Engage IQ redesign (proposed 2026-08-27, queued behind the audit)
 
@@ -289,7 +325,7 @@ their own tiers below/above, not duplicated here:
 2. The Engage IQ redesign (Tier 5.5, above).
 
 Method reference: the standing 6-lens framework lives in memory
-`feedback_five_lens_audit_framework.md` — redundancy/architecture, security,
+`engineering_standards.md` (rule 12) — redundancy/architecture, security,
 math validity + the "real question" test, performance, legal/licensing,
 and proactive original-idea generation. Applies to every RoundSync code
 change now, not just formal audits.
@@ -326,23 +362,25 @@ Found while bringing production back online for a planned showcase. The 502
 fix and the `gc-worker` GC retry-loop fix are both done and live — full
 forensic detail in `NEXT_STEPS_ARCHIVE.md`. This is the one item still open:
 
-- [ ] **`gc-worker` does NOT self-recover from a `LoggedInElsewhere` kick.**
-      **CONFIRMED, 2026-08-27** via `railway logs --service gc-worker`:
-      production logs stop dead at `Steam Guard App Code:` with zero
-      further output, and `railway status` shows the service as
-      "Completed" (process exited), not "Online" — meaning production's bot
-      sits fully offline after a kick, not silently retrying. Root cause:
-      `SteamTotp.generateAuthCode()` generates a real 2FA code automatically
-      for the normal login path (`connectToSteam()`), but Steam's
-      `LoggedInElsewhere` response apparently routes through a different
-      flow that falls back to prompting for a code interactively via
-      stdin — something a non-interactive Railway container can never
-      answer, so the process just hangs. Separate bug from the already-fixed
-      fatal-vs-transient EResult classification (that's correct for the
-      *login* path — this hang happens on reconnect after a kick).
-      **Not fixed yet — flagged for a dedicated session.** Production is
-      currently down for `gc-worker` specifically because of this; the
-      other 3 services are Online.
+- [x] **`gc-worker` does NOT self-recover from a `LoggedInElsewhere` kick —
+      FIXED, 2026-08-30.** Root cause confirmed: `node-steam-user`'s default
+      behavior, when it decides mid-session it needs a FRESH verification
+      code, is to prompt for one interactively via stdin if no `steamGuard`
+      event listener is registered — something a non-interactive Railway
+      container can never answer, so the process hung forever. `index.js`
+      never registered that listener. Separate bug from the already-fixed
+      fatal-vs-transient EResult classification (that one is correct for the
+      *initial login* path — this hang happened on reconnect after a kick).
+      **Fix:** added a `steamGuard` handler that auto-supplies a fresh TOTP
+      code (same method the normal login path already uses), with a clearly
+      tagged log line each time it fires, for tracing. **Deliberately NOT an
+      auto-restart** — the user's own reasoning: a `LoggedInElsewhere` kick
+      is usually caused by a local/dev `gc-worker` left running against the
+      same account ([[project_gc_worker_operations]]); an
+      auto-restart in that case would just crash-loop production forever
+      against the same live conflict instead of fixing anything. Full
+      writeup: memory `project_gc_worker_operations.md`. Not yet pushed
+      to production as of this note.
 
 ## Tier 10 — Live-testing feedback, 2026-08-27
 

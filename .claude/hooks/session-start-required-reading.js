@@ -1,33 +1,29 @@
 #!/usr/bin/env node
-// SessionStart hook: guarantees every session reads (1) every file in the
-// ~/.claude memory folder, (2) RoundSync's required-reading docs, and (3) the
-// current .gitignore/.claudeignore rules, before doing anything else.
+// SessionStart hook: guarantees every session reads (1) the "Always" tier of
+// the ~/.claude memory folder in full, (2) RoundSync's required-reading docs,
+// and (3) the current .gitignore/.claudeignore rules, before doing anything
+// else — plus surfaces a topic-tagged INDEX of the rest of memory, to be read
+// selectively once the session's actual task is known.
 //
-// IMPORTANT DESIGN NOTE (2026-08-26, second iteration): the first version of
-// this hook tried to embed all of that content directly into
-// hookSpecificOutput.additionalContext (~167KB / ~42,800 tokens combined).
-// That doesn't work reliably. Confirmed via raw session logs across multiple
-// real sessions: once a hook's output exceeds some size threshold, the
-// harness silently truncates additionalContext to roughly a 2KB preview and
-// persists the rest to a tool-results/*-additionalContext.txt file — meaning
-// the model only reliably sees a couple KB, not the full content, unless it
-// separately chooses to go Read that persisted file itself (inconsistent —
-// some sessions did, most didn't, and none were told to). Every symptom this
-// was built to prevent (skipping memory files, re-reading AI_CONTEXT.md
-// manually, no visible confirmation) traced back to this truncation, not to
-// the model ignoring content it actually had.
+// DESIGN, 2026-08-30 (third iteration — tagged/tiered memory): the first two
+// iterations force-read the ENTIRE memory folder every session, no exceptions
+// (see project_status_and_roadmap.md for why that became the rule — two real
+// incidents where a session judged something "irrelevant" and guessed wrong).
+// This version keeps that same safety property for the "Always" tier (rules
+// that govern HOW every response gets written, regardless of topic — teaching
+// style, the engineering-rigor creed, the six-lens framework, etc.) but adds
+// a second, "Topic" tier for narrower, area-specific memories (rank, gc-worker,
+// Docker/Railway, Supabase, testing, etc.). Topic-tier files are NOT force-read
+// — only their name/description/tags get surfaced, like a book's index. The
+// session is instructed to match tags against its actual task and read the
+// matching files in full BEFORE touching that area, defaulting to "read it"
+// whenever unsure a tag applies. A memory file with no tier field at all is
+// treated as "always" (fail safe, not fail silent) so a newly-added file
+// without a tier never slips through unread by omission.
 //
-// Fix: additionalContext now stays tiny — just an explicit, ordered list of
-// absolute file paths plus an instruction to Read every one of them, as the
-// first action of the session, via the real Read tool. Real Read calls are
-// the one delivery mechanism that's actually proven reliable in every session
-// checked. This hook's job is to make the instruction to do that
-// unmissable and mechanically generated (never hand-typed, never stale), not
-// to smuggle the content in itself.
-//
-// Memory files are discovered dynamically (fs.readdirSync), not hardcoded, so
-// a new memory file created in a future session is picked up automatically —
-// nobody has to remember to add it here.
+// Every memory file's own frontmatter carries `tier: always` or `tier: topic`
+// (+ `tags: [...]` for topic files) — this hook just reads and sorts by that,
+// it never hand-classifies anything itself.
 
 const fs = require("fs");
 const path = require("path");
@@ -44,12 +40,9 @@ const REQUIRED_FILES = [
   "services/watcher/DEMOPARSER2_FIELDS.md",
 ];
 
-// Both small, both safety-critical, both easy to forget to check — same failure
-// class as the required-reading docs above, just for "don't touch/expose this"
-// instead of "use this as context." See feedback_secrets_handling.
 const IGNORE_FILES = [".gitignore", ".claudeignore"];
 
-const errors = []; // human-readable, for the visible banner
+const errors = [];
 let totalBytes = 0;
 
 function statOrError(fullPath, label) {
@@ -63,25 +56,58 @@ function statOrError(fullPath, label) {
   }
 }
 
-// --- 1. Memory folder — discover every .md file, MEMORY.md first.
-const memoryPaths = [];
+// Minimal frontmatter reader — this repo's memory files use a plain, flat
+// YAML-ish block; a real YAML parser is overkill for 3 fields.
+function readFrontmatter(fullPath) {
+  let text;
+  try {
+    text = fs.readFileSync(fullPath, "utf8");
+  } catch {
+    return { description: "", tier: "always", tags: [] };
+  }
+  const descMatch = text.match(/^description:\s*"?(.*?)"?\s*$/m);
+  const tierMatch = text.match(/^\s*tier:\s*(\w+)\s*$/m);
+  const tagsMatch = text.match(/^\s*tags:\s*\[(.*?)\]\s*$/m);
+  return {
+    description: descMatch ? descMatch[1] : "",
+    tier: tierMatch ? tierMatch[1] : "always", // no tier field = treat as always, fail safe
+    tags: tagsMatch
+      ? tagsMatch[1].split(",").map((t) => t.trim()).filter(Boolean)
+      : [],
+  };
+}
+
+// --- 1. Memory folder — discover every .md file, classify by frontmatter.
+const alwaysFiles = []; // { path, description }
+const topicFiles = []; // { path, description, tags }
+let memoryMdPath = null;
+
 try {
-  const entries = fs
-    .readdirSync(MEMORY_DIR)
-    .filter((f) => f.endsWith(".md"))
-    .sort((a, b) => (a === "MEMORY.md" ? -1 : b === "MEMORY.md" ? 1 : a.localeCompare(b)));
+  const entries = fs.readdirSync(MEMORY_DIR).filter((f) => f.endsWith(".md"));
   for (const name of entries) {
     const fullPath = path.join(MEMORY_DIR, name);
     statOrError(fullPath, `memory/${name}`);
-    memoryPaths.push(fullPath);
+    if (name === "MEMORY.md") {
+      memoryMdPath = fullPath;
+      continue;
+    }
+    const fm = readFrontmatter(fullPath);
+    // A topic file with zero tags could never be matched by any future lookup — it would
+    // sit indexed-but-unreachable forever, silently. Fail safe: treat that as always-tier
+    // instead, same as a missing tier field.
+    if (fm.tier === "topic" && fm.tags.length > 0) {
+      topicFiles.push({ path: fullPath, description: fm.description, tags: fm.tags });
+    } else {
+      alwaysFiles.push({ path: fullPath, description: fm.description });
+    }
   }
 } catch (err) {
   errors.push(`listing ${MEMORY_DIR}: ${err.message}`);
 }
 
-// --- 2. RoundSync's own required-reading docs + 3. ignore files — verify
-// existence/size now (so the banner can report real errors), build absolute
-// paths for the instruction list.
+// --- 2. RoundSync's own required-reading docs + 3. ignore files (unchanged —
+// still always-full-read; these already carry their own index/detail split
+// internally, e.g. CS2_ANALYTICS_STANDARDS.md's master categorization table).
 const requiredPaths = REQUIRED_FILES.map((rel) => {
   const fullPath = path.join(REPO_ROOT, rel);
   statOrError(fullPath, rel);
@@ -93,51 +119,56 @@ const ignorePaths = IGNORE_FILES.map((rel) => {
   return fullPath;
 });
 
-// --- Build the small, guaranteed-to-survive instruction.
+// --- Build the instruction.
 const lines = [];
 lines.push(
   "=== MANDATORY FIRST ACTION — READ THESE FILES BEFORE RESPONDING TO ANYTHING ===",
   "This list is generated fresh by a SessionStart hook, not hand-typed or recalled from",
-  "memory. Before your first response, use the Read tool on every path below, in order.",
-  "Do not summarize this list back to the user unprompted; use it as grounding for real",
-  "work. Do not skip any entry, including ones that look like they're 'just memory' —",
-  "each one carries a standing instruction from a real past incident.",
+  "memory. Before your first response, use the Read tool on every ALWAYS-tier path below,",
+  "in order — no exceptions, including ones that look like 'just memory'.",
   "",
-  `--- ~/.claude memory folder (${memoryPaths.length} files, MEMORY.md first) ---`,
-  ...memoryPaths,
+  `--- ALWAYS tier (${alwaysFiles.length + 1} files: MEMORY.md + ${alwaysFiles.length} memory files) — read every one, in full, right now ---`,
+  memoryMdPath,
+  ...alwaysFiles.map((f) => f.path),
   "",
-  "--- RoundSync required-reading docs ---",
+  "--- RoundSync required-reading docs — read every one, in full, right now ---",
   ...requiredPaths,
   "",
   "--- Ignore rules (check patterns here BEFORE reading or displaying any other file;",
   "never Read/cat/grep-display a file matching .claudeignore, even if asked directly) ---",
   ...ignorePaths,
   "",
+  `--- TOPIC tier (${topicFiles.length} files) — INDEX ONLY, do not Read these yet ---`,
+  "These are narrower, area-specific memories (not about how to respond generally, but",
+  "about a specific part of the codebase/workflow). Do NOT read them now. Once you know",
+  "what this session's actual task touches (from the user's first real message, or by",
+  "asking), match its subject against the tags below and Read ONLY the matching files, in",
+  "full, before touching that area. If you're genuinely unsure whether a tag applies,",
+  "read the file anyway — 'unsure' defaults to reading, never to skipping.",
+  ...topicFiles.map(
+    (f) => `  [tags: ${f.tags.join(", ")}] ${f.path} — ${f.description}`
+  ),
+  "",
   "This does NOT replace skimming services/watcher/sync_pipeline.py per AI_CONTEXT.md's",
-  "own instructions — do that too. Once a file above has been Read this session, don't",
-  "re-Read it again later unless you have a specific reason to think it changed.",
+  "own instructions — do that too. Once a file has been Read this session, don't re-Read",
+  "it again later unless you have a specific reason to think it changed.",
   "",
   "=== VISIBLE CONFIRMATION — REQUIRED, NOT OPTIONAL ===",
-  "The `systemMessage` field this hook also emits is confirmed (2026-08-26, by direct",
-  "user report across multiple real sessions) to never render in this VSCode extension's",
-  "panel UI, even though it's generated correctly — so the user has no way to see it.",
-  "Your own response text is the one channel proven to render reliably. So: after",
-  "completing every Read above, and before anything else, your first response this",
-  "session must begin with this exact line, verbatim, on its own:",
-  `✅ Required-reading hook ran: read ${memoryPaths.length} memory files + ${REQUIRED_FILES.length} project docs + ${IGNORE_FILES.length} ignore files.`,
+  "The `systemMessage` field this hook also emits is confirmed to never render in this",
+  "VSCode extension's panel UI. Your own response text is the one channel proven to",
+  "render reliably. So: after completing every ALWAYS-tier Read above, and before",
+  "anything else, your first response this session must begin with this exact line,",
+  "verbatim, on its own:",
+  `✅ Required-reading hook ran: read ${alwaysFiles.length + 1} always-tier memory files + ${REQUIRED_FILES.length} project docs + ${IGNORE_FILES.length} ignore files. ${topicFiles.length} topic-tagged memory files indexed, not yet read.`,
   "Then continue your response normally below it."
 );
 const context = lines.join("\n");
 
-// --- systemMessage kept for completeness/log-grepping (confirmed 2026-08-26 to
-// not actually render in this VSCode extension's panel UI — see the in-context
-// instruction above, which is the real, working substitute). Every number here
-// is counted live by this script, right now.
 const totalKb = (totalBytes / 1024).toFixed(0);
 let systemMessage =
-  `✅ Required-reading hook ran: instructed to Read ${memoryPaths.length} memory files + ` +
-  `${REQUIRED_FILES.length} project docs + ${IGNORE_FILES.length} ignore files ` +
-  `(~${totalKb}KB on disk)`;
+  `✅ Required-reading hook ran: ${alwaysFiles.length + 1} always-tier memory files + ` +
+  `${REQUIRED_FILES.length} project docs + ${IGNORE_FILES.length} ignore files instructed ` +
+  `to Read; ${topicFiles.length} topic-tagged files indexed only (~${totalKb}KB on disk total)`;
 if (errors.length > 0) {
   systemMessage += `\n⚠️ ${errors.length} file(s) failed to stat: ${errors.join("; ")}`;
 }
