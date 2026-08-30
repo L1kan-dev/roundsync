@@ -1,11 +1,21 @@
 # AI_CONTEXT.md — Read This First
 
 If a chat session is pointed at this file, treat it as a direct instruction:
-**read every file listed below, in full, before responding to anything
-else in that conversation.** This file exists so a fresh session starting
-on RoundSync has the same context as the sessions that produced the
-research below — the actual documents, not a summary of them, and not an
-assumption about what they probably say.
+**read every ALWAYS-tier file listed below, in full, before responding to
+anything else in that conversation** — and check the TOPIC-tier list once
+you know what the session's actual task touches, reading only the matching
+ones in full before working in that area. This file exists so a fresh
+session starting on RoundSync has the same context as the sessions that
+produced the research below — the actual documents, not a summary of them,
+and not an assumption about what they probably say.
+
+**Tiered 2026-08-30** — this used to be one flat "read everything" list.
+Caught directly: `CS2_ANALYTICS_STANDARDS.md` and `DEMOPARSER2_FIELDS.md`
+were being force-read every session regardless of whether the task touched
+CS2 stats or demo parsing at all, the same unconditional-over-reading
+problem already fixed for the memory folder. `.claude/hooks/session-start-required-reading.js`
+now enforces this split mechanically — this doc's job is to explain the
+*content* of each file, the hook's job is deciding what gets read when.
 
 ## What's already automatic — you don't need this file for this part
 
@@ -21,11 +31,13 @@ question about it. This file's job is to force the *deep* research that
 lives inside this repo to get read in full, since nothing auto-loads that
 for you.
 
-## Required reading, in this order
+## ALWAYS tier — read every session, no exceptions
 
 1. **`NEXT_STEPS.md`** (repo root) — what's still open, tiered by priority
    and actual engineering lift (verified against real field availability,
-   not estimated), plus a one-line pointer for everything already finished.
+   not estimated), plus a one-line pointer for everything already finished,
+   and a Dependency Map (check this before starting any tier — catches
+   cross-tier build-order conflicts before they cost a rebuild).
    **`NEXT_STEPS_ARCHIVE.md`** (repo root, split out 2026-08-28) holds the
    full forensic detail behind every finished item — NOT part of the
    required-reading list, read it only when a task specifically needs the
@@ -35,16 +47,21 @@ for you.
    weighted-average pattern) were promoted to memory
    (now folded into `project_supabase_operations.md`) before the split, so nothing
    load-bearing depends on opening the archive.
-2. **`services/watcher/CS2_ANALYTICS_STANDARDS.md`** — broader than its name
-   suggests: not just ~40 CS2 analytics metrics (ADR, KAST, Time to Damage,
-   reaction time, trade kills, clutches, cheat detection, predictive/trend
-   analysis, rank-bracket comparison, and more) researched against real
-   sources — Leetify, HLTV, FACEIT, academic papers, open-source libraries
-   — but also any other externally-researched, verified-against-a-real-
-   source finding that isn't a code change itself: third-party ToS/legal
-   checks (the Steam bot account, dependency licenses), and real data-source
-   integrations like the Steam Web API lifetime-stats research (confirmed
-   real fields, a real gotcha in `total_wins` vs `total_matches_won`).
+
+## TOPIC tier — read only when the session's task actually touches this area
+
+2. **`services/watcher/CS2_ANALYTICS_STANDARDS.md`** `[tags: cs2-stats, metrics, analytics, legal]`
+   — relevant when the task touches a CS2 stat definition, a new metric, or
+   a legal/ToS question about a data source. Broader than its name suggests:
+   not just ~40 CS2 analytics metrics (ADR, KAST, Time to Damage, reaction
+   time, trade kills, clutches, cheat detection, predictive/trend analysis,
+   rank-bracket comparison, and more) researched against real sources —
+   Leetify, HLTV, FACEIT, academic papers, open-source libraries — but also
+   any other externally-researched, verified-against-a-real-source finding
+   that isn't a code change itself: third-party ToS/legal checks (the Steam
+   bot account, dependency licenses), and real data-source integrations
+   like the Steam Web API lifetime-stats research (confirmed real fields, a
+   real gotcha in `total_wins` vs `total_matches_won`).
    **Caught directly, 2026-08-27:** a past session under-scoped this doc to
    "just metric definitions" and nearly left real research undocumented
    because of it — don't repeat that. Opens with a master index sorting
@@ -58,18 +75,25 @@ for you.
    `CS2_ANALYTICS_STANDARDS_ARCHIVE.md` (split 2026-08-28), which is NOT
    part of this required-reading list — same on-demand-only treatment as
    `NEXT_STEPS_ARCHIVE.md` above.
-3. **`services/watcher/DEMOPARSER2_FIELDS.md`** — the field/event reference
-   for `demoparser2`, the library RoundSync's data pipeline is built on,
-   plus specific researched findings (e.g. sub-tick input timing vs. the
-   64Hz world-simulation tick rate) that shouldn't need re-deriving.
-4. **`services/watcher/sync_pipeline.py`** — skim this after the three docs
-   above, since several fixes and findings reference specific line numbers
-   and function names in this file directly (e.g. the `dmg_health`-summing
-   sites at lines 281, 901, and 1288; the `parse_event()` wrapper added to
-   fix a silent-data-loss bug).
-5. **`IDEAS.md`** (repo root) — original feature/metric ideas not yet
-   scoped into `NEXT_STEPS.md`. Check before proposing a "new" idea that
-   might already be recorded here.
+3. **`services/watcher/DEMOPARSER2_FIELDS.md`** `[tags: demoparser2, watcher, sync-pipeline, data-extraction]`
+   — relevant when the task touches `sync_pipeline.py`, a new fact-table
+   extraction, or anything about what `demoparser2` can/can't provide. The
+   field/event reference for `demoparser2`, the library RoundSync's data
+   pipeline is built on, plus specific researched findings (e.g. sub-tick
+   input timing vs. the 64Hz world-simulation tick rate, the `fire_bullets`
+   angle-axis resolution) that shouldn't need re-deriving. Grew past both
+   the other docs' size without ever having its own drift tripwire — fixed
+   2026-08-30, `.claude/hooks/doc-size-tripwire.js` now watches it at 550
+   lines.
+4. **`services/watcher/sync_pipeline.py`** — skim this whenever the task
+   touches data extraction, since several fixes and findings reference
+   specific line numbers and function names in this file directly (e.g. the
+   `dmg_health`-summing sites at lines 281, 901, and 1288; the
+   `parse_event()` wrapper added to fix a silent-data-loss bug).
+5. **`IDEAS.md`** (repo root) `[tags: ideas, features, brainstorm]` —
+   relevant when proposing a new feature/metric idea, or evaluating one.
+   Original feature/metric ideas not yet scoped into `NEXT_STEPS.md`. Check
+   before proposing a "new" idea that might already be recorded here.
 
 ## A separate, self-contained side experiment exists — not required reading
 

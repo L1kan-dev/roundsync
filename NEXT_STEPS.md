@@ -15,23 +15,35 @@ A fuller visual writeup of the 2026-08-25 audit also exists as a "RoundSync
 Data Audit" Claude artifact, but that link lives outside this repo — this
 file (plus the archive) is the source of truth, not the artifact.
 
-## Recommended Priority Order
+## How this file is organized — three different things layered together
 
-The Tiers below are grouped by *category* (what kind of fix/feature), not by
-urgency — they got appended session-by-session as things were found, not
-reordered as the backlog grew. This section is the actual "what to work on
-next" guide.
+- **Tiers** (numbered sections further down, e.g. "Tier 2," "Tier 9") are
+  the original grouping, by *category* — what kind of fix/feature it is (a
+  rebuild, a net-new stat, a structural change). Created one at a time as
+  things got found in past sessions — the number is chronological, not a
+  priority ranking. Read a specific Tier's own section once you know which
+  one you're implementing, for its full detail.
+- **Bands** (the numbered list right below this) are a separate, later sort
+  over those SAME tiers, grouped by *urgency and readiness* instead —
+  Band 1 is "users are confused right now," Band 9 is "parked/blocked." A
+  single tier's items can be scattered across several different bands
+  depending on how ready each one actually is. **Read the Bands list to
+  answer "what should I work on next" — that's literally what it's for.**
+- **The Dependency Map** (right below the Bands) isn't a category or a
+  priority order at all — it's a lookup table for cross-tier collisions:
+  "if you're about to start X, check Y first, because X ships broken or
+  needs redoing otherwise."
 
 `IDEAS.md` is a separate, intentionally-overlapping list — some ideas below
 also appear there in their own words. That duplication is deliberate.
 
 ## Dependency Map — check this BEFORE starting any tier below
 
-The Bands above are grouped by category, not by build order — they don't by
-themselves say "doing A first changes how B has to be built." This table is
-the actual cross-tier lineage: before starting any tier, check here first
-(a few lines) rather than reading every other tier in full to notice a
-collision yourself.
+Bands sort by urgency, not build order — they don't by themselves say
+"doing A first changes how B has to be built." This table is the actual
+cross-tier lineage: before starting any tier, check here first (a few
+lines) rather than reading every other tier in full to notice a collision
+yourself.
 
 | If you're about to work on... | Check... | Because... |
 |---|---|---|
@@ -53,6 +65,8 @@ and the `LoggedInElsewhere`-reconnect hang fix are all done — see Tier 14
 below for the real root cause and fix (a missing `steamGuard` handler, not
 something needing a restart). Not yet pushed to production as of this note;
 verify `railway status` before assuming it's live.
+
+## Recommended Priority Order — the Bands, read this to pick what's next
 
 **Band 1 — Real users are confused right now. DONE, 2026-08-27.**
 All 4 came from actually using the live app — full detail in archive, Tier

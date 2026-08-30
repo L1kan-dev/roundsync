@@ -19,7 +19,7 @@ noted otherwise.
 
 ```bash
 cd frontend
-npx playwright install chromium
+npx playwright@1.62.1 install chromium
 ```
 
 ## Build + launch (from repo root, not frontend/)

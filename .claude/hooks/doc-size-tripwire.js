@@ -11,6 +11,13 @@ const path = require('path');
 const WATCHED = {
   'NEXT_STEPS.md': 650,
   'CS2_ANALYTICS_STANDARDS.md': 750,
+  // Added 2026-08-30 — this file was never watched despite growing past both
+  // of the above (three "CRAWL" narrative sections layered on top of the
+  // real field tables). A past session judged it pure reference and
+  // deliberately left it unsplit (see engineering_standards.md rule 9); this
+  // threshold exists so that judgment gets re-checked if it grows further,
+  // not to force a split now.
+  'DEMOPARSER2_FIELDS.md': 550,
 };
 
 let input = '';

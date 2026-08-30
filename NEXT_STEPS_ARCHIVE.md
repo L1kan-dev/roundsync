@@ -7,7 +7,7 @@ one-line pointer into this file for each item; this file is where the actual
 detail lives now, moved verbatim (2026-08-28), not summarized away.
 
 **Two reusable lessons that were buried in this detail got promoted out
-before this split happened** — see memory `project_supabase_security_patterns.md`
+before this split happened** — see memory `project_supabase_operations.md`
 (RLS-scoping rule, weighted-average rule). Everything else here is
 genuinely historical: the code is the current source of truth, not this
 file, per the project's own "never trust a doc's claim, verify against real
