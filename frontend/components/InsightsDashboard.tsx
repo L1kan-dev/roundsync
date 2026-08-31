@@ -4,12 +4,13 @@ import React, { useEffect, useState, CSSProperties } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
 import {
   Loader2, Coins, Flame, Ear, Users, MapPinned, Crosshair, MessageCircleQuestion,
-  CheckCircle2,
+  CheckCircle2, Info,
 } from 'lucide-react';
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { shadeHex, Bar3DShape, ctTAccent, hexToRgba, duelLerp } from '@/lib/duelColors';
 import { STAT_GLOSSARY } from '@/lib/statGlossary';
 import { statTier, adaptivePrompt } from '@/lib/promptTone';
+import { useHoverTooltip } from '@/lib/useHoverTooltip';
 
 // Every panel on this page picks up one flat "duel" color from which side of the page it
 // sits on (left = CT cyan, right = T amber, full-width = neutral grey) — and everything
@@ -132,17 +133,26 @@ function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color, onAsk }:
 // click target now, firing a prompt specific to that exact stat (not the card it lives
 // in) — e.g. "Time to damage (won)" asks a different question than "Engagements" right
 // next to it, even though both live inside the same Crosshair Placement card.
+// `title` used to be passed straight to the native `title=` attribute — the plain browser
+// tooltip NEXT_STEPS.md's tooltip-consistency pass flagged as inconsistent with the custom
+// styled one built for Home's Performance tile. Since StatTile is its own component (not a
+// raw element repeated inline), it can safely call the hook itself regardless of how many
+// StatTiles end up rendered — each JSX <StatTile> is its own component instance with its
+// own hook state, so this doesn't run into the "hook inside a loop" problem a shared parent
+// component would if it tried to call the hook once per array item.
 function StatTile({ label, value, color, onAsk, title }: { label: string; value: string; color: string; onAsk: () => void; title?: string }) {
+  const glossary = useHoverTooltip(title || '');
   return (
     <button
       type="button"
       onClick={onAsk}
-      title={title}
+      {...(title ? glossary.handlers : {})}
       className="chip3d border border-[var(--edge)] rounded-xl p-4 text-center cursor-pointer transition-transform hover:-translate-y-0.5"
       style={{ '--c': color } as CSSProperties}
     >
       <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">{label}</p>
       <p className="font-tel text-xl font-bold" style={{ color }}>{value}</p>
+      {title && glossary.tooltip}
     </button>
   );
 }
@@ -420,14 +430,24 @@ const SUB_TABS: { key: SubTab; label: string; icon: React.ElementType }[] = [
 // differing in icon/title/color/delay and (genuinely, not boilerplate) their own inner
 // content. The two full-width trend-chart cards are a different shape (no icon, spans
 // both columns) and aren't forced into this — only the true matches are.
-function InsightCard({ icon: Icon, title, color, delay, children }: {
-  icon: React.ElementType; title: string; color: string; delay?: string; children: React.ReactNode;
+// `info`, when passed, adds a hoverable Info icon next to the card title explaining what
+// the card as a whole measures — for cards whose content is a chart rather than individual
+// StatTiles, so there's nowhere else for a glossary explanation to attach.
+function InsightCard({ icon: Icon, title, color, delay, info, children }: {
+  icon: React.ElementType; title: string; color: string; delay?: string; info?: string; children: React.ReactNode;
 }) {
+  const infoTooltip = useHoverTooltip(info || '');
   return (
     <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': color, animationDelay: delay } as CSSProperties}>
       <div className="flex items-center gap-2 mb-4">
         <Icon className="w-4 h-4" style={{ color }} />
         <h3 className="font-display font-bold text-lg">{title}</h3>
+        {info && (
+          <>
+            <Info className="w-3 h-3 opacity-60 hover:opacity-100 cursor-help shrink-0 text-[var(--text-dim)]" {...infoTooltip.handlers} />
+            {infoTooltip.tooltip}
+          </>
+        )}
       </div>
       {children}
     </div>
@@ -461,6 +481,10 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [subTab, setSubTab] = useState<SubTab>('aim');
+
+  // Declared before the loading/error early returns below — hooks must run every render
+  // regardless of which branch a component ends up taking.
+  const reactionTrendTooltip = useHoverTooltip(STAT_GLOSSARY.reactedWithin3s);
 
   useEffect(() => {
     let cancelled = false;
@@ -557,24 +581,28 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     value={`${factSummary.duels.avg_angle_deviation_deg_when_won ?? '—'}°`}
                     color={SIDE_LEFT}
                     onAsk={() => onAskCoach(`My average crosshair deviation when I win a duel is ${factSummary.duels?.avg_angle_deviation_deg_when_won ?? '—'}°. What does that number say about my crosshair placement?`)}
+                    title={STAT_GLOSSARY.crosshairDeviation}
                   />
                   <StatTile
                     label="Avg. deviation (lost)"
                     value={`${factSummary.duels.avg_angle_deviation_deg_when_lost ?? '—'}°`}
                     color={SIDE_LEFT}
                     onAsk={() => onAskCoach(`Why is my crosshair deviation ${factSummary.duels?.avg_angle_deviation_deg_when_lost ?? '—'}° when I lose a duel — what am I doing differently than when I win?`)}
+                    title={STAT_GLOSSARY.crosshairDeviation}
                   />
                   <StatTile
                     label="Engagements"
                     value={`${factSummary.duels.engagements_tracked}`}
                     color={SIDE_LEFT}
                     onAsk={() => onAskCoach(`I've had ${factSummary.duels?.engagements_tracked} tracked duel engagements. Walk me through a few — what separated the wins from the losses?`)}
+                    title={STAT_GLOSSARY.engagementsTracked}
                   />
                   <StatTile
                     label="Time to damage (won)"
                     value={factSummary.duels.avg_time_to_damage_ms_when_won !== null ? `${factSummary.duels.avg_time_to_damage_ms_when_won}ms` : '—'}
                     color={SIDE_LEFT}
                     onAsk={() => onAskCoach(`It takes me ${factSummary.duels?.avg_time_to_damage_ms_when_won ?? '—'}ms to land damage after winning a duel. Is that fast or slow for my rank?`)}
+                    title={STAT_GLOSSARY.timeToDamageWon}
                   />
                 </div>
                 <p className="text-xs text-[var(--text-dim)]">Smaller deviation = your crosshair was already closer to the enemy the instant you fired.</p>
@@ -583,7 +611,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
             ) : <EmptyCard label="aim" />}
           </InsightCard>
 
-          <InsightCard icon={Ear} title="Reaction to Information" color={SIDE_RIGHT} delay="80ms">
+          <InsightCard icon={Ear} title="Reaction to Information" color={SIDE_RIGHT} delay="80ms" info={STAT_GLOSSARY.reactedWithin3s}>
             {factSummary.adaptation ? (
               <>
                 <ReactionByTriggerChart
@@ -607,18 +635,21 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   neutral: `My KAST is ${data.avgKastPct ?? '—'}%. What would push it toward being a genuinely reliable contributor?`,
                   strong: `My KAST is ${data.avgKastPct ?? '—'}% — already a reliable, floor-level number. What's the ceiling above this?`,
                 }))}
+                title={STAT_GLOSSARY.kast}
               />
               <StatTile
                 label="HS Accuracy"
                 value={data.avgHeadshotAccuracyPct !== null ? `${data.avgHeadshotAccuracyPct}%` : '—'}
                 color={SIDE_LEFT}
                 onAsk={() => onAskCoach(`Of all my shots that actually land, ${data.avgHeadshotAccuracyPct ?? '—'}% hit the head. What does that say about my crosshair placement?`)}
+                title={STAT_GLOSSARY.hsAccuracy}
               />
               <StatTile
                 label="Multi-Kills"
                 value={data.totalMultiKillRounds !== null ? `${data.totalMultiKillRounds}` : '—'}
                 color={SIDE_LEFT}
                 onAsk={() => onAskCoach(`I've had ${data.totalMultiKillRounds ?? '—'} multi-kill rounds (2K or more). What am I doing right in those rounds?`)}
+                title={STAT_GLOSSARY.multiKillRounds}
               />
             </div>
             <p className="text-xs text-[var(--text-dim)]">KAST: % of rounds with a Kill, Assist, Survival, or Trade — the floor-level "did I contribute something" stat.</p>
@@ -626,7 +657,11 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
           </InsightCard>
 
           <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 lg:col-span-2 card-in" style={{ '--c': SIDE_CENTER, animationDelay: '160ms' } as CSSProperties}>
-            <h3 className="font-display font-bold text-lg mb-4">Reaction Rate Over Time</h3>
+            <div className="flex items-center gap-1.5 mb-4">
+              <h3 className="font-display font-bold text-lg">Reaction Rate Over Time</h3>
+              <Info className="w-3 h-3 opacity-60 hover:opacity-100 cursor-help shrink-0 text-[var(--text-dim)]" {...reactionTrendTooltip.handlers} />
+              {reactionTrendTooltip.tooltip}
+            </div>
             <TrendChart
               data={data.trends.reaction}
               dataKey="reaction_pct"
@@ -663,6 +698,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     value={factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct !== null ? `${factSummary.positioning.of_deaths_teammate_was_in_trade_range_pct}%` : '—'}
                     color={SIDE_LEFT}
                     onAsk={() => onAskCoach(`${factSummary.positioning?.of_deaths_teammate_was_in_trade_range_pct ?? '—'}% of my deaths had a teammate in trade range. What actually determines whether those turn into a trade?`)}
+                    title={STAT_GLOSSARY.tradeableDeaths}
                   />
                 </div>
                 <AskCoachHint />
@@ -686,18 +722,21 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     value={`${factSummary.engage.chose_to_engage_pct}%`}
                     color={SIDE_RIGHT}
                     onAsk={() => onAskCoach(`I choose to engage when outnumbered ${factSummary.engage?.chose_to_engage_pct}% of the time. Is that too aggressive?`)}
+                    title={STAT_GLOSSARY.chooseToEngagePct}
                   />
                   <StatTile
                     label="Round win % (engaged)"
                     value={factSummary.engage.round_win_pct_when_engaged !== null ? `${factSummary.engage.round_win_pct_when_engaged}%` : '—'}
                     color={SIDE_RIGHT}
                     onAsk={() => onAskCoach(`When I engage while outnumbered, my round win rate is ${factSummary.engage?.round_win_pct_when_engaged ?? '—'}%. Is that worth the risk?`)}
+                    title={STAT_GLOSSARY.roundWinWhenEngaged}
                   />
                   <StatTile
                     label="Survived (disengaged)"
                     value={factSummary.engage.survived_pct_when_disengaged !== null ? `${factSummary.engage.survived_pct_when_disengaged}%` : '—'}
                     color={SIDE_RIGHT}
                     onAsk={() => onAskCoach(`When I disengage instead of fighting outnumbered, I survive ${factSummary.engage?.survived_pct_when_disengaged ?? '—'}% of the time. Should I be disengaging more often?`)}
+                    title={STAT_GLOSSARY.survivedDisengaged}
                   />
                 </div>
                 <AskCoachHint />
@@ -732,12 +771,14 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   value={`${factSummary.economy.rounds_tracked}`}
                   color={SIDE_LEFT}
                   onAsk={() => onAskCoach(`You've tracked ${factSummary.economy?.rounds_tracked} of my rounds' buy decisions. What patterns do you see in how I spend?`)}
+                  title={STAT_GLOSSARY.economyRoundsTracked}
                 />
                 <StatTile
                   label="Against team economy"
                   value={`${factSummary.economy.buy_decisions_against_team_economy_pct}%`}
                   color={SIDE_LEFT}
                   onAsk={() => onAskCoach(`I bought against my team's economy ${factSummary.economy?.buy_decisions_against_team_economy_pct}% of the time. What was the situation in those rounds?`)}
+                  title={STAT_GLOSSARY.againstTeamEconomy}
                 />
               </div>
             )}
@@ -761,12 +802,14 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                     value={`${factSummary.utility.flash_assist_count}`}
                     color={SIDE_RIGHT}
                     onAsk={() => onAskCoach(`I have ${factSummary.utility?.flash_assist_count} flash assists. How can I set up more of these?`)}
+                    title={STAT_GLOSSARY.flashAssists}
                   />
                   <StatTile
                     label="Avg. HE/molotov dmg"
                     value={factSummary.utility.avg_damage_per_he_or_molotov !== null ? `${factSummary.utility.avg_damage_per_he_or_molotov}` : '—'}
                     color={SIDE_RIGHT}
                     onAsk={() => onAskCoach(`My average HE/molotov damage is ${factSummary.utility?.avg_damage_per_he_or_molotov ?? '—'}. Am I throwing my grenades effectively?`)}
+                    title={STAT_GLOSSARY.heMolotovDmg}
                   />
                 </div>
                 <AskCoachHint />

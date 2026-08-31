@@ -70,19 +70,53 @@ other item below marked done-but-not-yet-pushed is now live; verify
 
 ## Recommended Priority Order — the Bands, read this to pick what's next
 
-**Band 0 — UI/UX stabilization pass. NEXT UP, decided 2026-08-31, not
-started.** Numbered 0 deliberately, out of the Bands' normal chronological
-sequence — user's explicit call 2026-08-31: consolidate every currently-known
-UI/UX issue into one dedicated pass (their words: "get it to a version 2.0 or
-3.0") before resuming any new-feature Tier below. Rationale, confirmed with
-the user: most of these are the same root cause repeated across several
-pages (missing glossary, inconsistent tooltip styling, tile sizing) — fixing
-the pattern once is cheaper than re-solving it page by page while also
-shipping new features on top. No version-number tag exists anywhere in this
-repo currently (no semver/git tags) — "2.0"/"3.0" is a milestone label for
-the user's own tracking, not something the codebase needs; a real git tag
-can be added when this ships if wanted. Full item list and detail: **Tier
-15** below.
+**Band 0 — UI/UX stabilization pass. IN PROGRESS, scope REVERTED back to
+narrow 2026-08-31.** The tooltip/glossary cluster (4 of Tier 15's items —
+tooltip styling consistency, Home's trend-chart glossary, Insights'
+reaction-rate-chart glossary, and full Insights tile glossary coverage) is
+done as of 2026-08-31; the rest of Tier 15's list is still open. Numbered 0
+deliberately, out of the
+Bands' normal chronological sequence. **Scope history, so this doesn't read
+as inconsistent later:** started 2026-08-31 as a narrow "UI/UX
+stabilization pass" (consolidate the known tooltip/tile/glossary bugs into
+one pass, user's words: "get it to a version 2.0 or 3.0"). Same day, widened
+to a full from-scratch visual redesign + logic audit after the user asked
+for "an entire website overhaul... visual = sensible = logic = fail or
+pass... completely change the frontend design to something better and more
+unique to RoundSync." **That wider attempt is now ABANDONED, same day,
+on the user's explicit instruction ("nvm lets stick to our original
+overhaul on the backlog. you are not very good at designing websites") —
+back to the narrow scope below, tracked but not being actively worked.**
+
+**What was actually tried, and why it failed, so a future session doesn't
+repeat the same approach:** four full redesign attempts, all rejected —
+(1) three parallel subagents each given only a text brief (hex color
+tokens + stat names, no real screenshots) produced generic, flat concepts
+that discarded the app's real existing distinctive assets (the CT/T
+operator-art background, the glossy 3D rank badge, real map thumbnails,
+the two-tone brain icon) — rejected as "a literal downgrade"; (2) a
+follow-up personal attempt read the real `globals.css`/`RankBadge.tsx`
+source directly and extended the app's actual existing visual system
+(exact colors, fonts, the real embossed-tile/duel-color CSS, the real
+badge SVG path data) instead of inventing a new one — still rejected as
+"objectively worse," with the user's own conclusion being that visual/
+graphic design generally isn't a strength here. **Standing lesson saved
+to memory** ([[feedback_visual_design_not_a_strength]]): don't initiate
+another from-scratch visual redesign attempt (self or subagent) for
+RoundSync's frontend without the user asking for it specifically again —
+default to small, targeted, code-level fixes instead (the narrow list
+below), not new creative visual exploration.
+
+The "visual = sensible = logic, pass/fail" audit IDEA itself is still
+sound and worth keeping for whenever this is revisited — check not just
+"does it look good" but "does what it visually communicates actually
+match what the underlying data/logic means" — but it depends on a visual
+redesign happening first, so it's parked with it, not being run standalone.
+
+Full item list and detail: **Tier 15** below (the narrow, original list —
+the AI Coach jargon/tone item stays on this list since that's a
+backend/prompt-copy fix, not a visual-design task, and wasn't part of
+what failed above).
 All 4 came from actually using the live app — full detail in archive, Tier
 10 section:
 - [x] Sync-progress counts not matching reality
@@ -662,22 +696,39 @@ Most findings from this audit are fixed — full detail in
       `gemini-3.7-flash` as of 2026-08-13). Upgrading is a cost/behavior
       tradeoff for the user to decide, not something to change unprompted.
 
-## Tier 15 — UI/UX stabilization pass (2026-08-31, user-reported, not yet started)
+## Tier 15 — UI/UX stabilization pass (2026-08-31, user-reported, in progress)
 
-Raw list from the user's own live use of the app, 2026-08-31 — not yet
-triaged into root causes or an implementation order. Pick this up as a whole
-Band (Band 0 above) rather than one item at a time, since several of these
-likely share one fix (see the grouping notes below each item).
+**Scope note:** this briefly expanded into a full site-wide visual redesign
+same-day, then was reverted back to this narrow list after 4 redesign
+attempts were rejected — see Band 0 above for the full history. Treat this
+as the real, current scope of this tier: small, targeted, code-level fixes,
+not a creative visual overhaul.
 
-- [ ] **Tooltip styling inconsistency.** Most tooltips render as the
-      browser's generic native tooltip (`title` attribute), not the custom
-      styled tooltip already built and used in a few places. Needs an
-      inventory of every tooltip in the app and a pass to standardize all of
-      them onto the existing custom component.
-- [ ] **Home page trend-analysis chart has no glossary.** The chart itself
-      renders but nothing explains what it's showing — same gap as several
-      Insights items below, likely the same missing pattern everywhere a
-      chart/tile was added after `frontend/lib/statGlossary.ts` was built.
+Pick this up as a whole Band (Band 0 above) rather than one item at a time,
+since several of these likely share one fix (see the grouping notes below
+each item).
+
+- [x] **Tooltip styling inconsistency — DONE, 2026-08-31.** The "custom
+      styled tooltip already built and used in a few places" was
+      `useHoverTooltip`, a cursor-following portal-mounted tooltip built
+      inline, once, just for Home's Performance tile (`matchPerformanceTooltip`
+      already proved the "one shared hook instance, `.handlers` spread
+      across a `.map()`" pattern for reusing it against dynamic lists).
+      Extracted to `frontend/lib/useHoverTooltip.tsx` so every page can share
+      it. Full inventory of every native `title=` glossary usage (not
+      action-label titles like "Close"/"Previous"/"Next", which correctly
+      stay native) converted: Home's KPI tiles, Matches-card grid, and
+      Recent Matches carousel (`app/page.tsx`); the match-detail page's
+      `StatTile` (`app/matches/[matchId]/page.tsx`); and Insights'
+      `StatTile` (`components/InsightsDashboard.tsx`) — the latter two now
+      call the hook internally per-component-instance rather than the
+      parent managing named instances, since each `<StatTile>` is its own
+      component call and can safely own its own hook state regardless of
+      how many render inside a `.map()`.
+- [x] **Home page trend-analysis chart has no glossary — DONE, 2026-08-31.**
+      All 4 Trends charts (K/D Ratio, ADR, Headshot %, Performance Index)
+      now show an Info icon next to their title, reusing the same shared
+      tooltip instances the KPI tiles above already use.
 - [ ] **Match Detail: rank badge number isn't centered** inside the badge
       asset (visual bug, not a data bug).
 - [ ] **Tiles don't apply their position-based color gradient consistently.**
@@ -699,13 +750,67 @@ likely share one fix (see the grouping notes below each item).
       match-detail route.
 - [ ] **Insights: dead empty space next to the Consistency/Impact tiles**,
       and inconsistent tile sizing across the page generally.
-- [ ] **Insights: "Reaction rate over time" chart has no glossary.**
+- [x] **Insights: "Reaction rate over time" chart has no glossary — DONE,
+      2026-08-31.** Info icon added next to the header, explaining what
+      "reacted within 3s" means (new `STAT_GLOSSARY.reactedWithin3s`).
 - [ ] **Insights: Economy and Utility section has no trending chart** (other
-      sections on the same page do).
-- [ ] **Insights: every tile is missing a glossary entry** — broadest item
-      on this list, likely the single biggest chunk of Band 0's work. Same
-      `frontend/lib/statGlossary.ts` pattern already used on Home/Matches/
-      match-detail should extend to cover every Insights tile.
+      sections on the same page do). Still open — a real new chart/feature,
+      not a glossary fix, so deliberately not bundled into the glossary pass
+      below.
+- [x] **Insights: every tile is missing a glossary entry — DONE, 2026-08-31.**
+      Extended `STAT_GLOSSARY` with 15 new entries (grounded in the real
+      backend definitions in `services/api/server.js`, not guessed —
+      e.g. `againstTeamEconomy` matches `summarizeEconomy()`'s actual
+      force-buy/full-buy-vs-team-eco rule, `flashAssists` cites the real
+      1.1s HLTV threshold already in `sync_pipeline.py`) and wired a `title`
+      into every previously-bare `StatTile` across all 4 Insights sub-tabs:
+      Crosshair Placement, Consistency & Impact, Isolated Pushes, Engage vs.
+      Save, Buy Decisions, Utility Effectiveness. Also added a new `info`
+      prop to the shared `InsightCard` shell (a hoverable Info icon next to
+      the card title) for the "Reaction to Information" card, whose content
+      is a chart rather than individual tiles. "Positioning Decisions Over
+      Time" deliberately left without a duplicate tooltip — it already has
+      its own caption text explaining "Good Push Rate" below the chart.
+- [ ] **AI Coach responses read like a raw-telemetry report, not a coach
+      talking to a player — user-reported 2026-08-31, explicitly wants it
+      folded into this same Band 0 pass, not fixed separately.** Root cause
+      confirmed in `services/api/server.js`'s `/api/coaching/ask` prompt
+      (around line 997): the current instruction is purely mechanical
+      field-name translation (append "°"/"ms"/"%" to a raw key, never repeat
+      the snake_case name) — it never asks the model to actually interpret
+      what a number means or to speak in a natural, player-to-player voice.
+      Three concrete failures found from a real transcript the user shared:
+      1. **"0-second time-to-damage" reads as physically impossible.**
+         Traced to `sync_pipeline.py:1021`:
+         `time_to_damage_seconds = round((hit_tick - opening_tick) / 64, 2)`
+         — a hit registering on the same tick as the opening shot rounds to
+         `0.00`. The underlying value is real (sub-~15.6ms, one tick), but
+         nothing tells the model to phrase a near-zero value as "landed
+         almost the instant you fired" instead of the literal rounded
+         number. Not a data bug — a missing humanization rule.
+      2. **Raw distances never get converted to meters before reaching the
+         model.** `nearest_teammate_distance_units`/`nearest_enemy_distance_units`
+         (`fact_positioning_risk`) are CS2 engine units. The real conversion
+         constant already exists (`CS2_UNITS_PER_METER = 52.49`,
+         `sync_pipeline.py:761`) but `server.js` never applies it before
+         building the JSON blob sent to Gemini — so the model either repeats
+         "925 units" verbatim (meaningless to a player) or does the
+         meter-conversion arithmetic itself inside the response, which is
+         unreliable to trust an LLM with.
+      3. **No natural-voice instruction at all.** The prompt only asks for
+         "sharp, data-driven, actionable feedback" — nothing tells it to
+         talk like a teammate reviewing the game together rather than
+         producing a clinical report (real transcript had section headers
+         like "The Telemetry Diagnostics" and "The Tactical Reality").
+      **Recommended direction, not yet built:** do the humanization as real
+      math in `server.js` before the prompt is built (meters conversion,
+      a `time_to_damage_ms` bucket that phrases sub-tick hits in words
+      rather than a raw "0"), not left to the LLM to compute — then rewrite
+      the prompt's interpretation/tone rules on top of correct pre-converted
+      numbers, same "do the arithmetic in code, let the model only narrate"
+      principle the rest of this codebase already follows for stats. Should
+      be scoped and built as part of this same Band 0 pass per the user's
+      explicit instruction, not as a standalone quick patch.
 
 ## Already confirmed correct, no action needed
 

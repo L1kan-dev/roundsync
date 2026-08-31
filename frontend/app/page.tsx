@@ -18,6 +18,7 @@ import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { type Match, performanceIndex, formatMatchDate } from '@/lib/matchStats';
 import { STAT_GLOSSARY } from '@/lib/statGlossary';
 import { statTier, adaptivePrompt } from '@/lib/promptTone';
+import { useHoverTooltip } from '@/lib/useHoverTooltip';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -372,49 +373,6 @@ function TopicWheel({ segments, onPick }: { segments: { id: string; label: strin
 // tooltip (unstyled, positioned wherever the OS wants, easily clipped) — fades in over
 // ~1s on hover and fades back out over ~1s after the cursor leaves, staying mounted
 // through the fade-out instead of vanishing instantly so the transition actually plays.
-function useHoverTooltip(text: string) {
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const [mounted, setMounted] = useState(false);
-  const [shown, setShown] = useState(false);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const onMouseEnter = (e: React.MouseEvent) => {
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    setPos({ x: e.clientX, y: e.clientY });
-    setMounted(true);
-    requestAnimationFrame(() => setShown(true));
-  };
-  const onMouseMove = (e: React.MouseEvent) => setPos({ x: e.clientX, y: e.clientY });
-  const onMouseLeave = () => {
-    setShown(false);
-    hideTimer.current = setTimeout(() => setMounted(false), 1000);
-  };
-
-  useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
-
-  const tooltip = mounted ? createPortal(
-    <div
-      className="fixed z-50 pointer-events-none px-3.5 py-2.5 rounded-xl text-xs leading-snug font-medium text-[var(--text)] transition-opacity"
-      style={{
-        left: Math.min(pos.x + 18, (typeof window !== 'undefined' ? window.innerWidth : 1920) - 280),
-        top: pos.y + 18,
-        maxWidth: 260,
-        background: 'rgba(12,16,21,0.95)',
-        backdropFilter: 'blur(6px)',
-        border: '1px solid var(--edge-bright)',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-        opacity: shown ? 1 : 0,
-        transitionDuration: '1000ms',
-      }}
-    >
-      {text}
-    </div>,
-    document.body
-  ) : null;
-
-  return { handlers: { onMouseEnter, onMouseMove, onMouseLeave }, tooltip };
-}
-
 // The one-time setup form (Home) and the Settings "Update Codes" form were copy-pasted
 // verbatim except for the submit button's width/label — shared here instead.
 function OnboardingForm({
@@ -513,6 +471,16 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
     if (page >= totalPages) setPage(0);
   }, [totalPages, page]);
 
+  // One shared tooltip instance per stat (not per-card) — every card's K/D chip explains the
+  // same thing regardless of which match it belongs to, so a single instance whose `handlers`
+  // gets spread onto every card in the map below is enough; mounting a separate hook per card
+  // would multiply portals for no reason. Standardizes this card grid off the browser's plain
+  // native `title=` tooltip, same as the rest of the app (NEXT_STEPS.md Band 0 / Tier 15).
+  const kdTooltip = useHoverTooltip(STAT_GLOSSARY.kd);
+  const adrTooltip = useHoverTooltip(STAT_GLOSSARY.adr);
+  const hsTooltip = useHoverTooltip(STAT_GLOSSARY.hsPct);
+  const perfTooltip = useHoverTooltip(STAT_GLOSSARY.performanceIndex);
+
   return (
     <div
       ref={outerRef}
@@ -520,6 +488,10 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
     >
+      {kdTooltip.tooltip}
+      {adrTooltip.tooltip}
+      {hsTooltip.tooltip}
+      {perfTooltip.tooltip}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
           <h2 className="font-display text-lg font-bold">Recent Matches</h2>
@@ -622,7 +594,7 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
                   <p className="text-[8px] text-[var(--text-dim)] mt-1 truncate">{formatMatchDate(t)}</p>
                 </div>
                 <div className="grid grid-cols-4 gap-x-1 gap-y-1 text-center mt-0.5">
-                  <div title={STAT_GLOSSARY.kd}>
+                  <div {...kdTooltip.handlers}>
                     <p className="font-tel text-xs font-extrabold leading-none" style={{ color: accent }}>{t.kd_ratio}</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">K/D</p>
                   </div>
@@ -638,15 +610,15 @@ function RecentMatchesCarousel({ matches, recentWins, recentLosses, onAskMatch }
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.assists ?? '—'}</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Assists</p>
                   </div>
-                  <div title={STAT_GLOSSARY.adr}>
+                  <div {...adrTooltip.handlers}>
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.adr}</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">ADR</p>
                   </div>
-                  <div title={STAT_GLOSSARY.hsPct}>
+                  <div {...hsTooltip.handlers}>
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--text)]">{t.headshot_pct}%</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">HS</p>
                   </div>
-                  <div className="col-span-2" title={STAT_GLOSSARY.performanceIndex}>
+                  <div className="col-span-2" {...perfTooltip.handlers}>
                     <p className="font-tel text-xs font-extrabold leading-none text-[var(--amber)]">{performanceIndex(t)}/100</p>
                     <p className="text-[7px] uppercase tracking-wide text-[var(--text-dim)] mt-1">Performance</p>
                   </div>
@@ -795,6 +767,21 @@ export default function Home() {
   const matchPerformanceTooltip = useHoverTooltip(
     `${STAT_GLOSSARY.performanceIndex}, for this match.`
   );
+
+  // One shared instance per stat, reused (via `.handlers`) everywhere that same stat's KPI
+  // tile appears on this page — the top summary row AND the Match History card grid both
+  // show K/D/ADR/HS%, so they share these three instead of mounting duplicate portals.
+  // Standardizes every remaining native `title=` glossary tooltip on Home onto the same
+  // custom styled tooltip the rest of the app now uses (NEXT_STEPS.md Band 0 / Tier 15).
+  const kdTooltip = useHoverTooltip(STAT_GLOSSARY.kd);
+  const adrTooltip = useHoverTooltip(STAT_GLOSSARY.adr);
+  const hsTooltip = useHoverTooltip(STAT_GLOSSARY.hsPct);
+  const entrySuccessTooltip = useHoverTooltip(STAT_GLOSSARY.entrySuccessPct);
+  const utilityDmgTooltip = useHoverTooltip(STAT_GLOSSARY.utilityDmgPerRound);
+  const clutchesWonTooltip = useHoverTooltip(STAT_GLOSSARY.clutchesWon);
+  const tradeKillTooltip = useHoverTooltip(STAT_GLOSSARY.tradeKillPct);
+  const kastTooltip = useHoverTooltip(STAT_GLOSSARY.kast);
+  const hsAccuracyTooltip = useHoverTooltip(STAT_GLOSSARY.hsAccuracy);
 
   const fetchProfile = useCallback(async (token: string) => {
     try {
@@ -1329,6 +1316,18 @@ export default function Home() {
   // ---------- LOGGED-IN APP SHELL ----------
   return (
     <div className="min-h-screen text-[var(--text)]">
+      {/* Rendered once here, not per-tab — these are portal-mounted regardless of which tab
+          is showing, and each is shared by every tile across the page that explains this
+          same stat (see where each `.handlers` is spread below). */}
+      {kdTooltip.tooltip}
+      {adrTooltip.tooltip}
+      {hsTooltip.tooltip}
+      {entrySuccessTooltip.tooltip}
+      {utilityDmgTooltip.tooltip}
+      {clutchesWonTooltip.tooltip}
+      {tradeKillTooltip.tooltip}
+      {kastTooltip.tooltip}
+      {hsAccuracyTooltip.tooltip}
       {toast && (
         <Toast
           message={toast.message}
@@ -1444,7 +1443,7 @@ export default function Home() {
                   }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
-                  title={STAT_GLOSSARY.kd}
+                  {...kdTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Target className="w-4 h-4 text-[var(--cyan)]" />
@@ -1461,7 +1460,7 @@ export default function Home() {
                   }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
-                  title={STAT_GLOSSARY.adr}
+                  {...adrTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Zap className="w-4 h-4 text-[var(--amber)]" />
@@ -1478,7 +1477,7 @@ export default function Home() {
                   }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-5 text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
-                  title={STAT_GLOSSARY.hsPct}
+                  {...hsTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Crosshair className="w-4 h-4 text-[var(--cyan)]" />
@@ -1499,7 +1498,7 @@ export default function Home() {
                   }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(0, 4) } as CSSProperties}
-                  title={STAT_GLOSSARY.entrySuccessPct}
+                  {...entrySuccessTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <LogIn className="w-3.5 h-3.5 text-[var(--cyan)]" />
@@ -1516,7 +1515,7 @@ export default function Home() {
                   }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 4) } as CSSProperties}
-                  title={STAT_GLOSSARY.utilityDmgPerRound}
+                  {...utilityDmgTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Flame className="w-3.5 h-3.5 text-[var(--amber)]" />
@@ -1529,7 +1528,7 @@ export default function Home() {
                   onClick={() => promptCoach("Walk me through my clutch rounds — what's actually happening when I'm the last one alive?")}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(2, 4) } as CSSProperties}
-                  title={STAT_GLOSSARY.clutchesWon}
+                  {...clutchesWonTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Users className="w-3.5 h-3.5 text-[var(--cyan)]" />
@@ -1542,7 +1541,7 @@ export default function Home() {
                   onClick={() => promptCoach("Which of my deaths had a teammate nearby who could have traded but didn't — and separately, am I capitalizing when a teammate's death leaves an enemy exposed to me?")}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(3, 4) } as CSSProperties}
-                  title={STAT_GLOSSARY.tradeKillPct}
+                  {...tradeKillTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Repeat className="w-3.5 h-3.5 text-[var(--amber)]" />
@@ -1563,7 +1562,7 @@ export default function Home() {
                   }))}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(0, 3) } as CSSProperties}
-                  title={STAT_GLOSSARY.kast}
+                  {...kastTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--cyan)]" />
@@ -1576,7 +1575,7 @@ export default function Home() {
                   onClick={() => promptCoach('Of all my shots that actually land, what fraction are hitting the head versus body — and what does that say about my crosshair placement?')}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(1, 3) } as CSSProperties}
-                  title={STAT_GLOSSARY.hsAccuracy}
+                  {...hsAccuracyTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Target className="w-3.5 h-3.5 text-[var(--amber)]" />
@@ -1720,12 +1719,17 @@ export default function Home() {
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {/* Each chart's own glossary tooltip — none of these 4 trend charts had
+                          one at all until now (NEXT_STEPS.md Band 0 / Tier 15's "Home page
+                          trend-analysis chart has no glossary" item). Reuses the same shared
+                          per-stat tooltip instances the KPI tiles above already use, rather
+                          than mounting duplicate ones. */}
                       {([
-                        { key: 'kd' as const, title: 'K/D Ratio', type: 'line' as const, decimals: 2, metricLabel: 'K/D ratio', unit: '' },
-                        { key: 'adr' as const, title: 'Average Damage per Round', type: 'bar' as const, decimals: 0, metricLabel: 'ADR', unit: '' },
-                        { key: 'hs' as const, title: 'Headshot %', type: 'line' as const, decimals: 0, metricLabel: 'headshot percentage', unit: '%' },
-                        { key: 'perf' as const, title: 'Performance Index', type: 'bar' as const, decimals: 0, metricLabel: 'performance index', unit: '/100' },
-                      ]).map(({ key, title, type, decimals, metricLabel, unit }, chartIndex) => {
+                        { key: 'kd' as const, title: 'K/D Ratio', type: 'line' as const, decimals: 2, metricLabel: 'K/D ratio', unit: '', glossary: kdTooltip },
+                        { key: 'adr' as const, title: 'Average Damage per Round', type: 'bar' as const, decimals: 0, metricLabel: 'ADR', unit: '', glossary: adrTooltip },
+                        { key: 'hs' as const, title: 'Headshot %', type: 'line' as const, decimals: 0, metricLabel: 'headshot percentage', unit: '%', glossary: hsTooltip },
+                        { key: 'perf' as const, title: 'Performance Index', type: 'bar' as const, decimals: 0, metricLabel: 'performance index', unit: '/100', glossary: performanceTooltip },
+                      ]).map(({ key, title, type, decimals, metricLabel, unit, glossary }, chartIndex) => {
                         const recent = chartData.slice(-5);
                         const prior = chartData.slice(-10, -5);
                         const avg = (arr: typeof chartData) => arr.reduce((s, d) => s + (Number(d[key]) || 0), 0) / arr.length;
@@ -1747,7 +1751,10 @@ export default function Home() {
                         return (
                           <div key={key} className="hud-corners bg-[var(--panel)] tile3d p-4.5 rounded-2xl border border-[var(--edge)] flex flex-col" style={{ height: 236 }}>
                             <div className="flex items-center justify-between shrink-0 mb-2">
-                              <h3 className="font-display font-bold text-sm">{title}</h3>
+                              <span className="flex items-center gap-1.5">
+                                <h3 className="font-display font-bold text-sm">{title}</h3>
+                                <Info className="w-3 h-3 opacity-60 hover:opacity-100 cursor-help shrink-0 text-[var(--text-dim)]" {...glossary.handlers} />
+                              </span>
                               {chartData.length >= 6 && (isUp || isDown) && (
                                 <span className={`text-xs font-tel font-semibold flex items-center gap-1 ${isUp ? 'text-[var(--cyan)]' : 'text-[var(--danger)]'}`}>
                                   {recentAvg.toFixed(decimals)} {isUp ? '▲' : '▼'} {Math.abs(delta).toFixed(decimals)}
@@ -1939,7 +1946,7 @@ export default function Home() {
 
                     <div className="chip3d p-4.5" style={{ borderTop: `2px solid ${accent}`, '--c': accent } as CSSProperties}>
                       <div className="grid grid-cols-3 gap-2 text-center mb-3.5">
-                        <div title={STAT_GLOSSARY.kd}>
+                        <div {...kdTooltip.handlers}>
                           <p className="font-tel font-bold text-lg" style={{ color: accent }}>{t.kd_ratio}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">K/D</p>
                         </div>
@@ -1955,11 +1962,11 @@ export default function Home() {
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.assists ?? '—'}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">Assists</p>
                         </div>
-                        <div title={STAT_GLOSSARY.adr}>
+                        <div {...adrTooltip.handlers}>
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.adr}</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">ADR</p>
                         </div>
-                        <div title={STAT_GLOSSARY.hsPct}>
+                        <div {...hsTooltip.handlers}>
                           <p className="font-tel font-bold text-lg text-[var(--text)]">{t.headshot_pct}%</p>
                           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide">HS</p>
                         </div>

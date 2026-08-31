@@ -9,6 +9,7 @@ import { rankBand } from '@/lib/rank';
 import { formatMapName, mapScreenshotUrl } from '@/lib/mapDisplay';
 import { type Telemetry, performanceIndex, formatMatchDate } from '@/lib/matchStats';
 import { STAT_GLOSSARY } from '@/lib/statGlossary';
+import { useHoverTooltip } from '@/lib/useHoverTooltip';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -54,11 +55,16 @@ interface RoundGroup {
 // kill_distance_buckets have been stored on every match since 2026-08-30 (NEXT_STEPS.md
 // Tier 5) but had no UI anywhere until this page — the actual gap the drill-down page was
 // meant to close, found during the metrics-placement review.
+// Was a native `title=` popup — swapped for the app's one custom styled tooltip so this
+// page matches Home/Matches/Insights instead of being the odd one out (NEXT_STEPS.md
+// Band 0 / Tier 15's tooltip-consistency item).
 function StatTile({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {
+  const glossary = useHoverTooltip(title || '');
   return (
-    <div className="bg-[var(--panel)] border border-[var(--edge)] rounded-xl p-3.5 text-center" title={title}>
+    <div className="bg-[var(--panel)] border border-[var(--edge)] rounded-xl p-3.5 text-center" {...(title ? glossary.handlers : {})}>
       <p className="font-tel text-xl font-bold text-[var(--text)]">{value}</p>
       <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mt-1">{label}</p>
+      {title && glossary.tooltip}
     </div>
   );
 }
