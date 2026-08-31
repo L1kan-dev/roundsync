@@ -13,9 +13,21 @@ and not an assumption about what they probably say.
 Caught directly: `CS2_ANALYTICS_STANDARDS.md` and `DEMOPARSER2_FIELDS.md`
 were being force-read every session regardless of whether the task touched
 CS2 stats or demo parsing at all, the same unconditional-over-reading
-problem already fixed for the memory folder. `.claude/hooks/session-start-required-reading.js`
-now enforces this split mechanically — this doc's job is to explain the
-*content* of each file, the hook's job is deciding what gets read when.
+problem already fixed for the memory folder. This split is now enforced
+mechanically by a hook — this doc's job is to explain the *content* of each
+file, the hook's job is deciding what gets read when.
+
+**Globalized 2026-08-31** — the hook that enforces this
+(`session-start-required-reading.js`) used to live in this repo's own
+`.claude/hooks/`, hardcoded to RoundSync's file names. It now lives at
+`~/.claude/hooks/session-start-required-reading.js`, registered as a GLOBAL
+SessionStart hook (`~/.claude/settings.json`) that runs for every Claude Code
+project on this machine, not just this one — it detects which project it's
+running in from its own hook input and reads that project's own memory
+folder plus doc manifest. RoundSync's Always/Topic doc list (below) now lives
+in `.claude/required-reading.json` at this repo's root instead of being
+hardcoded in the hook script — edit that file, not a script, to retier a
+RoundSync doc.
 
 ## What's already automatic — you don't need this file for this part
 
@@ -24,6 +36,14 @@ user's Claude settings, not in RoundSync's file tree) auto-loads a one-line
 index (`MEMORY.md`) into every new session without being asked — you'll see
 it as a system reminder at the start of the conversation. That mechanism is
 already automatic and this file can't change it either way.
+
+Separately, `~/.claude/CLAUDE.md` (global, not RoundSync-specific) auto-loads
+the user's profile, communication preferences, general engineering rigor
+standards, and the 6-lens code-change framework — every session, in every
+project on this machine, not just RoundSync. RoundSync's own memory folder no
+longer duplicates any of that; its `engineering_standards.md` and
+`code_change_standards.md` now hold only RoundSync-specific instantiations
+and incident history. See that global file directly for the actual rules.
 
 **What this file is actually for**: `MEMORY.md`'s entries are one-liners —
 enough to know a topic was researched, not enough to actually answer a

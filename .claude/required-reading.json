@@ -1,0 +1,19 @@
+{
+  "_comment": "Per-project doc-tiering manifest, read by the GLOBAL SessionStart hook (~/.claude/hooks/session-start-required-reading.js). Migrated 2026-08-31 from that hook's old RoundSync-only, hardcoded PROJECT_DOCS_ALWAYS/PROJECT_DOCS_TOPIC constants when the hook was generalized to run for every project on this machine. Edit this file (not the hook script) to change which of RoundSync's own docs are Always- vs Topic-tier.",
+  "always": ["AI_CONTEXT.md", "NEXT_STEPS.md"],
+  "topic": {
+    "IDEAS.md": {
+      "tags": ["ideas", "features", "brainstorm"],
+      "description": "Original feature/metric ideas not yet scoped into NEXT_STEPS.md — check before proposing a 'new' idea that might already be recorded."
+    },
+    "services/watcher/CS2_ANALYTICS_STANDARDS.md": {
+      "tags": ["cs2-stats", "metrics", "analytics", "legal"],
+      "description": "~40 CS2 analytics metrics researched against real sources (Leetify/HLTV/FACEIT), what's legal to build, what's off-limits."
+    },
+    "services/watcher/DEMOPARSER2_FIELDS.md": {
+      "tags": ["demoparser2", "watcher", "sync-pipeline", "data-extraction"],
+      "description": "Field/event reference for demoparser2, the library sync_pipeline.py is built on, plus researched engine-behavior findings."
+    }
+  },
+  "ignoreFiles": [".gitignore", ".claudeignore"]
+}

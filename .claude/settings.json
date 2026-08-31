@@ -8,7 +8,12 @@
     }
   },
   "enabledPlugins": {
-    "claude-code-setup@claude-plugins-official": true
+    "claude-code-setup@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "hookify@claude-plugins-official": true,
+    "receipts@claude-plugins-official": true
   },
   "hooks": {
     "PostToolUse": [
@@ -19,17 +24,6 @@
             "type": "command",
             "command": "node .claude/hooks/doc-size-tripwire.js",
             "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .claude/hooks/session-start-required-reading.js",
-            "timeout": 30
           }
         ]
       }
