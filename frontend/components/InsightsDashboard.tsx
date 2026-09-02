@@ -299,20 +299,28 @@ function ReactionByTriggerChart({ adaptation, color, onAsk }: { adaptation: Reco
 // These two trend charts always live in a full-width, both-columns panel, so — like the
 // Home dashboard's own trend charts — they sweep the full CT cyan → grey → T amber range
 // across their own width rather than sitting at one flat "side" color.
-function TrendChart({ data, dataKey, label, onAsk }: { data: TrendPoint[]; dataKey: 'reaction_pct' | 'good_decision_pct' | 'against_team_economy_pct' | 'team_flash_pct'; label: string; onAsk: (point: TrendPoint) => void }) {
+// `col`, when the chart sits in a genuine 2-up side-by-side pair (only Buy Decisions /
+// Utility Effectiveness do — Reaction Rate and Positioning Decisions are each full-width
+// on their own), scopes the gradient to that half of the "duel" range, exactly like the
+// Home dashboard's own trend charts already do (col 0 = cyan->grey only, col 1 = grey->amber
+// only) — so the two charts blend into one shared grey center instead of each independently
+// running the full cyan-grey-amber sweep and clashing at the page's midline. Missing before
+// 2026-09-02 (live-testing feedback: told to match Home's own concept, not reinvent one).
+function TrendChart({ data, dataKey, label, onAsk, col }: { data: TrendPoint[]; dataKey: 'reaction_pct' | 'good_decision_pct' | 'against_team_economy_pct' | 'team_flash_pct'; label: string; onAsk: (point: TrendPoint) => void; col?: 0 | 1 }) {
   if (data.length < 2) return <EmptyCard label="trend" />;
+  const colorAt = (t: number) => duelLerp(col === undefined ? t : col === 0 ? t * 0.5 : 0.5 + t * 0.5);
   return (
     <div className="h-48">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
           <defs>
             <linearGradient id={`trend-line-${dataKey}`} x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor={duelLerp(0)} />
-              <stop offset="50%" stopColor={duelLerp(0.5)} />
-              <stop offset="100%" stopColor={duelLerp(1)} />
+              <stop offset="0%" stopColor={colorAt(0)} />
+              <stop offset="50%" stopColor={colorAt(0.5)} />
+              <stop offset="100%" stopColor={colorAt(1)} />
             </linearGradient>
             <filter id={`trend-glow-${dataKey}`} x="-30%" y="-60%" width="160%" height="220%">
-              <feDropShadow dx="0" dy="2.5" stdDeviation="2.2" floodColor={duelLerp(0.5)} floodOpacity="0.4" />
+              <feDropShadow dx="0" dy="2.5" stdDeviation="2.2" floodColor={colorAt(0.5)} floodOpacity="0.4" />
             </filter>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#1c242e" />
@@ -336,7 +344,7 @@ function TrendChart({ data, dataKey, label, onAsk }: { data: TrendPoint[]; dataK
             strokeWidth={3.5}
             style={{ filter: `url(#trend-glow-${dataKey})` }}
             dot={(dotProps: any) => {
-              const c = duelLerp(data.length > 1 ? dotProps.index / (data.length - 1) : 0.5);
+              const c = colorAt(data.length > 1 ? dotProps.index / (data.length - 1) : 0.5);
               return (
                 <circle
                   key={dotProps.index}
@@ -896,6 +904,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
               dataKey="against_team_economy_pct"
               label="Against team economy"
               onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, ${point.against_team_economy_pct}% of my buys were against my team's economy. What was going on that match?`)}
+              col={0}
             />
           </div>
 
@@ -906,6 +915,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
               dataKey="team_flash_pct"
               label="Team-flashes"
               onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, ${point.team_flash_pct}% of my flashbangs were team-flashes. What happened with my flashes that match?`)}
+              col={1}
             />
           </div>
         </div>

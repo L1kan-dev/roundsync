@@ -48,4 +48,7 @@ export const STAT_GLOSSARY = {
   aimPlacement: "Based on your average crosshair angle off-target the instant you engaged — smaller deviation means a higher score",
   engageIQ: 'Blend of your round-win rate when you chose to fight while outnumbered and your survival rate when you chose to back off instead',
   isolatedSurvivedSplit: 'Of your isolated pushes (committed to a fight with no teammate nearby), what % you survived vs. died',
+  killDistanceClose: 'Kills at 30m or closer — RoundSync\'s own range buckets, no industry-standard boundaries exist for this',
+  killDistanceMedium: 'Kills between 30m and 50m — where rifles still retain near-max damage before falloff',
+  killDistanceLong: 'Kills past 50m — where CS2\'s damage falloff becomes clearly noticeable',
 } as const;

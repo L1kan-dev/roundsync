@@ -985,6 +985,53 @@ before acting, per standing rule — two turned out not to be bugs:
   section — "hard to read/understand," not yet actionable without concrete detail on what
   specifically reads poorly.
 
+**Second round of live-testing feedback (against real re-synced production data), 2026-09-02:**
+
+- [x] **Real data bug: Kills by Distance was 100% "close" on every single match — FIXED.**
+      Confirmed impossible by the user, verified against real re-synced data. Root cause:
+      `sync_pipeline.py`'s distance calc manually reconstructed attacker/victim position from
+      an X/Y tick snapshot at the kill tick — the same fragile snapshot-timing pattern
+      already broken once before (the `player_inair` NaN bug). `player_death` already carries
+      a real `distance` column (confirmed in `DEMOPARSER2_FIELDS.md`'s bulk field sweep) that
+      was simply never used. Swapped to reading `kill["distance"]` directly — also removes a
+      whole extra `parser.parse_ticks()` call per match, a real cost win alongside the fix.
+- [x] **Match Detail: nothing below the Overview tiles was clickable-to-Coach, and several
+      sections had no tooltip — FIXED.** This page never adopted the "click a tile to ask
+      the coach" convention every other page uses. Built a cross-route hand-off (`askCoach()`
+      pushes `/?tab=coach&q=...`, Home's `page.tsx` reads the `q` param once on mount and
+      fills the chat input) since match-detail is a separate route from Home's local
+      `promptCoach()` state. Every Overview tile, Multi-Kill Rounds tile, Wins/Losses card,
+      Kills-by-Distance tile (now also with a real tooltip — 3 new `STAT_GLOSSARY` entries),
+      Weapon Breakdown row, and Round-by-Round card is now a real clickable button.
+- [x] **Full Scoreboard: side-by-side CT/T columns replaced with a single stacked list —
+      FIXED.** User's reasoning: sides swap at halftime, so labeling a whole-match table
+      "Counter-Terrorists"/"Terrorists" misrepresents any player who spent half the match on
+      the other side. Still visually groups the two rosters (a divider, each keeping its own
+      accent color) without naming which side is which.
+- [x] **Insights' 2 trend charts (Buy Decisions / Utility Effectiveness) didn't blend into
+      each other like Home's own paired trend charts do — FIXED.** User pointed at Home's
+      existing implementation directly rather than have the gradient re-debugged from
+      scratch. Real difference found: Home's trend charts scope their gradient to whichever
+      half of a 2-up grid they sit in (left chart sweeps cyan->grey only, right chart sweeps
+      grey->amber only, so the pair blends at the shared center) — Insights' `TrendChart`
+      never did that, always running the full cyan-grey-amber sweep independently per chart.
+      New `col` prop on `TrendChart`, applied only to the 2 charts that are actually paired
+      side-by-side (Reaction Rate / Positioning Decisions stay full-range — they're each
+      full-width on their own row, not paired).
+      **Investigated and NOT a bug, confirmed by direct measurement**: the claim that the
+      gradient's color-vs-position mapping itself was wrong. Rendered the exact component
+      in a controlled test, measured the real SVG path bounding box and gradient stops, and
+      screenshotted it — color genuinely tracks each point's real chronological position
+      (cyan at the first point, grey at the middle, amber at the last), not a "center of the
+      tile" artifact. Left as-is; only the column-scoping (above) was real.
+- **Flagged, needs a placement decision, not yet built**: Lifetime Stats currently only
+  renders as a "while you wait" placeholder when a user has ZERO synced matches
+  (`app/page.tsx`, `parsedMatches.length === 0 && lifetimeStats?.available`) — for any user
+  with even one match synced (i.e. almost everyone), it's completely invisible with no
+  other place in the app to see it. Real UX gap, confirmed in code, not yet fixed — needs a
+  decision on where it should permanently live (profile dropdown? a dedicated tab? a
+  collapsed section on Home regardless of match count?) before building.
+
 **Two real, unrelated production bugs found while the bulk resync above was running (user
 noticed one match stuck at "1793s elapsed"), both fixed live, 2026-09-02:**
 - [x] **`prune_old_matches()` (`watcher.py`) could never delete a match with any `fact_*`

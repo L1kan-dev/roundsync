@@ -65,20 +65,31 @@ interface RoundGroup {
 // noticeably flatter than the rest of the app right next to them (NEXT_STEPS.md Band 0 /
 // Tier 15's tile-gradient-consistency + round-by-round-3D items — same root cause, this
 // page never adopted the convention the rest of the app already settled on).
-function StatTile({ label, value, title, color }: { label: string; value: React.ReactNode; title?: string; color: string }) {
+// `onAsk`, when passed, turns the tile into a real click target (matching Home/Insights'
+// "click a tile to ask the coach about it" convention) instead of an inert display box —
+// this whole page had none of that before (2026-09-02 live-testing feedback: "everything
+// below the scoreboard is not clickable to AI Coach"). Falls back to a plain div when no
+// handler is given (rare — only for tiles with nothing sensible to ask about).
+function StatTile({ label, value, title, color, onAsk }: { label: string; value: React.ReactNode; title?: string; color: string; onAsk?: () => void }) {
   const glossary = useHoverTooltip(title || '');
-  return (
-    <div
-      className="chip3d border border-[var(--edge)] rounded-xl p-3.5 text-center"
-      style={{ '--c': color } as CSSProperties}
-      {...(title ? glossary.handlers : {})}
-    >
+  const className = `chip3d border border-[var(--edge)] rounded-xl p-3.5 text-center${onAsk ? ' cursor-pointer transition-transform hover:-translate-y-0.5' : ''}`;
+  const inner = (
+    <>
       <p className="font-tel text-xl font-bold" style={{ color }}>{value}</p>
       <div className="flex items-center justify-center gap-1 mt-1">
         <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">{label}</p>
         {title && <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />}
       </div>
       {title && glossary.tooltip}
+    </>
+  );
+  return onAsk ? (
+    <button type="button" onClick={onAsk} className={className} style={{ '--c': color } as CSSProperties} {...(title ? glossary.handlers : {})}>
+      {inner}
+    </button>
+  ) : (
+    <div className={className} style={{ '--c': color } as CSSProperties} {...(title ? glossary.handlers : {})}>
+      {inner}
     </div>
   );
 }
@@ -86,15 +97,17 @@ function StatTile({ label, value, title, color }: { label: string; value: React.
 // Was a native `title=` popup on the "Isolated" tag — the one holdout on this page still
 // using the plain browser tooltip instead of the app's shared custom one, caught while
 // already rebuilding this section for the horizontal layout.
-function RoundCard({ round: r }: { round: RoundGroup }) {
+function RoundCard({ round: r, mapLabel, onAsk }: { round: RoundGroup; mapLabel: string; onAsk: (question: string) => void }) {
   const decision = r.engage_decisions[0];
   const positioning = r.positioning[0];
   const wonRound = decision?.round_won;
   const accent = wonRound === true ? 'var(--cyan)' : wonRound === false ? 'var(--danger)' : 'var(--panel-raised)';
   const isolated = useHoverTooltip(STAT_GLOSSARY.isolatedPush);
   return (
-    <div
-      className="chip3d border border-[var(--edge)] rounded-2xl p-3.5 flex flex-col items-center gap-2 shrink-0 w-36 text-center"
+    <button
+      type="button"
+      onClick={() => onAsk(`Break down round ${r.round_number} on ${mapLabel} for me — what happened and what could I have done better?`)}
+      className="chip3d border border-[var(--edge)] rounded-2xl p-3.5 flex flex-col items-center gap-2 shrink-0 w-36 text-center cursor-pointer transition-transform hover:-translate-y-0.5"
       style={{ '--c': accent } as CSSProperties}
     >
       <div
@@ -127,7 +140,7 @@ function RoundCard({ round: r }: { round: RoundGroup }) {
         )}
       </div>
       {isolated.tooltip}
-    </div>
+    </button>
   );
 }
 
@@ -141,6 +154,12 @@ function RoundCard({ round: r }: { round: RoundGroup }) {
 // compute-cost reasoning as fact_economy/fact_positioning_risk/etc.
 // Team accents reuse the app's existing CT-cyan/T-amber convention (duelLerp(0)/duelLerp(1)),
 // not new colors invented for this table.
+// Stacked top-down (one column, both squads), not the earlier side-by-side CT/T layout —
+// user feedback, 2026-09-02: sides swap at halftime, so labeling a whole-match table
+// "Counter-Terrorists"/"Terrorists" misrepresents any player who spent half the match on
+// the other side. Still visually groups the two rosters (a divider + each group keeping
+// its own accent color, cyan first group / amber second — the app's existing team-accent
+// convention) without naming which side is which.
 function ScoreboardTable({
   players,
   trackedSteamId,
@@ -148,49 +167,41 @@ function ScoreboardTable({
   players: NonNullable<Telemetry['player_scoreboard']>;
   trackedSteamId: string | null;
 }) {
+  const groups = (['CT', 'T'] as const)
+    .map((team, i) => ({ team, accent: duelLerp(i), rows: players.filter((p) => p.team === team) }))
+    .filter((g) => g.rows.length > 0);
+
   return (
-    <div className="grid sm:grid-cols-2 gap-4">
-      {(['CT', 'T'] as const).map((team) => {
-        const teamPlayers = players.filter((p) => p.team === team);
-        if (teamPlayers.length === 0) return null;
-        const accent = duelLerp(team === 'CT' ? 0 : 1);
-        return (
-          <div
-            key={team}
-            className="chip3d border border-[var(--edge)] rounded-xl overflow-hidden"
-            style={{ '--c': accent } as CSSProperties}
-          >
-            <div className="px-4 py-2 text-xs font-bold uppercase tracking-wider" style={{ color: accent }}>
-              {team === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}
-            </div>
-            <div className="grid grid-cols-[1fr_repeat(5,2.5rem)] gap-x-2 px-4 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">
-              <span>Player</span>
-              <span className="text-right">K</span>
-              <span className="text-right">D</span>
-              <span className="text-right">A</span>
-              <span className="text-right">ADR</span>
-              <span className="text-right">HS%</span>
-            </div>
-            {teamPlayers.map((p) => {
-              const isTracked = trackedSteamId != null && p.steam_id64 === trackedSteamId;
-              return (
-                <div
-                  key={p.steam_id64}
-                  className="grid grid-cols-[1fr_repeat(5,2.5rem)] gap-x-2 px-4 py-2 text-sm border-t border-[var(--edge)]"
-                  style={isTracked ? { color: accent, fontWeight: 700, background: 'rgba(255,255,255,0.03)' } : undefined}
-                >
-                  <span className="truncate">{p.name}</span>
-                  <span className="text-right font-tel">{p.kills}</span>
-                  <span className="text-right font-tel">{p.deaths}</span>
-                  <span className="text-right font-tel">{p.assists}</span>
-                  <span className="text-right font-tel">{p.adr}</span>
-                  <span className="text-right font-tel">{p.headshot_pct}%</span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
+    <div className="chip3d border border-[var(--edge)] rounded-xl overflow-hidden" style={{ '--c': duelLerp(0.5) } as CSSProperties}>
+      <div className="grid grid-cols-[1fr_repeat(5,2.5rem)] gap-x-2 px-4 pb-1 pt-3 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">
+        <span>Player</span>
+        <span className="text-right">K</span>
+        <span className="text-right">D</span>
+        <span className="text-right">A</span>
+        <span className="text-right">ADR</span>
+        <span className="text-right">HS%</span>
+      </div>
+      {groups.map((group, gi) => (
+        <div key={group.team} className={gi > 0 ? 'border-t-2 border-[var(--edge-bright)]' : ''}>
+          {group.rows.map((p) => {
+            const isTracked = trackedSteamId != null && p.steam_id64 === trackedSteamId;
+            return (
+              <div
+                key={p.steam_id64}
+                className="grid grid-cols-[1fr_repeat(5,2.5rem)] gap-x-2 px-4 py-2 text-sm border-t border-[var(--edge)]"
+                style={isTracked ? { color: group.accent, fontWeight: 700, background: 'rgba(255,255,255,0.03)' } : undefined}
+              >
+                <span className="truncate">{p.name}</span>
+                <span className="text-right font-tel">{p.kills}</span>
+                <span className="text-right font-tel">{p.deaths}</span>
+                <span className="text-right font-tel">{p.assists}</span>
+                <span className="text-right font-tel">{p.adr}</span>
+                <span className="text-right font-tel">{p.headshot_pct}%</span>
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -241,6 +252,17 @@ export default function MatchDetailPage() {
     })();
   }, [matchId, router]);
 
+  // Declared before the loading/error early returns below, same rule as InsightsDashboard's
+  // reactionTrendTooltip — hooks must run every render regardless of which branch a
+  // component ends up taking. Fixed 3-bucket tuple, so calling all 3 unconditionally here
+  // instead of inside the "Kills by Distance" .map() below (hooks can't be called inside a
+  // callback, even one that always iterates the same 3 times).
+  const distanceTooltips = {
+    close: useHoverTooltip(STAT_GLOSSARY.killDistanceClose),
+    medium: useHoverTooltip(STAT_GLOSSARY.killDistanceMedium),
+    long: useHoverTooltip(STAT_GLOSSARY.killDistanceLong),
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-[var(--text-dim)]">
@@ -270,6 +292,12 @@ export default function MatchDetailPage() {
   const distanceBuckets = t.kill_distance_buckets;
   const scoreboard = t.player_scoreboard;
   const trackedSteamId = typeof window !== 'undefined' ? localStorage.getItem('steamId') : null;
+
+  // Hands a question off to Home's Coach tab via a `q` URL param, since this page's tiles
+  // had no way to reach the coach at all before (2026-09-02 live-testing feedback) — Home's
+  // own promptCoach() is local state that only exists on that route.
+  const askCoach = (question: string) => router.push(`/?tab=coach&q=${encodeURIComponent(question)}`);
+  const mapLabel = formatMapName(t.map);
 
   return (
     <div className="min-h-screen text-[var(--text)]">
@@ -317,21 +345,21 @@ export default function MatchDetailPage() {
           <h2 className="font-display text-lg font-bold mb-3">Overview</h2>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {(() => {
-              const tiles: { label: string; value: React.ReactNode; title?: string }[] = [
-                { label: 'K/D', value: t.kd_ratio, title: STAT_GLOSSARY.kd },
-                { label: 'Kills', value: t.kills },
-                { label: 'Deaths', value: t.deaths },
-                { label: 'Assists', value: t.assists ?? '—' },
-                { label: 'ADR', value: t.adr, title: STAT_GLOSSARY.adr },
-                { label: 'Headshot %', value: `${t.headshot_pct}%`, title: STAT_GLOSSARY.hsPct },
-                { label: 'Performance', value: `${index}/100`, title: STAT_GLOSSARY.performanceIndex },
-                { label: 'Rounds Played', value: t.rounds_played ?? '—' },
-                { label: 'KAST %', value: t.kast_pct != null ? `${t.kast_pct}%` : '—', title: STAT_GLOSSARY.kast },
-                { label: 'HS Accuracy', value: t.headshot_accuracy_pct != null ? `${t.headshot_accuracy_pct}%` : '—', title: STAT_GLOSSARY.hsAccuracy },
-                { label: 'Trade Kill %', value: t.trade_kill_pct != null ? `${t.trade_kill_pct}%` : '—', title: STAT_GLOSSARY.tradeKillPct },
-                { label: 'Entry Success %', value: t.entry_success_pct != null ? `${t.entry_success_pct}%` : '—', title: STAT_GLOSSARY.entrySuccessPct },
-                { label: 'Utility Dmg/Rd', value: t.utility_dmg_per_round != null ? t.utility_dmg_per_round : '—', title: STAT_GLOSSARY.utilityDmgPerRound },
-                { label: 'Clutches Won', value: t.clutches_won ?? '—', title: STAT_GLOSSARY.clutchesWon },
+              const tiles: { label: string; value: React.ReactNode; title?: string; onAsk: () => void }[] = [
+                { label: 'K/D', value: t.kd_ratio, title: STAT_GLOSSARY.kd, onAsk: () => askCoach(`My K/D on ${mapLabel} was ${t.kd_ratio}. What drove that number this match?`) },
+                { label: 'Kills', value: t.kills, onAsk: () => askCoach(`I got ${t.kills} kills on ${mapLabel}. Walk me through the ones that mattered most.`) },
+                { label: 'Deaths', value: t.deaths, onAsk: () => askCoach(`I died ${t.deaths} times on ${mapLabel}. Which of those deaths were avoidable?`) },
+                { label: 'Assists', value: t.assists ?? '—', onAsk: () => askCoach(`I had ${t.assists ?? 'some'} assists on ${mapLabel}. How am I setting up kills for my team?`) },
+                { label: 'ADR', value: t.adr, title: STAT_GLOSSARY.adr, onAsk: () => askCoach(`My ADR on ${mapLabel} was ${t.adr}. Is that damage output solid for this match?`) },
+                { label: 'Headshot %', value: `${t.headshot_pct}%`, title: STAT_GLOSSARY.hsPct, onAsk: () => askCoach(`My headshot % on ${mapLabel} was ${t.headshot_pct}%. What does that say about my aim this match?`) },
+                { label: 'Performance', value: `${index}/100`, title: STAT_GLOSSARY.performanceIndex, onAsk: () => askCoach(`My Performance Index on ${mapLabel} was ${index}/100. What pulled it up or down?`) },
+                { label: 'Rounds Played', value: t.rounds_played ?? '—', onAsk: () => askCoach(`This match on ${mapLabel} went ${t.rounds_played ?? 'several'} rounds. How did the pace of the match affect how I played?`) },
+                { label: 'KAST %', value: t.kast_pct != null ? `${t.kast_pct}%` : '—', title: STAT_GLOSSARY.kast, onAsk: () => askCoach(`My KAST on ${mapLabel} was ${t.kast_pct ?? '—'}%. Which rounds did I contribute nothing in?`) },
+                { label: 'HS Accuracy', value: t.headshot_accuracy_pct != null ? `${t.headshot_accuracy_pct}%` : '—', title: STAT_GLOSSARY.hsAccuracy, onAsk: () => askCoach(`My headshot accuracy on ${mapLabel} was ${t.headshot_accuracy_pct ?? '—'}%. How's my crosshair placement looking this match?`) },
+                { label: 'Trade Kill %', value: t.trade_kill_pct != null ? `${t.trade_kill_pct}%` : '—', title: STAT_GLOSSARY.tradeKillPct, onAsk: () => askCoach(`My trade kill % on ${mapLabel} was ${t.trade_kill_pct ?? '—'}%. Was I playing close enough to my team this match?`) },
+                { label: 'Entry Success %', value: t.entry_success_pct != null ? `${t.entry_success_pct}%` : '—', title: STAT_GLOSSARY.entrySuccessPct, onAsk: () => askCoach(`My entry success % on ${mapLabel} was ${t.entry_success_pct ?? '—'}%. How were my opening duels this match?`) },
+                { label: 'Utility Dmg/Rd', value: t.utility_dmg_per_round != null ? t.utility_dmg_per_round : '—', title: STAT_GLOSSARY.utilityDmgPerRound, onAsk: () => askCoach(`My utility damage per round on ${mapLabel} was ${t.utility_dmg_per_round ?? '—'}. Was my grenade usage effective this match?`) },
+                { label: 'Clutches Won', value: t.clutches_won ?? '—', title: STAT_GLOSSARY.clutchesWon, onAsk: () => askCoach(`I won ${t.clutches_won ?? 'some'} clutches on ${mapLabel}. Walk me through how those played out.`) },
               ];
               return tiles.map((tile, i) => (
                 <StatTile key={tile.label} {...tile} color={ctTAccent(i, tiles.length)} />
@@ -356,10 +384,10 @@ export default function MatchDetailPage() {
           <section>
             <h2 className="font-display text-lg font-bold mb-3">Multi-Kill Rounds</h2>
             <div className="grid grid-cols-4 gap-3">
-              <StatTile label="2K" value={multiKills['2k']} color={ctTAccent(0, 4)} />
-              <StatTile label="3K" value={multiKills['3k']} color={ctTAccent(1, 4)} />
-              <StatTile label="4K" value={multiKills['4k']} color={ctTAccent(2, 4)} />
-              <StatTile label="Ace" value={multiKills.ace} color={ctTAccent(3, 4)} />
+              <StatTile label="2K" value={multiKills['2k']} color={ctTAccent(0, 4)} onAsk={() => askCoach(`I got ${multiKills['2k']} 2-kill rounds on ${mapLabel}. Walk me through those.`)} />
+              <StatTile label="3K" value={multiKills['3k']} color={ctTAccent(1, 4)} onAsk={() => askCoach(`I got ${multiKills['3k']} 3-kill rounds on ${mapLabel}. Walk me through those.`)} />
+              <StatTile label="4K" value={multiKills['4k']} color={ctTAccent(2, 4)} onAsk={() => askCoach(`I got ${multiKills['4k']} 4-kill rounds on ${mapLabel}. Walk me through those.`)} />
+              <StatTile label="Ace" value={multiKills.ace} color={ctTAccent(3, 4)} onAsk={() => askCoach(`I got ${multiKills.ace} aces on ${mapLabel}. Walk me through ${multiKills.ace === 1 ? 'it' : 'those'}.`)} />
             </div>
           </section>
         )}
@@ -368,16 +396,26 @@ export default function MatchDetailPage() {
           <section>
             <h2 className="font-display text-lg font-bold mb-3">Wins vs. Losses</h2>
             <div className="grid grid-cols-2 gap-4">
-              <div className="chip3d border border-[var(--edge)] rounded-xl p-4" style={{ '--c': 'var(--cyan)' } as CSSProperties}>
+              <button
+                type="button"
+                onClick={() => askCoach(`On ${mapLabel}, I got ${byOutcome.wins.kills} kills and ${Math.round(byOutcome.wins.damage)} damage in rounds we won. What was I doing right in those rounds?`)}
+                className="chip3d border border-[var(--edge)] rounded-xl p-4 text-left cursor-pointer transition-transform hover:-translate-y-0.5"
+                style={{ '--c': 'var(--cyan)' } as CSSProperties}
+              >
                 <p className="text-xs uppercase tracking-wider text-[var(--cyan)] mb-2">Round Wins</p>
                 <p className="font-tel text-2xl font-bold">{byOutcome.wins.kills} kills</p>
                 <p className="text-sm text-[var(--text-dim)]">{Math.round(byOutcome.wins.damage)} damage</p>
-              </div>
-              <div className="chip3d border border-[var(--edge)] rounded-xl p-4" style={{ '--c': 'var(--danger)' } as CSSProperties}>
+              </button>
+              <button
+                type="button"
+                onClick={() => askCoach(`On ${mapLabel}, I got ${byOutcome.losses.kills} kills and ${Math.round(byOutcome.losses.damage)} damage in rounds we lost. What went wrong in those rounds?`)}
+                className="chip3d border border-[var(--edge)] rounded-xl p-4 text-left cursor-pointer transition-transform hover:-translate-y-0.5"
+                style={{ '--c': 'var(--danger)' } as CSSProperties}
+              >
                 <p className="text-xs uppercase tracking-wider text-[var(--danger)] mb-2">Round Losses</p>
                 <p className="font-tel text-2xl font-bold">{byOutcome.losses.kills} kills</p>
                 <p className="text-sm text-[var(--text-dim)]">{Math.round(byOutcome.losses.damage)} damage</p>
-              </div>
+              </button>
             </div>
           </section>
         )}
@@ -386,21 +424,31 @@ export default function MatchDetailPage() {
           <section>
             <h2 className="font-display text-lg font-bold mb-3">Kills by Distance</h2>
             <div className="grid grid-cols-3 gap-3">
-              {(['close', 'medium', 'long'] as const).map((bucket, i) => (
-                <div
-                  key={bucket}
-                  className="chip3d border border-[var(--edge)] rounded-xl p-3.5 text-center"
-                  style={{ '--c': ctTAccent(i, 3) } as CSSProperties}
-                >
-                  <p className="font-tel text-xl font-bold" style={{ color: ctTAccent(i, 3) }}>{distanceBuckets[bucket].kills}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mt-1 capitalize">{bucket}</p>
-                  <p className="text-xs text-[var(--text-dim)] mt-1">
-                    {distanceBuckets[bucket].kills > 0
-                      ? `${Math.round((100 * distanceBuckets[bucket].headshots) / distanceBuckets[bucket].kills)}% HS`
-                      : '—'}
-                  </p>
-                </div>
-              ))}
+              {(['close', 'medium', 'long'] as const).map((bucket, i) => {
+                const tooltip = distanceTooltips[bucket];
+                return (
+                  <button
+                    type="button"
+                    key={bucket}
+                    onClick={() => askCoach(`On ${mapLabel}, ${distanceBuckets[bucket].kills} of my kills were at ${bucket} range. How's my positioning at that range?`)}
+                    className="chip3d border border-[var(--edge)] rounded-xl p-3.5 text-center cursor-pointer transition-transform hover:-translate-y-0.5"
+                    style={{ '--c': ctTAccent(i, 3) } as CSSProperties}
+                    {...tooltip.handlers}
+                  >
+                    <p className="font-tel text-xl font-bold" style={{ color: ctTAccent(i, 3) }}>{distanceBuckets[bucket].kills}</p>
+                    <div className="flex items-center justify-center gap-1 mt-1">
+                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] capitalize">{bucket}</p>
+                      <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
+                    </div>
+                    <p className="text-xs text-[var(--text-dim)] mt-1">
+                      {distanceBuckets[bucket].kills > 0
+                        ? `${Math.round((100 * distanceBuckets[bucket].headshots) / distanceBuckets[bucket].kills)}% HS`
+                        : '—'}
+                    </p>
+                    {tooltip.tooltip}
+                  </button>
+                );
+              })}
             </div>
           </section>
         )}
@@ -412,15 +460,17 @@ export default function MatchDetailPage() {
               {Object.entries(weaponStats)
                 .sort(([, a], [, b]) => b.kills - a.kills)
                 .map(([weapon, stats], i) => (
-                  <div
+                  <button
+                    type="button"
                     key={weapon}
-                    className={`flex items-center justify-between px-4 py-3 ${i > 0 ? 'border-t border-[var(--edge)]' : ''}`}
+                    onClick={() => askCoach(`On ${mapLabel}, I got ${stats.kills} kills and ${Math.round(stats.damage)} damage with ${(WEAPON_CLASS_LABELS[weapon] || weapon).toLowerCase()}. How effective was I with that weapon class this match?`)}
+                    className={`w-full flex items-center justify-between px-4 py-3 text-left cursor-pointer transition-colors hover:bg-white/5 ${i > 0 ? 'border-t border-[var(--edge)]' : ''}`}
                   >
                     <span className="font-medium">{WEAPON_CLASS_LABELS[weapon] || weapon}</span>
                     <span className="font-tel text-sm text-[var(--text-dim)]">
                       {stats.kills} kills · {Math.round(stats.damage)} dmg
                     </span>
-                  </div>
+                  </button>
                 ))}
             </div>
           </section>
@@ -444,7 +494,7 @@ export default function MatchDetailPage() {
             // means something (who won it), not just where it sits in the row.
             <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1">
               {rounds.map((r) => (
-                <RoundCard key={r.round_number} round={r} />
+                <RoundCard key={r.round_number} round={r} mapLabel={mapLabel} onAsk={askCoach} />
               ))}
             </div>
           )}

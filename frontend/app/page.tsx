@@ -671,6 +671,22 @@ export default function Home() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // Lets a separate route (the match-detail page) hand off a coach question to Home via a
+  // `q` URL param, since promptCoach() itself is local component state that only exists on
+  // this page — match-detail's own stat tiles had no way to "ask the coach" at all before
+  // this (2026-09-02 live-testing feedback: "everything below the scoreboard is not
+  // clickable to AI Coach"). Reads `q` once on mount, same pattern as the `tab` param
+  // above, then strips it from the URL so a refresh/back doesn't re-fill the input.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const q = url.searchParams.get('q');
+    if (q) {
+      setChatInput(q);
+      url.searchParams.delete('q');
+      window.history.replaceState(window.history.state, '', url.toString());
+    }
+  }, []);
   const router = useRouter();
   const [steamId, setSteamId] = useState<string | null>(null);
   const [jwtToken, setJwtToken] = useState<string | null>(null);

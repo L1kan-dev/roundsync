@@ -1590,20 +1590,24 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
             "medium": {"kills": 0, "headshots": 0},
             "long": {"kills": 0, "headshots": 0},
         }
-        if not my_kills_all.empty:
-            kill_ticks = sorted(my_kills_all["tick"].unique().tolist())
-            kill_pos_snap = parser.parse_ticks(["X", "Y"], ticks=kill_ticks)
+        # Real bug found 2026-09-02 verifying against actual re-synced production data:
+        # every kill on every match was landing in "close" with medium/long always 0 —
+        # impossible across real matches. Root cause: this used to manually reconstruct
+        # distance from an X/Y tick snapshot at the kill tick, the same fragile
+        # snapshot-timing pattern that already broke elsewhere in this file (e.g. the
+        # player_inair NaN bug). player_death already carries a real `distance` column
+        # (confirmed in DEMOPARSER2_FIELDS.md's bulk field sweep) that was simply never
+        # used — the engine's own computed attacker-victim distance at the death event,
+        # not a fragile after-the-fact snapshot reconstruction. Same unit convention as
+        # every other position-derived field in this file (raw engine units, converted via
+        # CS2_UNITS_PER_METER), consistent with distance being on the same coordinate scale
+        # as X/Y. No longer needs its own parser.parse_ticks() call at all.
+        if not my_kills_all.empty and "distance" in my_kills_all.columns:
             for _, kill in my_kills_all.iterrows():
-                tick = int(kill["tick"])
-                victim = str(kill["user_steamid"])
-                tick_rows = kill_pos_snap[kill_pos_snap["tick"] == tick]
-                attacker_row = tick_rows[tick_rows["steamid"].astype(str) == target]
-                victim_row = tick_rows[tick_rows["steamid"].astype(str) == victim]
-                if attacker_row.empty or victim_row.empty:
+                dist_units = kill.get("distance")
+                if dist_units is None or (isinstance(dist_units, float) and dist_units != dist_units):  # NaN check, no pandas import needed here
                     continue
-                dx = float(attacker_row.iloc[0]["X"]) - float(victim_row.iloc[0]["X"])
-                dy = float(attacker_row.iloc[0]["Y"]) - float(victim_row.iloc[0]["Y"])
-                dist_units = (dx ** 2 + dy ** 2) ** 0.5
+                dist_units = float(dist_units)
                 bucket = "close" if dist_units <= CLOSE_RANGE_MAX_UNITS else (
                     "medium" if dist_units <= MEDIUM_RANGE_MAX_UNITS else "long"
                 )
