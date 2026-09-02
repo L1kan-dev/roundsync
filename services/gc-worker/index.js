@@ -181,6 +181,25 @@ async function processPendingMatches() {
 
         console.log(`📦 Successfully retrieved GC match details for ${dbMatchId}`);
 
+        // TEMPORARY — 2026-09-02, remove after capturing one real response. Verifying the
+        // real shape of roundstatsall (CS2_ANALYTICS_STANDARDS.md's "Game Coordinator match
+        // resolution" section) before building against it — specifically whether a team
+        // (CT/T) can be recovered per player, which the proto schema alone didn't confirm.
+        try {
+          const last = gcData.roundstatsall && gcData.roundstatsall.length > 0
+            ? gcData.roundstatsall[gcData.roundstatsall.length - 1]
+            : null;
+          console.log(`🧪 [roundstatsall probe] ${dbMatchId} entries=${gcData.roundstatsall ? gcData.roundstatsall.length : 0}`);
+          if (last) {
+            console.log(`🧪 [roundstatsall probe] last entry keys: ${Object.keys(last).join(', ')}`);
+            console.log(`🧪 [roundstatsall probe] kills=${JSON.stringify(last.kills)} assists=${JSON.stringify(last.assists)} deaths=${JSON.stringify(last.deaths)} mvps=${JSON.stringify(last.mvps)} enemy_headshots=${JSON.stringify(last.enemy_headshots)} scores=${JSON.stringify(last.scores)}`);
+            console.log(`🧪 [roundstatsall probe] reservation keys: ${last.reservation ? Object.keys(last.reservation).join(', ') : 'none'}`);
+            console.log(`🧪 [roundstatsall probe] account_ids=${JSON.stringify(last.reservation && last.reservation.account_ids)}`);
+          }
+        } catch (probeErr) {
+          console.log(`🧪 [roundstatsall probe] failed: ${probeErr.message}`);
+        }
+
         // Valve's GC repurposes the LAST round's "map" field to carry the demo download URL
         // instead of a map name (every other round's "map" is the real map name) — an
         // undocumented quirk, confirmed against Valve's own current protobuf schema (no
