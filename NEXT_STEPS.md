@@ -931,6 +931,16 @@ before acting, per standing rule — two turned out not to be bugs:
       (`InsightsDashboard.tsx`, match-detail's `StatTile`) and every bespoke KPI tile in
       Home's 3 grid rows (`app/page.tsx`) — this was the root cause behind most of the
       "missing glossary" reports; the explanations were already wired, just undiscoverable.
+      **First pass missed two spots, caught by the user re-checking live**: the top-of-page
+      6-tile category-score strip (Economic Discipline/Utility IQ/Awareness/Trade
+      Discipline/Aim Placement/Engage IQ — a separate inline component never covered by the
+      `StatTile` sweep, had zero tooltip mechanism at all) and the "Isolated Pushes"
+      Survived/Died split bar (a second `EmphasisBar` call site, same component as Utility
+      Effectiveness's split bar but only that one had gotten a `title` wired). Both fixed —
+      6 new `STAT_GLOSSARY` entries added mirroring `computeCategoryScores()`'s real formulas
+      in `server.js`, not guessed. `mock-insights.mjs` also extended to actually screenshot
+      the Decision-Making subtab, which the original verification pass never captured —
+      that's how the split-bar miss went uncaught the first time.
 - [x] **Home: Multi-Kill Rounds tile had no tooltip at all — DONE.** The one KPI tile in
       its row with no `useHoverTooltip` wired up; added `multiKillTooltip` using the
       existing `STAT_GLOSSARY.multiKillRounds`.

@@ -50,6 +50,12 @@ await page.waitForTimeout(500);
 await page.screenshot({ path: '.claude/skills/run-frontend/screenshots/insights-aim.png', fullPage: true });
 console.log('SCREENSHOT: .claude/skills/run-frontend/screenshots/insights-aim.png');
 
+await page.click('text=Decision-Making');
+await page.waitForSelector('text=Isolated Pushes', { timeout: 10000 });
+await page.waitForTimeout(500);
+await page.screenshot({ path: '.claude/skills/run-frontend/screenshots/insights-decisions.png', fullPage: true });
+console.log('SCREENSHOT: .claude/skills/run-frontend/screenshots/insights-decisions.png');
+
 await page.click('text=Economy & Utility');
 await page.waitForSelector('text=Buy Decisions Over Time', { timeout: 10000 });
 await page.waitForTimeout(500);

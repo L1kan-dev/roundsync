@@ -38,4 +38,14 @@ export const STAT_GLOSSARY = {
   heMolotovDmg: 'Average damage dealt per HE grenade or molotov thrown',
   reactedWithin3s: 'How often you visibly reacted (aim or movement) within 3 seconds of that trigger event',
   teamFlashSplit: 'Of every flashbang you threw, what % blinded an enemy vs. blinded one of your own teammates instead',
+  // The 6 top-of-page Insights scores — mirrors computeCategoryScores()'s real formulas
+  // in server.js exactly, not guessed. Missing before 2026-09-02: this whole row had no
+  // tooltip mechanism at all.
+  economicDiscipline: '100 minus your % of buys made against your own team\'s economy — higher means fewer buys that clashed with what your team could afford',
+  utilityIQ: "100 minus your team-flash % — higher means fewer of your own flashbangs blinded your own teammates",
+  awareness: 'Your combined reaction rate (visible aim/movement within 3s) across all trigger events — teammate deaths, bomb plants, and audible enemies',
+  tradeDiscipline: '% of your deaths where you survived an isolated push, or had a teammate close enough to trade you out',
+  aimPlacement: "Based on your average crosshair angle off-target the instant you engaged — smaller deviation means a higher score",
+  engageIQ: 'Blend of your round-win rate when you chose to fight while outnumbered and your survival rate when you chose to back off instead',
+  isolatedSurvivedSplit: 'Of your isolated pushes (committed to a fight with no teammate nearby), what % you survived vs. died',
 } as const;

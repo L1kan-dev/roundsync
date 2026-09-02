@@ -76,13 +76,13 @@ interface DashboardPayload {
 }
 
 
-const CATEGORY_META: Record<string, { label: string; askPrompt: string }> = {
-  economic_discipline: { label: 'Economic Discipline', askPrompt: 'Which rounds was I buying against my team\'s economy?' },
-  utility_iq: { label: 'Utility IQ', askPrompt: 'Which of my flashbangs blinded my own team?' },
-  awareness: { label: 'Awareness', askPrompt: 'When do I react slowest to new information?' },
-  trade_discipline: { label: 'Trade Discipline', askPrompt: 'Which isolated pushes got me killed with no trade nearby?' },
-  aim_placement: { label: 'Aim Placement', askPrompt: 'How is my crosshair placement compared to my rank?' },
-  engage_iq: { label: 'Engage IQ', askPrompt: 'Am I engaging too often when I\'m outnumbered?' },
+const CATEGORY_META: Record<string, { label: string; askPrompt: string; glossary: string }> = {
+  economic_discipline: { label: 'Economic Discipline', askPrompt: 'Which rounds was I buying against my team\'s economy?', glossary: STAT_GLOSSARY.economicDiscipline },
+  utility_iq: { label: 'Utility IQ', askPrompt: 'Which of my flashbangs blinded my own team?', glossary: STAT_GLOSSARY.utilityIQ },
+  awareness: { label: 'Awareness', askPrompt: 'When do I react slowest to new information?', glossary: STAT_GLOSSARY.awareness },
+  trade_discipline: { label: 'Trade Discipline', askPrompt: 'Which isolated pushes got me killed with no trade nearby?', glossary: STAT_GLOSSARY.tradeDiscipline },
+  aim_placement: { label: 'Aim Placement', askPrompt: 'How is my crosshair placement compared to my rank?', glossary: STAT_GLOSSARY.aimPlacement },
+  engage_iq: { label: 'Engage IQ', askPrompt: 'Am I engaging too often when I\'m outnumbered?', glossary: STAT_GLOSSARY.engageIQ },
 };
 const CATEGORY_ORDER = ['economic_discipline', 'utility_iq', 'awareness', 'trade_discipline', 'aim_placement', 'engage_iq'];
 
@@ -530,6 +530,14 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
   // Declared before the loading/error early returns below — hooks must run every render
   // regardless of which branch a component ends up taking.
   const reactionTrendTooltip = useHoverTooltip(STAT_GLOSSARY.reactedWithin3s);
+  // Same rule — one hook per fixed CATEGORY_ORDER key, unconditionally (same "stable hook
+  // count regardless of which subset actually has data" pattern as LoadoutMixBar's
+  // tooltips). This whole top score strip had zero tooltip mechanism at all before
+  // 2026-09-02 (live-testing feedback) — the app's other InsightCards already had
+  // per-tile glossaries, this strip never did.
+  const categoryTooltips = Object.fromEntries(
+    CATEGORY_ORDER.map((k) => [k, useHoverTooltip(CATEGORY_META[k].glossary)])
+  ) as Record<string, ReturnType<typeof useHoverTooltip>>;
 
   useEffect(() => {
     let cancelled = false;
@@ -587,11 +595,16 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   key={key}
                   type="button"
                   onClick={() => onAskCoach(meta.askPrompt)}
+                  {...categoryTooltips[key].handlers}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-3.5 text-center transition-transform hover:-translate-y-0.5"
                   style={{ '--c': color } as CSSProperties}
                 >
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5 leading-tight">{meta.label}</p>
+                  <div className="flex items-center justify-center gap-1 mb-1.5">
+                    <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] leading-tight">{meta.label}</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)] shrink-0" />
+                  </div>
                   <p className="font-tel text-xl font-extrabold" style={{ color }}>{value}</p>
+                  {categoryTooltips[key].tooltip}
                 </button>
               );
             })}
@@ -734,6 +747,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   badValue={factSummary.positioning.died_pct}
                   color={SIDE_LEFT}
                   onAsk={() => onAskCoach(`I died ${factSummary.positioning?.died_pct}% of the time on isolated pushes. Which of those pushes had no teammate nearby to trade?`)}
+                  title={STAT_GLOSSARY.isolatedSurvivedSplit}
                 />
                 <div className="grid grid-cols-2 gap-3 mt-4">
                   <StatTile
