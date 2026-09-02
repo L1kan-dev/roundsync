@@ -37,4 +37,5 @@ export const STAT_GLOSSARY = {
   flashAssists: "Kills on an enemy blinded by your flashbang for at least 1.1s — HLTV's own flash-assist threshold",
   heMolotovDmg: 'Average damage dealt per HE grenade or molotov thrown',
   reactedWithin3s: 'How often you visibly reacted (aim or movement) within 3 seconds of that trigger event',
+  teamFlashSplit: 'Of every flashbang you threw, what % blinded an enemy vs. blinded one of your own teammates instead',
 } as const;

@@ -782,6 +782,9 @@ export default function Home() {
   const tradeKillTooltip = useHoverTooltip(STAT_GLOSSARY.tradeKillPct);
   const kastTooltip = useHoverTooltip(STAT_GLOSSARY.kast);
   const hsAccuracyTooltip = useHoverTooltip(STAT_GLOSSARY.hsAccuracy);
+  // The one KPI tile in this row that never got a tooltip wired up at all (2026-09-02
+  // live-testing feedback) — every sibling tile in the same grid has one.
+  const multiKillTooltip = useHoverTooltip(STAT_GLOSSARY.multiKillRounds);
 
   const fetchProfile = useCallback(async (token: string) => {
     try {
@@ -1328,6 +1331,7 @@ export default function Home() {
       {tradeKillTooltip.tooltip}
       {kastTooltip.tooltip}
       {hsAccuracyTooltip.tooltip}
+      {multiKillTooltip.tooltip}
       {toast && (
         <Toast
           message={toast.message}
@@ -1448,6 +1452,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Target className="w-4 h-4 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">K/D Ratio</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-3xl font-bold text-[var(--cyan)]">{avgKd}</p>
                 </button>
@@ -1465,6 +1470,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Zap className="w-4 h-4 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Avg ADR</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-3xl font-bold">{avgAdr}</p>
                 </button>
@@ -1482,6 +1488,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <Crosshair className="w-4 h-4 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Headshot %</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-3xl font-bold">{avgHs}%</p>
                 </button>
@@ -1503,6 +1510,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <LogIn className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Entry Success</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgEntrySuccessPct !== null ? `${avgEntrySuccessPct.toFixed(1)}%` : '—'}</p>
                 </button>
@@ -1520,6 +1528,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Flame className="w-3.5 h-3.5 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Utility Dmg/Rd</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgUtilityDmgPerRound !== null ? avgUtilityDmgPerRound.toFixed(1) : '—'}</p>
                 </button>
@@ -1533,6 +1542,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Users className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Clutches Won</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-2xl font-bold">{totalClutchesWon !== null ? totalClutchesWon : '—'}</p>
                 </button>
@@ -1546,6 +1556,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Repeat className="w-3.5 h-3.5 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Trade Kill %</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgTradeKillPct !== null ? `${avgTradeKillPct.toFixed(1)}%` : '—'}</p>
                 </button>
@@ -1567,6 +1578,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">KAST</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgKastPct !== null ? `${avgKastPct.toFixed(1)}%` : '—'}</p>
                 </button>
@@ -1580,6 +1592,7 @@ export default function Home() {
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Target className="w-3.5 h-3.5 text-[var(--amber)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">HS Accuracy</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-2xl font-bold">{avgHeadshotAccuracyPct !== null ? `${avgHeadshotAccuracyPct.toFixed(1)}%` : '—'}</p>
                 </button>
@@ -1588,10 +1601,12 @@ export default function Home() {
                   onClick={() => promptCoach('Walk me through my multi-kill rounds — what am I doing right in the rounds where I pick up 2 or more kills?')}
                   className="chip3d border border-[var(--edge)] rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-transform hover:-translate-y-0.5 cursor-pointer"
                   style={{ '--c': ctTAccent(2, 3) } as CSSProperties}
+                  {...multiKillTooltip.handlers}
                 >
                   <div className="flex items-center justify-center gap-1.5 mb-1.5">
                     <Zap className="w-3.5 h-3.5 text-[var(--cyan)]" />
                     <p className="text-[11px] uppercase tracking-wider text-[var(--text-dim)]">Multi-Kill Rounds</p>
+                    <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />
                   </div>
                   <p className="font-tel text-2xl font-bold">{totalMultiKillRounds !== null ? totalMultiKillRounds : '—'}</p>
                 </button>

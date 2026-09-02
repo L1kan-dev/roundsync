@@ -161,10 +161,12 @@ export function RankBadge({
 
       {/* Embossed look: a dark, semi-transparent copy of the text offset down-right, then
           the real light text on top — confirmed real vs. this component's previous flat
-          solid-color text. x/y values here were measured against real rendered pixels
-          (not eyeballed) to correct a real off-center bug found during review. */}
+          solid-color text. x/y recentered 2026-08-31: the visible face is the slanted
+          trapezoid "M178 0H33.9996L22 64H166L178 0Z", whose true horizontal center at
+          mid-height (y=32) is x=100, not the old x=106/107 — the old value was centered
+          against the badge's outer bounding box, not the slanted shape actually drawn. */}
       <text
-        x="107" y="31"
+        x="101" y="33"
         textAnchor="middle" dominantBaseline="central"
         fontFamily="var(--font-display), ui-sans-serif, system-ui, sans-serif"
         fontWeight="800" letterSpacing="-1.5"
@@ -173,7 +175,7 @@ export function RankBadge({
         <tspan fontSize="42">{bigPart}</tspan><tspan fontSize="32">{restPart}</tspan>
       </text>
       <text
-        x="106" y="29"
+        x="100" y="31"
         textAnchor="middle" dominantBaseline="central"
         fontFamily="var(--font-display), ui-sans-serif, system-ui, sans-serif"
         fontWeight="800" letterSpacing="-1.5"

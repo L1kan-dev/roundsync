@@ -34,6 +34,22 @@ export interface Telemetry {
     medium: { kills: number; headshots: number };
     long: { kills: number; headshots: number };
   } | null;
+  // Basic scoreboard stats for all 10 players (NEXT_STEPS.md Band 0 / Tier 15's per-player
+  // stat table) — absent on any match parsed before this field was added, since it's only
+  // computed at sync time, not backfilled; the UI must treat a missing/empty array as
+  // "not available for this match" rather than "nobody played."
+  player_scoreboard?: {
+    steam_id64: string;
+    name: string;
+    team: 'CT' | 'T';
+    kills: number;
+    deaths: number;
+    assists: number;
+    damage: number;
+    adr: number;
+    headshot_pct: number;
+    kd_ratio: number;
+  }[] | null;
 }
 
 export interface Match {

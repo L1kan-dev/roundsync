@@ -42,6 +42,9 @@ Thumbs.db
 # itself IS committed on purpose, this is only the *.local.json personal layer)
 .claude/settings.local.json
 
+# hookify rules (personal, machine-specific guardrails, per hookify's own convention)
+.claude/*.local.md
+
 # Playwright (used by the run-frontend agent skill's driver)
 playwright-report/
 test-results/

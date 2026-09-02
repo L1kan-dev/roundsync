@@ -460,6 +460,67 @@ URL.
 
 **Sources**: [`SteamDatabase/GameTracking-CS2` — cstrike15_gcmessages.proto](https://github.com/SteamDatabase/GameTracking-CS2/blob/a00b71ec84b24e0773c5fbd595eb91e17fa57f8f/Protobufs/cstrike15_gcmessages.proto), [`claabs/cs-demo-downloader`](https://github.com/claabs/cs-demo-downloader) (`src/steam-gc.ts`).
 
+**Follow-up finding, 2026-09-02 — the SAME `roundstatsall` response `gc-worker` already
+fetches (for the demo URL, above) also carries a real, official per-player scoreboard,
+free of any extra GC round-trip.** User asked directly whether the per-player stat table
+(above) should really be rebuilt from demo parsing when CS2's own postgame scoreboard is
+clearly populated from somewhere already. Checked the real proto, not assumed:
+`CMsgGCCStrike15_v2_MatchmakingServerRoundStats` (the shape of every `roundstatsall[]`
+entry) has `repeated int32` arrays — `kills`, `assists`, `deaths`, `mvps`,
+`enemy_headshots` (this player's own headshot-kill count, despite the "enemy_" prefix —
+Valve's own naming, not a RoundSync guess), `enemy_3ks`/`enemy_4ks`/`enemy_5ks` (multi-kill
+counts), `scores`, `pings` — one array per stat, each indexed by player slot. The **final**
+entry (the one `gc-worker` already reads for the download URL) carries the match-end
+cumulative totals, i.e. exactly what the in-game postgame scoreboard shows.
+`CMsgGCCStrike15_v2_MatchmakingGC2ServerReserve.account_ids` (on `roundstatsall[].reservation`)
+gives the slot -> steamid mapping the same arrays are indexed by.
+
+**Confirmed against 10 REAL captured responses, 2026-09-02** (temporary probe logging added
+to `gc-worker`, deployed to production, ran against all 10 of the account's real matches
+re-resolved through the GC, then removed — not simulated or guessed):
+
+- **No `damage` field anywhere, confirmed** — the real last-entry key list is `kills,
+  assists, deaths, scores, pings, team_scores, enemy_kills, enemy_headshots, enemy_3ks,
+  enemy_4ks, enemy_5ks, mvps, enemy_kills_agg, enemy_2ks, player_spawned, team_spawn_count,
+  reservationid, reservation, map, round, round_result, match_result, confirm,
+  reservation_stage, match_duration, spectators_count, spectators_count_tv,
+  spectators_count_lnk, drop_info, b_switched_teams, max_rounds, map_id` — no damage total
+  anywhere in it. ADR still needs `player_hurt` from the demo; this can't replace that half.
+- **No team (CT/T) field anywhere, confirmed** — neither the round-stats message nor
+  `reservation` (whose real keys are `account_ids, rankings, party_ids, whitelist,
+  tournament_teams, tournament_casters_account_ids, op_var_values, teammate_colors,
+  game_type, match_id, server_version, encryption_key, encryption_key_pub,
+  tv_master_steamid, tournament_event, tv_relay_steamid, pre_match_data, tv_control, flags,
+  socache_control, match_id_additional`) carries a per-player team assignment. `b_switched_teams`
+  (a match-level bool, not per-player) confirms sides swap mid-match, which is exactly why
+  a fixed array-position split wouldn't be safe to assume even if it looked plausible.
+  **This means team grouping still needs the demo's own `team_num`** — `gc-worker` alone
+  cannot build the grouped-by-team scoreboard table.
+- **`reservation.account_ids`** — confirmed real, 10 Steam32 account IDs, positionally
+  matching every other array (`kills[i]`/`deaths[i]`/etc. belong to `account_ids[i]`).
+- **`mvps`** — confirmed real and populated (e.g. one real match: `[4,4,2,2,1,0,1,3,0,0]`).
+  This is a genuinely NEW stat with no demo-based equivalent anywhere in `sync_pipeline.py`.
+- **`enemy_headshots`** — confirmed real and populated, this player's own headshot-kill
+  count despite the "enemy_" prefix (cross-checked: values are plausible relative to each
+  player's own `kills`, never exceeding it).
+- **`enemy_2ks`/`enemy_3ks`/`enemy_4ks`/`enemy_5ks`** — confirmed real, this player's own
+  multi-kill-round counts (all 4 tiers, richer than the pair `sync_pipeline.py` already
+  derives from `deaths_df` for the tracked player only).
+
+**Revised verdict — smaller win than initially hoped, and NOT a replacement for
+`extract_match_scoreboard()`:** because team-grouping still requires the demo's `team_num`
+snapshot regardless, and `extract_match_scoreboard()` already gets Kills/Deaths/Assists/
+Headshot-kills from `deaths_df` at effectively zero marginal parsing cost (that dataframe
+is already parsed for the tracked player's own top-level stats — see Tier 9), pulling the
+same numbers from the GC instead doesn't meaningfully reduce compute cost. **The one real,
+new value here is `mvps`** — not obtainable from the demo at all — worth adding to
+`player_scoreboard` as an extra field once `gc-worker` is wired to pass `roundstatsall`'s
+last entry through to `sync_pipeline.py` (not yet built; a genuinely new, separate small
+feature, not a rebuild of what already exists).
+**Sources**: same proto as above, `message CMsgGCCStrike15_v2_MatchmakingServerRoundStats`
+(line 447) and `CMsgGCCStrike15_v2_MatchmakingGC2ServerReserve` (line 396) — cross-checked
+against 10 real captured production responses, 2026-09-02.
+
 ## Academic / open-source layer — the safest tier for anything HLTV-Impact-like
 
 - **`awpy`** (github.com/pnxenopoulos/awpy) — Python library, ~100k
@@ -623,7 +684,87 @@ URL.
   some trackers but not confirmed as standardized, precisely-defined stats
   the way ADR or KAST are. Buildable from existing round-bounds + bomb-plant
   data, but RoundSync would be setting its own methodology.
+- **Full per-player (all 10) match stat table** — basic scoreboard stats
+  (K/D/A, ADR, HS%) are cheap and universal across every source checked;
+  RoundSync's own deep coaching metrics deliberately stay tracked-player-only
+  for compute-cost reasons → §Match Detail: full per-player stat table
 - **Sources**: [steamanalyst.com/tools/cs2-stats](https://www.steamanalyst.com/tools/cs2-stats), [community.skin.club/en/articles/best-cs2-stats-trackers](https://community.skin.club/en/articles/best-cs2-stats-trackers)
+
+### Match Detail: full per-player stat table (researched 2026-08-31, `NEXT_STEPS.md` Band 0 / Tier 15)
+
+**The real blocking question wasn't tracker layout — it was whether
+RoundSync's own pipeline can afford to extract other players' stats at all.**
+Checked the actual code (not assumed): `extract_fact_economy`'s docstring
+states its scope explicitly — *"One row per round for target_steam_id64 only
+(see project memory for why not all 10 players)"* — and the referenced
+memory (`archive/project_match_granularity_discussion_archive.md`) confirms
+this was a deliberate, budget-driven architecture call: *"full per-tick
+extraction for all 10 players across a whole match is computationally
+expensive (hundreds of thousands of rows/match); the chosen design avoids
+that cost entirely."* This governs `fact_economy`/`fact_utility_throw`/
+`fact_adaptation_event`/`fact_positioning_risk`/`fact_duel_placement`/
+`fact_engage_decision` — every one of them leans on `parser.parse_ticks()`,
+a per-tick position/inventory snapshot loop, which is genuinely expensive
+per extra player tracked.
+
+**That constraint does NOT cover basic scoreboard stats.** Kills, deaths,
+assists, and damage come from `player_death`/`player_hurt`, which
+`process_and_parse_real_demo`'s shared pre-parse (`deaths_df`/`hurt_df`,
+Tier 9's dedup fix) already parses **once, for every player in the match**,
+not just the tracked one — each `extract_fact_*` function filters the
+already-parsed dataframe down to `target_steam_id64` afterward; the parse
+itself was never player-scoped. So a basic per-player row (Kills, Deaths,
+Assists via `assister_steamid` — already proven cheap, see Tier 10's
+`total_assists` fix — Damage, ADR, Headshot %, K/D) is derivable for all 10
+players at effectively no extra parsing cost. The expensive, genuinely
+tracked-player-only stats (KAST, trade-kill %, entry success, positioning
+risk, engage decisions) **cannot** be extended to all 10 without hitting the
+exact cost wall the architecture was built to avoid, and shouldn't be
+attempted for this table.
+
+**Tracker layout research — partial, with a real tooling limitation, same
+category as Tier 12's Reddit/HLTV-forums 403s:** HLTV and csstats.gg
+blocked automated fetches outright (403); Leetify, Scope.gg, and tracker.gg
+render their scoreboards client-side (their static HTML has no player data
+in it), so their exact pixel layout/column order couldn't be independently
+verified through available tooling. What WAS confirmed from real, reachable
+sources:
+- **The native CS2 in-game scoreboard** (which every third-party tracker
+  extends rather than reinvents) tracks, per player: Kills, Deaths, Assists,
+  HS%, DMG, UD (Utility Damage), EF (Enemies Flashed), KDR, ADR — confirmed
+  via [prosettings.net/blog/cs2-scoreboard](https://prosettings.net/blog/cs2-scoreboard/).
+- **HLTV's match-page headline columns** are Rating (3.0 as of August 2025),
+  ADR, KAST, and K-D — confirmed via
+  [hltv.org/news/42485/introducing-rating-30](https://www.hltv.org/news/42485/introducing-rating-30)
+  and [cs2bet.io/cs2-stats](https://www.cs2bet.io/cs2-stats/); exact
+  left-to-right column order/team-grouping not independently confirmed
+  (source blocked).
+- **Leetify's own stat catalog** is far deeper (Leetify Rating, Crosshair
+  Placement, Time to Damage, per-flash breakdowns, Trade Kill/Traded Death
+  funnels with opportunity/attempt/success sub-stages) — confirmed via
+  [leetify.com/blog/leetify-stats-glossary](https://leetify.com/blog/leetify-stats-glossary/)
+  — but these are all *personal*, tracked-player-only stats in Leetify too
+  (their glossary never describes them as shown for all 10 players); no
+  confirmed evidence any tracker actually runs its full advanced-metrics
+  catalog for non-tracked opponents either, which lines up with the same
+  compute-cost logic RoundSync already applied.
+- One universal convention held across every source that could be checked
+  at all, including the native game itself: **one row per player, all 10
+  visible at once, grouped 5-and-5 by team** — not a sorted flat list, not
+  paginated.
+
+**RoundSync verdict / recommended scope — BUILT, 2026-09-02:** a basic,
+scoreboard-level per-player table (Kills, Deaths, Assists, Damage, ADR,
+Headshot %, K/D) for all 10 players, grouped by team, exactly as
+recommended here. Implementation: `extract_match_scoreboard()` in
+`sync_pipeline.py`, `telemetry.player_scoreboard`, rendered by
+`ScoreboardTable` in `frontend/app/matches/[matchId]/page.tsx` — full detail
+in `NEXT_STEPS.md`'s Tier 15. Did **not** extend RoundSync's own deep
+coaching metrics (KAST, trade-kill %, entry success, positioning risk) to
+non-tracked players, per this section's own warning — that would have
+silently reintroduced the exact per-tick cost the existing architecture was
+built to avoid.
+- **Sources**: [prosettings.net/blog/cs2-scoreboard](https://prosettings.net/blog/cs2-scoreboard/), [hltv.org/news/42485/introducing-rating-30](https://www.hltv.org/news/42485/introducing-rating-30), [cs2bet.io/cs2-stats](https://www.cs2bet.io/cs2-stats/), [leetify.com/blog/leetify-stats-glossary](https://leetify.com/blog/leetify-stats-glossary/)
 
 ## Checked and found no industry precedent — would be a genuine RoundSync original
 

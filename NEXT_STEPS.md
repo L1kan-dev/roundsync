@@ -70,13 +70,19 @@ other item below marked done-but-not-yet-pushed is now live; verify
 
 ## Recommended Priority Order — the Bands, read this to pick what's next
 
-**Band 0 — UI/UX stabilization pass. IN PROGRESS, scope REVERTED back to
-narrow 2026-08-31.** The tooltip/glossary cluster (4 of Tier 15's items —
-tooltip styling consistency, Home's trend-chart glossary, Insights'
-reaction-rate-chart glossary, and full Insights tile glossary coverage) is
-done as of 2026-08-31; the rest of Tier 15's list is still open. Numbered 0
-deliberately, out of the
-Bands' normal chronological sequence. **Scope history, so this doesn't read
+**Band 0 — UI/UX stabilization pass. DONE, 2026-09-02.** All 8 of Tier 15's
+items are done: the original tooltip/glossary cluster (tooltip styling
+consistency, Home's trend-chart glossary, Insights' reaction-rate-chart
+glossary, full Insights tile glossary coverage), a second pass the same day
+2026-08-31 (rank badge centering, tile-gradient consistency, the
+round-by-round horizontal/3D layout, the back-button history bug, Insights'
+dead-whitespace/tile-sizing fix, the new Economy & Utility trend charts, and
+the AI Coach tone rewrite), and finally the per-player stat table (built
+2026-09-02, after its own dedicated research pass — see Tier 15 below).
+**Not yet committed** — built and verified live, holding per the user's
+explicit instruction (2026-09-02) to wait until they've tested it
+themselves before anything in this batch gets committed. Numbered 0
+deliberately, out of the Bands' normal chronological sequence. **Scope history, so this doesn't read
 as inconsistent later:** started 2026-08-31 as a narrow "UI/UX
 stabilization pass" (consolidate the known tooltip/tile/glossary bugs into
 one pass, user's words: "get it to a version 2.0 or 3.0"). Same day, widened
@@ -729,34 +735,102 @@ each item).
       All 4 Trends charts (K/D Ratio, ADR, Headshot %, Performance Index)
       now show an Info icon next to their title, reusing the same shared
       tooltip instances the KPI tiles above already use.
-- [ ] **Match Detail: rank badge number isn't centered** inside the badge
-      asset (visual bug, not a data bug).
-- [ ] **Tiles don't apply their position-based color gradient consistently.**
-      Some tiles are supposed to shift color by their position on the page;
-      not currently applied everywhere it should be.
-- [ ] **Match Detail: round-by-round section needs a layout overhaul.**
-      User's specific ask: horizontal orientation instead of the current
-      layout, and every tile in the match-detail page should read as "3D"
-      (visual depth/styling), not flat.
-- [ ] **Match Detail: missing a full per-player stat table.** No comparison
-      table of every player's stats for the match exists anywhere in the
-      app right now (only the tracked user's own numbers are shown).
-      **Needs real research** (same rigor as `CS2_ANALYTICS_STANDARDS.md`'s
-      other research, not a guess) into how other trackers (Leetify, HLTV,
-      Scope.gg, tracker.gg) lay this out before building — user explicitly
-      asked for this to be researched, not assumed.
-- [ ] **Browser back button goes to Home, not back to the Matches tab** the
-      user actually came from — a navigation/history-state bug on the
-      match-detail route.
-- [ ] **Insights: dead empty space next to the Consistency/Impact tiles**,
-      and inconsistent tile sizing across the page generally.
+- [x] **Match Detail: rank badge number isn't centered — DONE, 2026-08-31.**
+      The visible badge face is the slanted trapezoid
+      `M178 0H33.9996L22 64H166L178 0Z`, whose true horizontal center at
+      mid-height is x=100 — the old text was drawn at x=106/107, centered
+      against the badge's outer bounding box rather than the actual slanted
+      shape. `frontend/components/RankBadge.tsx`'s two `<text>` elements
+      recentered to x=100/101 (main/shadow), y=31/33 (vertical center of the
+      0-64 face), same relative emboss offset preserved.
+- [x] **Tiles don't apply their position-based color gradient consistently —
+      DONE, 2026-08-31.** Root cause: the match-detail page's `StatTile` and
+      its Multi-Kill/Wins-Losses/Kills-by-Distance/Weapon-Breakdown sections
+      were the one place in the app still using a flat `bg-[var(--panel)]`
+      box instead of the shared `chip3d` + `ctTAccent()` position-based
+      duel-color treatment every other page (Home's KPI row, every Insights
+      `StatTile`, the Matches-tab cards) already uses. Same root cause as the
+      round-by-round item below — fixed together in
+      `frontend/app/matches/[matchId]/page.tsx`.
+- [x] **Match Detail: round-by-round section needs a layout overhaul — DONE,
+      2026-08-31.** Rebuilt as a horizontal scrollable row of `RoundCard`s
+      (was a vertical stack), each using the shared `chip3d` bevel treatment
+      so it reads as 3D like the rest of the app — win/loss keeps its own
+      semantic color (cyan/danger) as `--c` rather than a purely positional
+      accent, since a round's color here means something. Also converted the
+      "Isolated" tag off its last native `title=` popup onto the shared
+      `useHoverTooltip`, caught while already rebuilding this section.
+- [x] **Match Detail: full per-player stat table — DONE, 2026-09-02.** Built
+      exactly to the researched scope (`CS2_ANALYTICS_STANDARDS.md`'s "Match
+      Detail: full per-player stat table" section): a basic K/D/A/ADR/HS%
+      table for all 10 players, grouped 5-and-5 by team, NOT extending
+      KAST/trade%/positioning-risk to non-tracked players. New
+      `extract_match_scoreboard()` in `sync_pipeline.py` (right before
+      `capped_damage_sum`) aggregates the already-shared `deaths_df`/
+      `hurt_df` per player — no new parsing beyond one extra
+      `parser.parse_ticks(["team_num"], ticks=freeze_ticks)` call for roster/
+      team assignment (reusing the same pattern `extract_fact_utility_throw`/
+      `extract_match_secondary_metrics` already use locally). Names recovered
+      from `player_death`'s `attacker_name`/`user_name`/`assister_name`
+      columns; a player with zero kills/deaths/assists the whole match (rare)
+      falls back to a truncated-steamid label instead of vanishing from the
+      table. Stored as `telemetry.player_scoreboard`, added to `Telemetry` in
+      `frontend/lib/matchStats.ts`. Frontend: new `ScoreboardTable` component
+      in `frontend/app/matches/[matchId]/page.tsx`, reusing the app's
+      existing CT-cyan/T-amber convention (`duelLerp(0)`/`duelLerp(1)`) rather
+      than inventing new colors, with the tracked player's own row bolded.
+      Since this is computed at sync time only, older already-synced matches
+      won't have it — the UI shows "unavailable for this match... re-sync to
+      include it" rather than a false-empty table.
+      **Verified live** (headed Playwright via `run-frontend`'s
+      `mock-match-detail.mjs`, extended with a full 10-player mock roster):
+      `npx tsc --noEmit` clean, 0 console errors, CT/T grouping and accent
+      colors render correctly, tracked player's row highlighted. Not yet
+      verified against a real downloaded demo's actual parser output (no
+      local demo file available this session) — the aggregation logic itself
+      mirrors the already-proven `total_kills`/`total_deaths`/
+      `capped_damage_sum` patterns used elsewhere in the same function, not
+      new parsing logic.
+      **Real follow-up finding, same day**: `gc-worker` already fetches
+      `roundstatsall` (for the demo URL) whose last entry carries an official
+      Kills/Deaths/Assists/MVPs/headshot-kills/multi-kills scoreboard for all
+      10 players, confirmed against Valve's real current proto — see
+      `CS2_ANALYTICS_STANDARDS.md`'s "Game Coordinator match resolution"
+      section for the field names and what's still unverified (team-split by
+      slot). A real future cost optimization (skip the demo-parse path for
+      everything but ADR), not a correction to what's built — needs a real
+      captured `roundstatsall` response before writing code against it.
+- [x] **Browser back button goes to Home, not back to the Matches tab — DONE,
+      2026-08-31.** Root cause: the match-detail page's own Back button (and
+      its error-state fallback) hard-navigated to `/` via `router.push('/')`
+      instead of returning to wherever the user actually came from. Since
+      Home's tab switcher already pushes a real history entry per tab
+      (`?tab=matches`), the fix was just using `router.back()` instead —
+      verified live (headed Playwright): clicking Back from the match-detail
+      page lands on `/?tab=matches`, not Home.
+- [x] **Insights: dead empty space next to the Consistency/Impact tiles —
+      DONE, 2026-08-31.** The "Aim & Reaction" subtab's 2-column grid had 3
+      `InsightCard`s (Crosshair Placement, Reaction to Information,
+      Consistency & Impact) followed by an already-full-width chart —
+      leaving Consistency & Impact alone in its row with an empty cell next
+      to it. Added a `wide` prop to `InsightCard` (`lg:col-span-2`) and
+      applied it to that card instead of inventing a 4th filler card.
 - [x] **Insights: "Reaction rate over time" chart has no glossary — DONE,
       2026-08-31.** Info icon added next to the header, explaining what
       "reacted within 3s" means (new `STAT_GLOSSARY.reactedWithin3s`).
-- [ ] **Insights: Economy and Utility section has no trending chart** (other
-      sections on the same page do). Still open — a real new chart/feature,
-      not a glossary fix, so deliberately not bundled into the glossary pass
-      below.
+- [x] **Insights: Economy and Utility section has no trending chart — DONE,
+      2026-08-31.** `fact_economy`/`fact_utility_throw` rows were already
+      being fetched every request for the "Buy Decisions"/"Utility
+      Effectiveness" summary tiles, just never aggregated per match into a
+      trend series the way `fact_adaptation_event`/`fact_positioning_risk`
+      already were for the other 2 subtabs. Extended `buildTrends()`
+      (`services/api/server.js`) with `economy`/`utility` series (against-
+      team-economy % and team-flash %, same mismatch/team-flash definitions
+      as `summarizeEconomy`/`summarizeUtility`, aggregated per match instead
+      of across the whole window) and added two new wide `TrendChart`s to
+      the "Economy & Utility" subtab — two separate charts, not one merged
+      line, since the two metrics come from different fact tables with no
+      shared unit to overlay meaningfully.
 - [x] **Insights: every tile is missing a glossary entry — DONE, 2026-08-31.**
       Extended `STAT_GLOSSARY` with 15 new entries (grounded in the real
       backend definitions in `services/api/server.js`, not guessed —
@@ -771,9 +845,8 @@ each item).
       is a chart rather than individual tiles. "Positioning Decisions Over
       Time" deliberately left without a duplicate tooltip — it already has
       its own caption text explaining "Good Push Rate" below the chart.
-- [ ] **AI Coach responses read like a raw-telemetry report, not a coach
-      talking to a player — user-reported 2026-08-31, explicitly wants it
-      folded into this same Band 0 pass, not fixed separately.** Root cause
+- [x] **AI Coach responses read like a raw-telemetry report, not a coach
+      talking to a player — FIXED, 2026-08-31.** Root cause
       confirmed in `services/api/server.js`'s `/api/coaching/ask` prompt
       (around line 997): the current instruction is purely mechanical
       field-name translation (append "°"/"ms"/"%" to a raw key, never repeat
@@ -802,15 +875,141 @@ each item).
          talk like a teammate reviewing the game together rather than
          producing a clinical report (real transcript had section headers
          like "The Telemetry Diagnostics" and "The Tactical Reality").
-      **Recommended direction, not yet built:** do the humanization as real
-      math in `server.js` before the prompt is built (meters conversion,
-      a `time_to_damage_ms` bucket that phrases sub-tick hits in words
-      rather than a raw "0"), not left to the LLM to compute — then rewrite
-      the prompt's interpretation/tone rules on top of correct pre-converted
-      numbers, same "do the arithmetic in code, let the model only narrate"
-      principle the rest of this codebase already follows for stats. Should
-      be scoped and built as part of this same Band 0 pass per the user's
-      explicit instruction, not as a standalone quick patch.
+      **Fix, built as real math in `server.js`, not left to the LLM to
+      compute:** new `humanizeRoundsForCoach()` (`services/api/server.js`,
+      right after `fetchRoundByRoundForMatch`) transforms the same raw
+      `select('*')` fact-table rows the match-detail page fetches into what
+      actually gets sent to Gemini for `/api/coaching/ask` specifically
+      (the match-detail page itself is untouched — its own UI already picks
+      the fields it renders). New `CS2_UNITS_PER_METER = 52.49` constant
+      mirrors `sync_pipeline.py`'s exactly. `nearest_teammate_distance_units`/
+      `nearest_enemy_distance_units` convert to real meters
+      (`nearest_*_distance_meters`, `round1`'d). `time_to_damage_seconds`
+      becomes a worded `time_to_damage`: below ~16ms (one 64-tick-rate tick)
+      it reads "landed almost the instant the player fired (same game
+      tick)" instead of a literal `0.00`; otherwise a plain `"NNNms after
+      the opening shot"`. Also drops the columns that were never meant to
+      be player-facing in the first place (tick numbers, X/Y/Z world
+      coordinates, per-round rank ids, and — a real privacy improvement
+      caught along the way — every remaining enemy's real steamid from
+      `fact_engage_decision`'s `enemies_components`, which had no reason to
+      leave the server at all). The prompt's system instruction was rewritten
+      from "expert, direct, and tactical coach" + a purely mechanical
+      field-name-translation rule to explicitly frame the model as "a sharp
+      CS2 teammate reviewing this player's own games with them," ban
+      report-style section headers, and state that per-round data already
+      arrives in real-world units/worded phrases so the model must never
+      invent its own unit conversion. **Verified two ways:** `node --check`
+      passed, and `humanizeRoundsForCoach`'s real math was checked against 4
+      constructed before/after cases (a same-tick 0.00s hit, a real 310ms
+      hit, a real 925/410-unit distance pair independently hand-verified as
+      17.6m/7.8m, and a null-safety case) — all 4 assertions passed, not
+      just "the code looks right." Not independently verified against a
+      real live Gemini call (would need the production `GEMINI_API_KEY`,
+      out of scope for local verification) — the prompt-construction logic
+      and its inputs are what were checked.
+
+## Tier 16 — Live-testing feedback on the full stack, 2026-09-02
+
+User ran the full local stack (`api` + `frontend`, `gc-worker` deliberately excluded —
+see `project_gc_worker_operations.md`) for the first time since Band 0 and reported 7
+issues across Home/Matches/Insights/AI Coach. Investigated each against real code/data
+before acting, per standing rule — two turned out not to be bugs:
+
+- **NOT bugs, confirmed via a real Supabase query**: "assists show —" and "Full Scoreboard
+  unavailable" are both the correct fallback on real data — every match in production was
+  parsed 2026-08-24/08-27, before `total_assists` (2026-08-30) or `player_scoreboard`
+  (2026-09-02) existed, and nothing has re-synced since (can't, locally, without
+  `gc-worker`). Resolves once a match syncs in production after these fixes ship.
+- **NOT a bug, confirmed via code**: the Reaction Rate / Buy Decisions / Utility
+  Effectiveness trend-chart line gradient (cyan -> grey -> amber) already exists
+  (`TrendChart`'s `linearGradient`, `InsightsDashboard.tsx`) and the reaction tooltip
+  already formats as `%`, not seconds/ms.
+
+- [x] **Every stat tile app-wide was silently hoverable with zero visual cue — DONE.**
+      Added a small Info icon next to the label on every `StatTile`-shaped component
+      (`InsightsDashboard.tsx`, match-detail's `StatTile`) and every bespoke KPI tile in
+      Home's 3 grid rows (`app/page.tsx`) — this was the root cause behind most of the
+      "missing glossary" reports; the explanations were already wired, just undiscoverable.
+- [x] **Home: Multi-Kill Rounds tile had no tooltip at all — DONE.** The one KPI tile in
+      its row with no `useHoverTooltip` wired up; added `multiKillTooltip` using the
+      existing `STAT_GLOSSARY.multiKillRounds`.
+- [x] **Insights: "Buy Decisions" mix bar gave the native browser tooltip — DONE.**
+      `LoadoutMixBar` used a raw `title=` attribute (missed by Tier 15's tooltip sweep
+      since it's data-driven, not a static call site) — swapped for the app's custom
+      tooltip, one `useHoverTooltip` per fixed `LOADOUT_ORDER` key, with a new
+      `LOADOUT_GLOSSARY` mirroring `sync_pipeline.py`'s real `classify_loadout_tier()`
+      logic, not guessed.
+- [x] **Insights: "Utility Effectiveness" split bar had no tooltip at all — DONE.**
+      `EmphasisBar` had zero tooltip mechanism; added an optional `title` + Info icon,
+      new `STAT_GLOSSARY.teamFlashSplit` entry.
+- [x] **AI Coach tone — DONE.** User feedback: reads as a "passive-aggressive friend,"
+      implies false continuity ("next time we play..."), and lost all markdown structure
+      (`page.tsx`'s `ReactMarkdown`/`markdownComponents` already style `**bold**` cyan and
+      headers — confirmed this was a prompt problem, not a frontend rendering bug). Prompt
+      (`server.js`, `/api/coaching/ask`) reframed as "coach reviewing footage," explicitly
+      forbidden from implying it was in the match or will be in the next one ("we" ->
+      "you"/"your team"), and now explicitly required to (a) bold the few numbers/verdicts
+      that matter and (b) end with 2-3 concrete practiceable action items — without
+      reverting to the report-style headers the previous fix correctly banned.
+- [x] **`mock-home.mjs` testing-infra bug, found while verifying the above — DONE.**
+      Never mocked `/api/user/lifetime-stats`; against a bare frontend-only dev server this
+      silently no-op'd (network error, not a real HTTP response), but against a REAL `api`
+      backend it returns a genuine 401/403, which `page.tsx`'s shared error handling reads
+      as "session invalid" and calls `handleLogout()` — silently bouncing the whole script
+      back to the logged-out landing page before anything else could render. Added the
+      missing route mock.
+- **Real finding, verified against 10 real captured responses, 2026-09-02** — `gc-worker`
+  already fetches `roundstatsall` (for the demo URL), and its last entry has a real
+  `mvps` field (confirmed populated, e.g. `[4,4,2,2,1,0,1,3,0,0]`) with no demo-based
+  equivalent anywhere in `sync_pipeline.py` — a genuinely new stat, not yet added.
+  **Smaller win than first hoped, though**: confirmed via the same real captures that
+  neither `roundstatsall` nor `reservation` carries a per-player team (CT/T) field, so
+  team-grouping still needs the demo's `team_num` regardless, and Kills/Deaths/Assists/
+  headshot-kills are already effectively free from `deaths_df` (already parsed for the
+  tracked player) — pulling those same numbers from the GC instead wouldn't meaningfully
+  cut cost. `extract_match_scoreboard()` stays the right primary source; only `mvps` is
+  worth adding as a genuinely new field later. Full field-level detail in
+  `CS2_ANALYTICS_STANDARDS.md`'s "Game Coordinator match resolution" section.
+- **Deferred, needs the user's specifics before touching it**: Match Detail's Round-by-Round
+  section — "hard to read/understand," not yet actionable without concrete detail on what
+  specifically reads poorly.
+
+**Two real, unrelated production bugs found while the bulk resync above was running (user
+noticed one match stuck at "1793s elapsed"), both fixed live, 2026-09-02:**
+- [x] **`prune_old_matches()` (`watcher.py`) could never delete a match with any `fact_*`
+      rows — FIXED via a real DB migration.** All 6 `fact_*` tables' `match_id` foreign key
+      had `delete_rule = NO ACTION` (confirmed via `information_schema`, not assumed) — any
+      delete touching a match with fact rows failed outright with a `23503` violation, and
+      since `prune_old_matches()` deletes its whole `to_delete` batch in one `.in_()` call,
+      **one bad match blocked every other match in that same prune pass from being cleaned
+      up too**. Migration `cascade_delete_fact_tables_on_match_delete` added `ON DELETE
+      CASCADE` to all 6 constraints (`fact_adaptation_event`, `fact_duel_placement`,
+      `fact_economy`, `fact_engage_decision`, `fact_positioning_risk`,
+      `fact_utility_throw`) — verified via `get_advisors` (no new security lints) and a
+      direct `information_schema` re-check (all 6 now show `delete_rule = CASCADE`).
+- [x] **One match hung indefinitely in `downloading` status — unstuck, root cause
+      identified but the underlying gap (no timeout on the CDN stream) not yet fixed.**
+      `CSGO-7KRG2-6PzXc-53GS2-dvWdZ-wkYHK` sat in `status: "downloading"` for ~30 minutes
+      with no `✅ Successfully processed` or error line ever printed for it in
+      `watcher` logs — `sync_pipeline.py`'s `process_and_parse_real_demo()` writes
+      `"downloading"` as its very first DB write, then streams the demo from Valve's CDN
+      with no timeout on that step, so a slow/stalled stream can hang forever with nothing
+      to recover it. Manually reset (`status` -> `pending_download`, `parsed_at` -> now) so
+      `watcher`'s normal queue picks it up again. **Real follow-up, not yet built**: add an
+      actual timeout (and a retry/backoff path, same shape as `gc-worker`'s
+      `resolve_attempts`/`next_retry_at`) around the CDN stream step so this can't hang
+      indefinitely again.
+- **Side effect of the bulk resync itself**: resetting all 10 matches' `status` back to
+  `pending_url` without also refreshing `parsed_at` made the (correct, pre-existing)
+  48-hour stuck-match detector in `prune_old_matches()` see them as abandoned — this is
+  what surfaced the FK bug in the first place, not something the resync broke on its own.
+
+All of the above verified live (headed/headless Playwright against the real
+`docker-compose` `api`+`frontend` stack, not just the frontend-only dev server) —
+`npx tsc --noEmit` clean, `node --check server.js` clean, 0 console errors on Home/
+Insights(aim)/Insights(resources)/match-detail. **Not committed** — holding per the
+user's explicit instruction to wait until they've tested Band 0 themselves.
 
 ## Already confirmed correct, no action needed
 

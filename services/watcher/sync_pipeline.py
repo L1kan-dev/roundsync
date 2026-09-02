@@ -48,6 +48,80 @@ def parse_event(parser, event_name, **kwargs):
     return result
 
 
+def extract_match_scoreboard(deaths_df, hurt_df, team_snap, freeze_ticks: list, rounds_played: int) -> list:
+    """Basic scoreboard-level stats (Kills, Deaths, Assists, Damage, ADR, HS%, K/D) for EVERY
+    player in the match, not just target_steam_id64 — NEXT_STEPS.md Band 0 / Tier 15's per-
+    player stat table. Deliberately does NOT extend RoundSync's own deep coaching metrics
+    (KAST, trade-kill %, positioning risk) to non-tracked players — that would reintroduce the
+    exact per-tick extraction cost `fact_economy` and friends were scoped to target_steam_id64
+    only to avoid (see CS2_ANALYTICS_STANDARDS.md's "Match Detail: full per-player stat table"
+    section). Cheap because it's pure aggregation of deaths_df/hurt_df, which the shared
+    pre-parse already covers for every player, not just the tracked one — no extra parsing.
+
+    Roster + team assignment comes from team_snap (already parsed once for other extractors,
+    passed in here) at the LAST freeze tick, so a player is grouped under whichever side they
+    finished the match on. Names are recovered from player_death's attacker_name/user_name/
+    assister_name columns (team_snap itself only carries steamid/team_num, no name) — a player
+    with zero kills, zero deaths, and zero assists the entire match (a genuinely rare edge case)
+    falls back to a truncated steamid label rather than silently vanishing from the table.
+    """
+    if team_snap.empty or not freeze_ticks:
+        return []
+
+    roster = team_snap[team_snap["tick"] == freeze_ticks[-1]]
+    if roster.empty:
+        return []
+
+    name_by_steamid = {}
+    if not deaths_df.empty:
+        if {"attacker_steamid", "attacker_name"}.issubset(deaths_df.columns):
+            named = deaths_df.dropna(subset=["attacker_steamid", "attacker_name"])
+            name_by_steamid.update({str(sid): name for sid, name in zip(named["attacker_steamid"], named["attacker_name"])})
+        if {"user_steamid", "user_name"}.issubset(deaths_df.columns):
+            named = deaths_df.dropna(subset=["user_steamid", "user_name"])
+            name_by_steamid.update({str(sid): name for sid, name in zip(named["user_steamid"], named["user_name"])})
+        if {"assister_steamid", "assister_name"}.issubset(deaths_df.columns):
+            named = deaths_df.dropna(subset=["assister_steamid", "assister_name"])
+            name_by_steamid.update({str(sid): name for sid, name in zip(named["assister_steamid"], named["assister_name"])})
+
+    rows = []
+    for _, r in roster.iterrows():
+        steamid = str(r["steamid"])
+        team = "CT" if int(r["team_num"]) == 3 else "T"
+
+        kills = deaths = assists = headshots = 0
+        if not deaths_df.empty:
+            if "attacker_steamid" in deaths_df.columns:
+                my_kills = deaths_df[deaths_df["attacker_steamid"].astype(str) == steamid]
+                kills = len(my_kills)
+                if "headshot" in my_kills.columns:
+                    headshots = len(my_kills[my_kills["headshot"] == True])
+            if "user_steamid" in deaths_df.columns:
+                deaths = len(deaths_df[deaths_df["user_steamid"].astype(str) == steamid])
+            if "assister_steamid" in deaths_df.columns:
+                assists = len(deaths_df[deaths_df["assister_steamid"].astype(str) == steamid])
+
+        damage = 0.0
+        if not hurt_df.empty and "attacker_steamid" in hurt_df.columns and "dmg_health" in hurt_df.columns:
+            damage = capped_damage_sum(hurt_df[hurt_df["attacker_steamid"].astype(str) == steamid])
+
+        rows.append({
+            "steam_id64": steamid,
+            "name": name_by_steamid.get(steamid, f"Player …{steamid[-4:]}"),
+            "team": team,
+            "kills": kills,
+            "deaths": deaths,
+            "assists": assists,
+            "damage": round(damage),
+            "adr": round(damage / rounds_played, 1) if rounds_played > 0 else 0.0,
+            "headshot_pct": round((headshots / kills) * 100, 1) if kills > 0 else 0.0,
+            "kd_ratio": round(kills / max(1, deaths), 2),
+        })
+
+    rows.sort(key=lambda r: (r["team"], -r["kills"]))
+    return rows
+
+
 def capped_damage_sum(hurt_rows) -> float:
     """Sum a set of player_hurt rows' dmg_health, capping each individual hit at 100 first —
     a single hit can't deal more than a player's full health, but the raw field sometimes
@@ -175,15 +249,15 @@ GRENADE_DETONATE_EVENTS = {
 }
 
 
-def extract_fact_utility_throw(parser, target_steam_id64: str, freeze_ticks: list, fire_df, hurt_df, death_df) -> list:
+def extract_fact_utility_throw(parser, target_steam_id64: str, freeze_ticks: list, fire_df, hurt_df, death_df, team_snap) -> list:
     """One row per grenade thrown by target_steam_id64 only (same scoping rule as fact_economy).
-    freeze_ticks/fire_df/hurt_df/death_df are parsed once by the caller and shared across every
-    extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
+    freeze_ticks/fire_df/hurt_df/death_df/team_snap are parsed once by the caller and shared
+    across every extract_fact_* function instead of each one re-parsing it independently
+    (Tier 9; team_snap itself joined this sharing 2026-09-02 alongside the per-player
+    scoreboard table, having been the one shared event still re-parsed 3x independently)."""
     rows = []
     target = str(target_steam_id64)
     try:
-        team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
-
         throws = []
         for event_name, label in GRENADE_DETONATE_EVENTS.items():
             try:
@@ -567,20 +641,20 @@ def _resolve_bomb_sites_by_elevation(code_to_positions: dict, callouts: list):
 
 
 def extract_fact_adaptation_event(parser, target_steam_id64: str, freeze_ticks: list, death_df, round_end_df,
-                                   bomb_site_callouts: list = None) -> list:
+                                   team_snap, bomb_site_callouts: list = None) -> list:
     """One row per teammate-death, bomb-plant, or enemy-audible-movement trigger for
     target_steam_id64 only (same scoping rule as fact_economy/fact_utility_throw). Bomb-plant
     "opposite site" filtering is NOT applied here — distance_to_plant_units is stored as a raw
     fact and thresholded later, same facts-vs-rules split as reaction_time_seconds itself.
-    freeze_ticks/death_df/round_end_df are parsed once by the caller and shared across every
-    extract_fact_* function instead of each one re-parsing it independently (Tier 9)."""
+    freeze_ticks/death_df/round_end_df/team_snap are parsed once by the caller and shared
+    across every extract_fact_* function instead of each one re-parsing it independently
+    (Tier 9; team_snap itself joined this sharing 2026-09-02)."""
     rows = []
     bomb_site_callouts = bomb_site_callouts or []
     # raw `site` code -> resolved letter, built and sanity-checked in the bomb-plant block below.
     _raw_code_to_resolved_site = {}
     target = str(target_steam_id64)
     try:
-        team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
 
         if death_df.empty or "user_steamid" not in death_df.columns:
             return rows
@@ -1224,11 +1298,12 @@ def extract_fact_engage_decision(parser, target_steam_id64: str, freeze_ticks: l
     return rows
 
 
-def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df, bomb_planted_df, hurt_df, fire_df, fire_bullets_df) -> dict:
+def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks: list, round_end_df, deaths_df, bomb_planted_df, hurt_df, fire_df, fire_bullets_df, team_snap) -> dict:
     """Home-dashboard/Insights KPI tiles, computed once per match from data already parsed here
-    (freeze_ticks/round_end_df/deaths_df/bomb_planted_df/hurt_df are all passed in so this
-    doesn't re-run parse_event() a second time for events every other extract_fact_* function
-    already shares — Tier 9). Every value defaults to None and is left out of the telemetry blob
+    (freeze_ticks/round_end_df/deaths_df/bomb_planted_df/hurt_df/team_snap are all passed in so
+    this doesn't re-run parse_event()/parse_ticks() a second time for events every other
+    extract_fact_* function already shares — Tier 9, team_snap joined 2026-09-02). Every value
+    defaults to None and is left out of the telemetry blob
     by the caller when it couldn't be computed — same optional-field/graceful-fallback pattern as
     total_damage/headshots/rounds_played already use, so older already-parsed matches just show
     nothing for a tile instead of a fake zero."""
@@ -1254,8 +1329,6 @@ def extract_match_secondary_metrics(parser, target_steam_id64: str, freeze_ticks
 
         if deaths_df.empty or "user_steamid" not in deaths_df.columns or "attacker_steamid" not in deaths_df.columns:
             return metrics
-
-        team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks)
 
         # --- 1. Entry Success % — win rate of the FIRST death of the round, for either side,
         # when target was one of the two people involved (the killer or the victim). Rounds
@@ -1845,6 +1918,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         bullet_hit_df = pd.DataFrame()
         slot_to_steamid = {}
         bomb_planted_df = pd.DataFrame()
+        team_snap = pd.DataFrame()
         try:
             round_end_df = parse_event(parser, "round_end")
             fire_df = parse_event(parser, "weapon_fire")
@@ -1853,8 +1927,17 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             bullet_damage_df = parse_event(parser, "bullet_damage")
             slot_to_steamid = _build_slot_to_steamid_map(bullet_hit_df, bullet_damage_df)
             bomb_planted_df = parse_event(parser, "bomb_planted")
+            # team_snap (steamid/team_num at every freeze tick) used to be independently
+            # re-parsed inside extract_fact_utility_throw, extract_fact_adaptation_event, AND
+            # extract_match_secondary_metrics — the same "every extract_fact_* re-parses the
+            # same base event" pattern Tier 9 already fixed for round_freeze_end/player_death/
+            # weapon_fire, just missed for this one tick-snapshot. Parsed once here and passed
+            # into all four call sites (those 3 plus the new extract_match_scoreboard below)
+            # instead, found and fixed together with the per-player scoreboard table since
+            # the new call site would otherwise have been a 4th independent re-parse.
+            team_snap = parser.parse_ticks(["team_num"], ticks=freeze_ticks) if freeze_ticks else pd.DataFrame()
         except Exception as e:
-            print(f"⚠️ Warning parsing shared round_end/weapon_fire/fire_bullets/player_bullet_hit/bomb_planted: {e}")
+            print(f"⚠️ Warning parsing shared round_end/weapon_fire/fire_bullets/player_bullet_hit/bomb_planted/team_snap: {e}")
 
         # Rounds where target got a 2/3/4/5(ace)-kill — pure aggregation of deaths_df, already
         # parsed above; grouped by round via the same _round_for helper every fact_* extractor uses.
@@ -1883,6 +1966,14 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
         headshot_pct = round((headshots / max(1, total_kills)) * 100, 1) if total_kills > 0 else 0.0
         calculated_adr = round(total_damage / max(1, rounds_played), 1) if rounds_played > 0 else 0.0
 
+        # NEXT_STEPS.md Band 0 / Tier 15's per-player stat table — basic scoreboard stats for
+        # all 10 players, not just target_steam_id64. Uses the shared team_snap parsed above.
+        player_scoreboard = []
+        try:
+            player_scoreboard = extract_match_scoreboard(deaths_df, hurt_df, team_snap, freeze_ticks, rounds_played)
+        except Exception as e:
+            print(f"⚠️ Warning building player_scoreboard: {e}")
+
         # Rank at match START (not current rank) for the Recent Matches card — the demo's own
         # rank_update event carries rank_old (pre-match) alongside rank_new (post-match, already
         # used elsewhere). Only ranked Premier matches fire this event, so it's None for
@@ -1891,7 +1982,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
 
         secondary_metrics = extract_match_secondary_metrics(
             parser, target_steam_id64, freeze_ticks, round_end_df, deaths_df, bomb_planted_df, hurt_df,
-            fire_df, fire_bullets_df
+            fire_df, fire_bullets_df, team_snap
         )
 
         fact_economy_rows = extract_fact_economy(parser, target_steam_id64, freeze_ticks)
@@ -1906,7 +1997,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
             except Exception as e:
                 print(f"⚠️ Failed to save fact_economy: {e}")
 
-        fact_utility_rows = extract_fact_utility_throw(parser, target_steam_id64, freeze_ticks, fire_df, hurt_df, deaths_df)
+        fact_utility_rows = extract_fact_utility_throw(parser, target_steam_id64, freeze_ticks, fire_df, hurt_df, deaths_df, team_snap)
         if fact_utility_rows:
             try:
                 for r in fact_utility_rows:
@@ -1919,7 +2010,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 print(f"⚠️ Failed to save fact_utility_throw: {e}")
 
         fact_adaptation_rows = extract_fact_adaptation_event(
-            parser, target_steam_id64, freeze_ticks, deaths_df, round_end_df, bomb_site_callouts
+            parser, target_steam_id64, freeze_ticks, deaths_df, round_end_df, team_snap, bomb_site_callouts
         )
         if fact_adaptation_rows:
             try:
@@ -2003,6 +2094,7 @@ def process_and_parse_real_demo(supabase_client, match_code: str, cdn_url: str, 
                 "counter_strafe_clean_shot_pct": secondary_metrics["counter_strafe_clean_shot_pct"],
                 "headshot_accuracy_pct": headshot_accuracy_pct,
                 "multi_kill_rounds": multi_kill_rounds,
+                "player_scoreboard": player_scoreboard,
                 "processing_seconds": round(time.time() - start_time, 1)
             }
         }

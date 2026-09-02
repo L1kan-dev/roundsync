@@ -56,7 +56,11 @@ interface FactSummary {
   } | null;
 }
 interface MapBreakdownRow { map: string; games: number; avg_kd: number; avg_adr: number; avg_hs_pct: number; avg_performance: number }
-interface TrendPoint { match_id: string; map: string | null; reaction_pct?: number; good_decision_pct?: number }
+interface TrendPoint {
+  match_id: string; map: string | null;
+  reaction_pct?: number; good_decision_pct?: number;
+  against_team_economy_pct?: number; team_flash_pct?: number;
+}
 interface DashboardPayload {
   matchesTracked: number;
   rankNew: number | null;
@@ -64,7 +68,7 @@ interface DashboardPayload {
   factSummary: FactSummary;
   categoryScores: Record<string, number>;
   mapBreakdown: MapBreakdownRow[];
-  trends: { reaction: TrendPoint[]; positioning: TrendPoint[] };
+  trends: { reaction: TrendPoint[]; positioning: TrendPoint[]; economy: TrendPoint[]; utility: TrendPoint[] };
   loadoutMix: Record<string, number>;
   avgKastPct: number | null;
   avgHeadshotAccuracyPct: number | null;
@@ -92,6 +96,14 @@ const LOADOUT_ORDER = ['full_buy', 'half_buy', 'force_buy', 'eco', 'carried_over
 const LOADOUT_LABELS: Record<string, string> = {
   full_buy: 'Full buy', half_buy: 'Half buy', force_buy: 'Force buy', eco: 'Eco', carried_over: 'Carried over',
 };
+// Mirrors sync_pipeline.py's classify_loadout_tier() real logic exactly, not guessed.
+const LOADOUT_GLOSSARY: Record<string, string> = {
+  full_buy: 'Bought a rifle or sniper with armor',
+  half_buy: "Bought a rifle/sniper without armor, or an SMG/shotgun with armor when your team could afford a full buy",
+  force_buy: "Bought an SMG/shotgun without armor, or when your team's economy couldn't afford a full buy",
+  eco: 'Saved money — no rifle, sniper, SMG, or shotgun bought',
+  carried_over: 'Kept gear from the previous round instead of buying new',
+};
 
 function EmptyCard({ label }: { label: string }) {
   return (
@@ -111,12 +123,27 @@ function AskCoachHint() {
   );
 }
 
-function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color, onAsk }: { goodLabel: string; goodValue: number; badLabel: string; badValue: number; color: string; onAsk: () => void }) {
+// `title` had no tooltip mechanism at all before — not even the native `title=` fallback
+// other stray tiles had — so this split bar was reported as glossary-less even though its
+// two labels are fairly self-descriptive; adds the same Info-icon + custom tooltip
+// convention as StatTile, next to whichever label the caller wants explained.
+function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color, onAsk, title }: { goodLabel: string; goodValue: number; badLabel: string; badValue: number; color: string; onAsk: () => void; title?: string }) {
+  const glossary = useHoverTooltip(title || '');
   return (
-    <button type="button" onClick={onAsk} className="w-full text-left cursor-pointer transition-transform hover:-translate-y-0.5">
-      <div className="flex justify-between text-xs text-[var(--text-dim)] mb-1.5">
-        <span>{goodLabel}</span><span>{badLabel}</span>
+    <button
+      type="button"
+      onClick={onAsk}
+      {...(title ? glossary.handlers : {})}
+      className="w-full text-left cursor-pointer transition-transform hover:-translate-y-0.5"
+    >
+      <div className="flex items-center justify-between text-xs text-[var(--text-dim)] mb-1.5">
+        <span>{goodLabel}</span>
+        <span className="flex items-center gap-1">
+          {badLabel}
+          {title && <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />}
+        </span>
       </div>
+      {title && glossary.tooltip}
       <div className="flex h-3.5 rounded-full overflow-hidden border border-[var(--edge)] shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)]">
         <div className="bar3d-h transition-all duration-1000" style={{ '--c': color, width: `${goodValue}%` } as CSSProperties} />
         <div className="bar3d-h transition-all duration-1000" style={{ '--c': 'var(--edge-bright)', width: `${badValue}%` } as CSSProperties} />
@@ -140,6 +167,12 @@ function EmphasisBar({ goodLabel, goodValue, badLabel, badValue, color, onAsk }:
 // StatTiles end up rendered — each JSX <StatTile> is its own component instance with its
 // own hook state, so this doesn't run into the "hook inside a loop" problem a shared parent
 // component would if it tried to call the hook once per array item.
+// The `title` prop used to make the whole tile silently hoverable with zero visual cue that
+// it was interactive at all — a real, app-wide affordance gap flagged directly (2026-09-02
+// live-testing feedback): several tiles that DID have a real glossary explanation wired up
+// were reported as "missing" simply because nothing on screen suggested hovering would do
+// anything. A small Info icon next to the label now makes that discoverable, same fix
+// applied to every StatTile-shaped component across the app in the same pass.
 function StatTile({ label, value, color, onAsk, title }: { label: string; value: string; color: string; onAsk: () => void; title?: string }) {
   const glossary = useHoverTooltip(title || '');
   return (
@@ -150,7 +183,10 @@ function StatTile({ label, value, color, onAsk, title }: { label: string; value:
       className="chip3d border border-[var(--edge)] rounded-xl p-4 text-center cursor-pointer transition-transform hover:-translate-y-0.5"
       style={{ '--c': color } as CSSProperties}
     >
-      <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">{label}</p>
+      <div className="flex items-center justify-center gap-1 mb-1.5">
+        <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)]">{label}</p>
+        {title && <Info className="w-2.5 h-2.5 opacity-50 text-[var(--text-dim)]" />}
+      </div>
       <p className="font-tel text-xl font-bold" style={{ color }}>{value}</p>
       {title && glossary.tooltip}
     </button>
@@ -167,6 +203,14 @@ const LOADOUT_QUESTION: Record<string, (count: number) => string> = {
 
 function LoadoutMixBar({ mix, color, onAsk }: { mix: Record<string, number>; color: string; onAsk: (question: string) => void }) {
   const total = Object.values(mix).reduce((a, b) => a + b, 0);
+  // One hook call per fixed LOADOUT_ORDER key, unconditionally — LOADOUT_ORDER's 5 keys never
+  // change across renders, so this stays a stable hook count even though which keys actually
+  // render (via `entries` below) varies with the player's own data. Replaces a native `title=`
+  // on the bar segments (the plain browser tooltip, inconsistent with the rest of the app —
+  // 2026-09-02 live-testing feedback) with the same custom styled tooltip everywhere else uses.
+  const tooltips = Object.fromEntries(
+    LOADOUT_ORDER.map((k) => [k, useHoverTooltip(LOADOUT_GLOSSARY[k])])
+  ) as Record<string, ReturnType<typeof useHoverTooltip>>;
   if (total === 0) return <EmptyCard label="economy" />;
   const entries = LOADOUT_ORDER.filter((k) => mix[k]).map((k) => [k, mix[k]] as const);
   // Segments share the panel's one side color, shaded lighter/darker per segment so the
@@ -188,7 +232,7 @@ function LoadoutMixBar({ mix, color, onAsk }: { mix: Record<string, number>; col
               width: `${(count / total) * 100}%`,
               borderRight: i < entries.length - 1 ? '2px solid rgba(0,0,0,0.55)' : undefined,
             } as CSSProperties}
-            title={`${LOADOUT_LABELS[key]}: ${count}`}
+            {...tooltips[key].handlers}
           />
         ))}
       </div>
@@ -206,6 +250,7 @@ function LoadoutMixBar({ mix, color, onAsk }: { mix: Record<string, number>; col
           </button>
         ))}
       </div>
+      {LOADOUT_ORDER.map((k) => <React.Fragment key={k}>{tooltips[k].tooltip}</React.Fragment>)}
     </div>
   );
 }
@@ -254,7 +299,7 @@ function ReactionByTriggerChart({ adaptation, color, onAsk }: { adaptation: Reco
 // These two trend charts always live in a full-width, both-columns panel, so — like the
 // Home dashboard's own trend charts — they sweep the full CT cyan → grey → T amber range
 // across their own width rather than sitting at one flat "side" color.
-function TrendChart({ data, dataKey, label, onAsk }: { data: TrendPoint[]; dataKey: 'reaction_pct' | 'good_decision_pct'; label: string; onAsk: (point: TrendPoint) => void }) {
+function TrendChart({ data, dataKey, label, onAsk }: { data: TrendPoint[]; dataKey: 'reaction_pct' | 'good_decision_pct' | 'against_team_economy_pct' | 'team_flash_pct'; label: string; onAsk: (point: TrendPoint) => void }) {
   if (data.length < 2) return <EmptyCard label="trend" />;
   return (
     <div className="h-48">
@@ -433,12 +478,12 @@ const SUB_TABS: { key: SubTab; label: string; icon: React.ElementType }[] = [
 // `info`, when passed, adds a hoverable Info icon next to the card title explaining what
 // the card as a whole measures — for cards whose content is a chart rather than individual
 // StatTiles, so there's nowhere else for a glossary explanation to attach.
-function InsightCard({ icon: Icon, title, color, delay, info, children }: {
-  icon: React.ElementType; title: string; color: string; delay?: string; info?: string; children: React.ReactNode;
+function InsightCard({ icon: Icon, title, color, delay, info, wide, children }: {
+  icon: React.ElementType; title: string; color: string; delay?: string; info?: string; wide?: boolean; children: React.ReactNode;
 }) {
   const infoTooltip = useHoverTooltip(info || '');
   return (
-    <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': color, animationDelay: delay } as CSSProperties}>
+    <div className={`hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in${wide ? ' lg:col-span-2' : ''}`} style={{ '--c': color, animationDelay: delay } as CSSProperties}>
       <div className="flex items-center gap-2 mb-4">
         <Icon className="w-4 h-4" style={{ color }} />
         <h3 className="font-display font-bold text-lg">{title}</h3>
@@ -624,7 +669,12 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
             ) : <EmptyCard label="reaction" />}
           </InsightCard>
 
-          <InsightCard icon={CheckCircle2} title="Consistency & Impact" color={SIDE_LEFT} delay="120ms">
+          {/* `wide` (spans both columns) — this card used to be the odd one out sitting alone
+              in a 2-col grid with only 3 InsightCards, leaving a dead empty cell next to it
+              before the full-width chart below (NEXT_STEPS.md Band 0 / Tier 15's Insights
+              whitespace/tile-sizing item). Spanning it closes the gap instead of adding a
+              4th filler card with nothing real to show. */}
+          <InsightCard icon={CheckCircle2} title="Consistency & Impact" color={SIDE_LEFT} delay="120ms" wide>
             <div className="grid grid-cols-3 gap-3 mb-4">
               <StatTile
                 label="KAST"
@@ -795,6 +845,7 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
                   badValue={factSummary.utility.team_flash_pct || 0}
                   color={SIDE_RIGHT}
                   onAsk={() => onAskCoach(`${factSummary.utility?.team_flash_pct || 0}% of my flashes are team-flashes. Which of my flashbangs blinded my own team?`)}
+                  title={STAT_GLOSSARY.teamFlashSplit}
                 />
                 <div className="grid grid-cols-2 gap-3 mt-4">
                   <StatTile
@@ -816,6 +867,33 @@ export function InsightsDashboard({ jwtToken, onAskCoach }: { jwtToken: string; 
               </>
             ) : <EmptyCard label="utility" />}
           </InsightCard>
+
+          {/* Was the only category subtab with no trend chart below its two cards (Aim gets
+              Reaction Rate Over Time, Decisions gets Positioning Decisions Over Time) — the
+              underlying per-round data (fact_economy/fact_utility_throw) was already being
+              fetched for the tiles above, just never aggregated per match into a trend
+              series (NEXT_STEPS.md Band 0 / Tier 15). Two separate wide charts, not one
+              merged line, since "against team economy %" and "team-flash %" are different
+              metrics from different fact tables with no shared unit to overlay meaningfully. */}
+          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_LEFT, animationDelay: '160ms' } as CSSProperties}>
+            <h3 className="font-display font-bold text-lg mb-4">Buy Decisions Over Time</h3>
+            <TrendChart
+              data={data.trends.economy}
+              dataKey="against_team_economy_pct"
+              label="Against team economy"
+              onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, ${point.against_team_economy_pct}% of my buys were against my team's economy. What was going on that match?`)}
+            />
+          </div>
+
+          <div className="hud-corners chip3d border border-[var(--edge)] rounded-2xl p-6 card-in" style={{ '--c': SIDE_RIGHT, animationDelay: '200ms' } as CSSProperties}>
+            <h3 className="font-display font-bold text-lg mb-4">Utility Effectiveness Over Time</h3>
+            <TrendChart
+              data={data.trends.utility}
+              dataKey="team_flash_pct"
+              label="Team-flashes"
+              onAsk={(point) => onAskCoach(`On ${point.map ? formatMapName(point.map) : 'that match'}, ${point.team_flash_pct}% of my flashbangs were team-flashes. What happened with my flashes that match?`)}
+            />
+          </div>
         </div>
       )}
     </div>

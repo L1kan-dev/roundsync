@@ -65,6 +65,12 @@ await page.route('**/api/user/profile', (route) => route.fulfill({ json: profile
 await page.route('**/api/matches/sync-status', (route) => route.fulfill({ json: syncStatus }));
 await page.route('**/api/matches', (route) => route.fulfill({ json: matches }));
 await page.route('**/api/coaching/history', (route) => route.fulfill({ json: { history: [] } }));
+// Missing before 2026-09-02: against a REAL backend (not just a bare frontend dev server),
+// an unmocked call here gets a genuine 401/403 instead of a network error — and page.tsx's
+// fetchLifetimeStats() calls handleLogout() on any 401/403, silently bouncing this whole
+// script back to the logged-out landing page before "Performance" ever renders. Only ever
+// surfaced once this ran against docker-compose's real `api` container.
+await page.route('**/api/user/lifetime-stats', (route) => route.fulfill({ json: {} }));
 
 await page.addInitScript(() => {
   localStorage.setItem('steamId', '76561198000000000');

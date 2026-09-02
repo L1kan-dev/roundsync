@@ -266,6 +266,66 @@ async function fetchRoundByRoundForMatch(steamId, matchId) {
     }));
 }
 
+// Mirrors sync_pipeline.py's CS2_UNITS_PER_METER exactly — kept in sync deliberately
+// (same convention as performanceIndexServer/performanceIndex above).
+const CS2_UNITS_PER_METER = 52.49;
+
+// Turns fetchRoundByRoundForMatch()'s output (the SAME raw `select('*')` fact-table rows the
+// match-detail page fetches) into what actually gets sent to the AI Coach. Only used for the
+// coaching prompt — the match-detail page keeps consuming the raw rows as before, since its
+// own UI already picks the fields it wants and never dumps the object itself.
+//
+// Root cause of the "reads like a raw-telemetry report" bug (NEXT_STEPS.md Band 0 / Tier 15,
+// user-reported 2026-08-31): fact_duel_placement/fact_positioning_risk/fact_engage_decision
+// rows carry a lot of columns that only make sense to the pipeline that produced them — tick
+// numbers, X/Y/Z world coordinates, per-round rank ids, and (in fact_engage_decision) every
+// remaining enemy's real steamid — and none of that was ever stripped before being handed to
+// Gemini. The model would either read a raw key back verbatim or improvise a phrase for it,
+// which is exactly why real transcripts had section headers like "The Telemetry Diagnostics."
+// This keeps only what a player-facing sentence could actually be built from, converts engine
+// units to real-world ones (meters, milliseconds worded for near-zero values), and drops the
+// rest — the same "do the arithmetic in code, let the model only narrate" principle already
+// used for every stat elsewhere in this file, applied to the one prompt that was skipping it.
+function humanizeRoundsForCoach(rounds) {
+  return rounds.map((r) => ({
+    round_number: r.round_number,
+    duels: r.duels.map((d) => ({
+      engagement_result: d.engagement_result,
+      angle_deviation_deg: d.angle_deviation_deg,
+      // A near-zero time_to_damage_seconds (a hit landing the same tick as the opening shot)
+      // used to round to a literal "0.00", which reads as physically impossible instead of
+      // "as fast as this game can measure." Worded in ms, with an explicit floor phrase below
+      // ~16ms (one 64-tick-rate tick) instead of a raw number the model has to interpret itself.
+      time_to_damage: d.time_to_damage_seconds == null
+        ? null
+        : d.time_to_damage_seconds * 1000 < 16
+          ? 'landed almost the instant the player fired (same game tick)'
+          : `${Math.round(d.time_to_damage_seconds * 1000)}ms after the opening shot`,
+    })),
+    positioning: r.positioning.map((p) => ({
+      outcome: p.outcome,
+      was_traded: p.was_traded,
+      teammate_within_trade_range_at_death: p.teammate_within_trade_range_at_death,
+      // Raw engine units (e.g. "925 units") mean nothing to a player and were never converted
+      // before this fix — either repeated verbatim or silently (and unreliably) converted by
+      // the model itself. Real conversion constant, not guessed.
+      nearest_teammate_distance_meters: p.nearest_teammate_distance_units == null ? null : round1(p.nearest_teammate_distance_units / CS2_UNITS_PER_METER),
+      nearest_enemy_distance_meters: p.nearest_enemy_distance_units == null ? null : round1(p.nearest_enemy_distance_units / CS2_UNITS_PER_METER),
+    })),
+    engage_decisions: r.engage_decisions.map((e) => ({
+      teammates_alive: e.teammates_alive,
+      enemies_alive: e.enemies_alive,
+      player_engaged: e.player_engaged,
+      target_died: e.target_died,
+      round_won: e.round_won,
+      is_isolated: e.is_isolated,
+      current_health: e.current_health,
+      current_weapon: e.current_weapon,
+      current_utility: e.current_utility,
+    })),
+  }));
+}
+
 app.get('/api/matches/:matchId/rounds', authenticateToken, async (req, res) => {
   const steamId = req.user.steamId;
   const { matchId } = req.params;
@@ -795,7 +855,15 @@ function buildMapBreakdown(matchList) {
 }
 
 // Oldest -> newest, matching the existing Home-tab trend charts' ordering convention.
-function buildTrends(matchList, adaptationRows, positioningRows) {
+// economyRows/utilityRows added 2026-08-31 (NEXT_STEPS.md Band 0 / Tier 15 — Insights'
+// Economy & Utility section was the only one of the 3 category subtabs with no trend chart,
+// even though fact_economy/fact_utility_throw were already being fetched every request for
+// the same-page summary tiles). Mismatch/team-flash definitions here are copy-identical to
+// summarizeEconomy/summarizeUtility's per-round logic above, just aggregated per match
+// instead of across the whole window — kept as literal duplicates rather than a shared
+// helper since a per-round accumulator and a per-match Map-keyed accumulator loop over rows
+// differently enough that factoring them together would obscure both, not simplify either.
+function buildTrends(matchList, adaptationRows, positioningRows, economyRows, utilityRows) {
   const matchOrder = matchList.map((m) => m.match_id).slice().reverse();
   const mapByMatchId = new Map(matchList.map((m) => [m.match_id, m.map || m.match_data?.telemetry?.map || null]));
 
@@ -815,6 +883,25 @@ function buildTrends(matchList, adaptationRows, positioningRows) {
     if (r.outcome === 'survived' || r.teammate_within_trade_range_at_death === true) e.good += 1;
   }
 
+  const economyByMatch = new Map();
+  for (const r of economyRows) {
+    if (!economyByMatch.has(r.match_id)) economyByMatch.set(r.match_id, { total: 0, mismatched: 0 });
+    const e = economyByMatch.get(r.match_id);
+    e.total += 1;
+    const mismatched = (r.loadout_tier === 'force_buy' || r.loadout_tier === 'full_buy') &&
+      (r.team_buy_capacity === 'full_eco' || r.team_buy_capacity === 'semi_eco');
+    if (mismatched) e.mismatched += 1;
+  }
+
+  const utilityByMatch = new Map();
+  for (const r of utilityRows) {
+    if (r.grenade_type !== 'flashbang') continue;
+    if (!utilityByMatch.has(r.match_id)) utilityByMatch.set(r.match_id, { total: 0, teamFlashed: 0 });
+    const e = utilityByMatch.get(r.match_id);
+    e.total += 1;
+    if ((r.teammates_blinded || 0) > 0) e.teamFlashed += 1;
+  }
+
   const reaction = matchOrder.filter((id) => reactionByMatch.has(id)).map((id) => {
     const e = reactionByMatch.get(id);
     return { match_id: id, map: mapByMatchId.get(id), reaction_pct: round1(100 * e.reacted / e.total) };
@@ -825,7 +912,17 @@ function buildTrends(matchList, adaptationRows, positioningRows) {
     return { match_id: id, map: mapByMatchId.get(id), good_decision_pct: round1(100 * e.good / e.total) };
   });
 
-  return { reaction, positioning };
+  const economy = matchOrder.filter((id) => economyByMatch.has(id)).map((id) => {
+    const e = economyByMatch.get(id);
+    return { match_id: id, map: mapByMatchId.get(id), against_team_economy_pct: round1(100 * e.mismatched / e.total) };
+  });
+
+  const utility = matchOrder.filter((id) => utilityByMatch.has(id)).map((id) => {
+    const e = utilityByMatch.get(id);
+    return { match_id: id, map: mapByMatchId.get(id), team_flash_pct: round1(100 * e.teamFlashed / e.total) };
+  });
+
+  return { reaction, positioning, economy, utility };
 }
 
 // Mirrors frontend/app/page.tsx's avgWeighted()/sumOptionalField() exactly — same "pool by
@@ -861,7 +958,7 @@ async function buildDashboardPayload(steamId) {
   const rankInfo = extractRankInfo(rows.adaptation, matchIds);
 
   const factSummary = summarizeFactRows(rows);
-  const trends = buildTrends(matchList, rows.adaptation, rows.positioning);
+  const trends = buildTrends(matchList, rows.adaptation, rows.positioning, rows.economy, rows.utility);
 
   return {
     matchesTracked: matchList.length,
@@ -974,13 +1071,38 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
     ]);
     const factSummary = summarizeFactRows(rows);
     const rankInfo = extractRankInfo(rows.adaptation, matchIds);
+    const humanizedRounds = humanizeRoundsForCoach(mostRecentMatchRounds);
 
     const conversationContext = recentHistory.length > 0
       ? recentHistory.map((h) => `Player asked: ${h.question}\nYou answered: ${h.response}`).join('\n\n')
       : '(no prior conversation this session)';
 
     const prompt = `
-    You are RoundSync, an expert, direct, and tactical Counter-Strike 2 AI coach.
+    You are RoundSync, this player's CS2 coach, reviewing their own games with them — not an
+    analyst reading them a report, and not just a friend chatting after a match. Sound like a
+    good coach: casual and clearly on their side, but your job is to diagnose what actually
+    happened and prescribe something specific to work on, not just describe or commiserate.
+    Use the real numbers below to back up what you say instead of vague praise or vague
+    criticism. Never structure your answer as a report with section headers like "Telemetry"
+    or "Diagnostics" — write it as you'd actually talk, in normal sentences and short
+    paragraphs, even when it's dense with numbers. You were not IN this match and are not
+    playing their next one with them — you're reviewing footage/data after the fact, so never
+    write as if you were a squadmate who was there ("when we pushed B...") or imply you'll be
+    in a future game ("next time we play...") — refer to their team as "your team"/"you," not
+    "we."
+
+    Two formatting rules, on top of that casual voice (2026-09-02 — a prior version of this
+    prompt banned ALL structure so hard the model dropped emphasis and action items too,
+    which read as a wall of text with no throughline; both of these fix that without bringing
+    back report-style headers):
+    - Use markdown **bold** on the handful of numbers or verdicts that matter most in your
+      answer (a key stat, the actual root cause, the one thing to fix) — not on every number,
+      just the ones you want to stick. This is a teammate raising their voice slightly on the
+      important part, not a spec sheet.
+    - Always end with 2-3 concrete, practiceable action items — specific enough to actually
+      practice (not "improve your positioning," but "hold an angle before peeking instead of
+      peeking on the move," grounded in what THIS player's own data shows). A short intro line
+      before the list is fine, but do not add a "Section:" style header above it.
 
     ${rankTierInstruction(rankInfo.rankNew)}
 
@@ -999,9 +1121,12 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
     to the player-facing term instead: "kd_ratio" -> "K/D ratio", "adr" -> "ADR", any field
     ending in "_pct" -> its plain-English name with a "%" sign on the number (e.g.
     "headshot_pct" -> "headshot %"), any field ending in "_ms" -> its plain-English name with
-    "ms" after the number, any field ending in "_deg" -> "°" after the number. If a field name
-    isn't covered by these patterns, describe it in plain language rather than quoting the
-    raw key.
+    "ms" after the number, any field ending in "_deg" -> "°" after the number, any field ending
+    in "_meters" -> its plain-English name with "m" after the number. If a field name isn't
+    covered by these patterns, describe it in plain language rather than quoting the raw key.
+    The per-round data below has already been converted to real-world units and worded for you
+    (distances in meters, reaction/hit timing in plain phrases) — never invent your own
+    conversion or guess at a number that isn't already given to you in these blocks.
 
     Here is a summary of the player's last ${matchSummaries.length} matches:
     ${JSON.stringify(matchSummaries)}
@@ -1019,11 +1144,14 @@ app.post('/api/coaching/ask', authenticateToken, async (req, res) => {
     recent match, this is that data; do not claim round-by-round data doesn't exist. An empty
     array for a given round/category just means nothing of that type happened that round for
     this player (e.g. no duel = no gunfight with an opening shot that round), not missing data:
-    ${JSON.stringify(mostRecentMatchRounds)}` : ''}
+    ${JSON.stringify(humanizedRounds)}` : ''}
 
     Player's Question / Request: ${question}
 
-    Provide sharp, data-driven, actionable feedback to help them improve their gameplay, aim, or tactical awareness. Use the statistical patterns above to explain WHY something is happening, not just what the numbers are. Keep your response concise and focused.
+    Give sharp, specific, actionable feedback on their gameplay, aim, or tactical awareness,
+    using the real patterns above to explain WHY something is happening, not just what the
+    numbers are — but say it the way a teammate would, not a report. Keep it concise and
+    focused.
     `;
 
     const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
